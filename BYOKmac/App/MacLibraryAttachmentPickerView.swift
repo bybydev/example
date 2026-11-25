@@ -280,7 +280,10 @@ struct MacLibraryAttachmentPickerView: View {
       Divider()
       content
     }
-    .frame(width: 600, height: 500)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .overlay {
       if isLoading {

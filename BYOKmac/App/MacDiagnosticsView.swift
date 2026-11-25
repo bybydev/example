@@ -424,7 +424,10 @@ private struct MacTelemetryLogsView: View {
         }
       }
     }
-    .frame(width: 960, height: 640)
+    .frame(
+      width: MacDesignTokens.Sheet.workspaceIdealWidth,
+      height: MacDesignTokens.Sheet.workspaceIdealHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .sheet(isPresented: $showingFilters) {
       MacTelemetryFilterView(filter: $filter, events: diagnostics.events)
@@ -547,7 +550,10 @@ private struct MacTelemetryFilterView: View {
       .formStyle(.grouped)
       .padding(10)
     }
-    .frame(width: 520, height: 520)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 
@@ -701,7 +707,10 @@ private struct MacTelemetryEventDetailView: View {
       .formStyle(.grouped)
       .padding(10)
     }
-    .frame(width: 620, height: 640)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 

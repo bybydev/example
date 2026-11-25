@@ -95,7 +95,12 @@ struct MacResponseImageSaveSheet: View {
         .background(MacDesignTokens.Colors.surface.opacity(0.6))
       }
     }
-    .frame(minWidth: 480, idealWidth: 520, minHeight: 360, idealHeight: 460)
+    .frame(
+      minWidth: 500,
+      idealWidth: MacDesignTokens.Sheet.standardWidth,
+      minHeight: 340,
+      idealHeight: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .interactiveDismissDisabled(isSaving)
     .alert(

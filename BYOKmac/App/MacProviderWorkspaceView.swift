@@ -133,7 +133,10 @@ struct MacProviderManagementView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .frame(minWidth: 920, minHeight: 620)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
+      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: model.accounts.map(\.id)) { _, ids in
       if let selectedAccountID, !ids.contains(selectedAccountID) {
@@ -1263,7 +1266,10 @@ struct MacProviderKindPickerSheet: View {
         }
       }
     }
-    .frame(width: 640, height: 540)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 
@@ -1380,7 +1386,10 @@ struct MacSupportedProvidersCatalogView: View {
         }
       }
     }
-    .frame(width: 640, height: 540)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 

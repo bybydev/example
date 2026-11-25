@@ -393,8 +393,8 @@ struct MacPolishTests {
 
   @Test("Message export filenames sanitize conversation titles and fall back cleanly")
   func messageExportFilenameFormatting() {
-    let assistantMessage = ChatMessage(role: .assistant, content: "Hello")
-    let userMessage = ChatMessage(role: .user, content: "Hi")
+    let assistantMessage = ChatMessage(role: .assistant, content: "Hello", status: .completed)
+    let userMessage = ChatMessage(role: .user, content: "Hi", status: .completed)
 
     #expect(
       MacMessageExportSupport.filename(

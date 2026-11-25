@@ -35,6 +35,26 @@ enum MacDesignTokens {
     static let titlebarTrafficLightReserve: CGFloat = 76
   }
 
+  enum Sheet {
+    /// Standard compact sheet (inspectors, editors, pickers, chat settings).
+    /// Anchored to Message Details width (540pt) with a balanced landscape height.
+    static let standardWidth: CGFloat = 540
+    static let standardHeight: CGFloat = 440
+    static let compactHeight: CGFloat = 390
+
+    /// Multi-pane utility workspaces (Providers, Library, Projects, MCP, Analytics, All Chats).
+    static let workspaceMinWidth: CGFloat = 740
+    static let workspaceIdealWidth: CGFloat = 780
+    static let workspaceMinHeight: CGFloat = 500
+    static let workspaceIdealHeight: CGFloat = 540
+
+    /// Full-screen media, code, table, and attachment preview sheets.
+    static let previewMinWidth: CGFloat = 640
+    static let previewIdealWidth: CGFloat = 720
+    static let previewMinHeight: CGFloat = 440
+    static let previewIdealHeight: CGFloat = 500
+  }
+
   enum Control {
     static let iconButtonSize: CGFloat = 28
     static let sheetCloseButtonSize: CGFloat = 30
@@ -613,42 +633,60 @@ struct MacSegmentedControl<Option: Hashable>: View {
   let options: [Option]
   @Binding var selection: Option
   var equalWidth: Bool = true
+  var isLocked: (Option) -> Bool = { _ in false }
+  var isOptionDisabled: (Option) -> Bool = { _ in false }
+  var onLockedSelect: ((Option) -> Void)? = nil
   let title: (Option) -> String
+
+  @Environment(\.macAppTheme) private var theme
 
   init(
     options: [Option],
     selection: Binding<Option>,
     equalWidth: Bool = true,
+    isLocked: @escaping (Option) -> Bool = { _ in false },
+    isOptionDisabled: @escaping (Option) -> Bool = { _ in false },
+    onLockedSelect: ((Option) -> Void)? = nil,
     title: @escaping (Option) -> String
   ) {
     self.options = options
     self._selection = selection
     self.equalWidth = equalWidth
+    self.isLocked = isLocked
+    self.isOptionDisabled = isOptionDisabled
+    self.onLockedSelect = onLockedSelect
     self.title = title
   }
 
   var body: some View {
     HStack(spacing: 4) {
       ForEach(options, id: \.self) { option in
+        let locked = isLocked(option)
         MacSegmentedControlItem(
           title: title(option),
-          isSelected: selection == option,
+          isSelected: !locked && selection == option,
+          isLocked: locked,
           equalWidth: equalWidth
         ) {
-          withAnimation(.easeOut(duration: MacDesignTokens.Control.interactionDuration)) {
-            selection = option
+          if locked {
+            onLockedSelect?(option)
+          } else {
+            withAnimation(.easeOut(duration: MacDesignTokens.Control.interactionDuration)) {
+              selection = option
+            }
           }
         }
+        .disabled(isOptionDisabled(option))
       }
     }
     .padding(3)
     .background(
-      Color.primary.opacity(0.05),
+      theme.canvas.opacity(0.9),
       in: RoundedRectangle(cornerRadius: 9, style: .continuous)
     )
     .overlay {
       RoundedRectangle(cornerRadius: 9, style: .continuous)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.55), lineWidth: 0.5)
+        .strokeBorder(theme.border.opacity(0.8), lineWidth: 0.75)
     }
   }
 }
@@ -656,34 +694,40 @@ struct MacSegmentedControl<Option: Hashable>: View {
 private struct MacSegmentedControlItem: View {
   let title: String
   let isSelected: Bool
+  let isLocked: Bool
   let equalWidth: Bool
   let action: () -> Void
 
+  @Environment(\.macAppTheme) private var theme
   @State private var isHovered = false
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
     Button(action: action) {
-      Text(title)
-        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
-        .lineLimit(1)
-        .foregroundStyle(
-          isSelected
-            ? MacDesignTokens.Colors.textPrimary
-            : (isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted)
-        )
-        .padding(.horizontal, equalWidth ? 10 : 12)
-        .frame(maxWidth: equalWidth ? .infinity : nil)
-        .frame(height: 26)
-        .background(background, in: shape)
-        .overlay {
-          if isSelected {
-            shape.stroke(MacDesignTokens.Colors.separator.opacity(0.8), lineWidth: 0.75)
-          }
+      HStack(spacing: 4) {
+        if isLocked {
+          Image(systemName: "lock.fill")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(theme.textMuted)
         }
-        .contentShape(shape)
+        Text(title)
+          .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+          .lineLimit(1)
+      }
+      .foregroundStyle(foregroundColor)
+      .padding(.horizontal, equalWidth ? 10 : 11)
+      .frame(maxWidth: equalWidth ? .infinity : nil)
+      .frame(height: 26)
+      .background(background, in: shape)
+      .overlay {
+        if isSelected {
+          shape.strokeBorder(theme.border, lineWidth: 0.75)
+        }
+      }
+      .contentShape(shape)
     }
     .buttonStyle(.plain)
+    .accessibilityLabel(isLocked ? "\(title), locked, requires BYOK Pro" : title)
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     .onHover { isHovered = $0 }
     .animation(
@@ -692,9 +736,15 @@ private struct MacSegmentedControlItem: View {
     )
   }
 
+  private var foregroundColor: Color {
+    if isSelected { return theme.textPrimary }
+    if isLocked { return isHovered ? theme.textSecondary : theme.textMuted }
+    return isHovered ? theme.textPrimary : theme.textSecondary
+  }
+
   private var background: Color {
-    if isSelected { return MacDesignTokens.Colors.surface }
-    if isHovered { return Color.primary.opacity(0.04) }
+    if isSelected { return theme.surfaceRaised }
+    if isHovered { return theme.selection.opacity(0.55) }
     return .clear
   }
 }

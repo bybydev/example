@@ -1023,12 +1023,10 @@ final class MacChatSessionModel {
 
     let runtime = self.runtime
     let accumulator = streamAccumulator
-    let initialDimension = MacAppAnalytics.Dimension.provider(summary(conversationID)?.providerID)
     generationTasks[conversationID] = Task.detached(priority: .userInitiated) { [weak self] in
       guard let self else { return }
       var didStartTurn = false
       var didRecordAnalyticsOutcome = false
-      var analyticsDimension = initialDimension
 
       do {
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
@@ -1053,10 +1051,9 @@ final class MacChatSessionModel {
         }
 
         for try await event in stream {
-          if case .turnStarted(let turn) = event, !didStartTurn {
+          if case .turnStarted = event, !didStartTurn {
             didStartTurn = true
-            analyticsDimension = MacAppAnalytics.Dimension.provider(turn.assistantMessage.providerID)
-            await self.trackAcceptedTurn(action, dimension: analyticsDimension)
+            await self.trackAcceptedTurn(action)
           }
 
           // A terminal runtime event can be followed by a thrown error.
@@ -1065,14 +1062,26 @@ final class MacChatSessionModel {
             switch event {
             case .completed(let message):
               didRecordAnalyticsOutcome = true
-              await MacAppAnalytics.track(.chatTurnCompleted, dimension: .provider(message.providerID))
-              await MacAppAnalytics.trackFirstResponse()
+              let detail = await self.analyticsDimension(
+                conversationID: conversationID,
+                providerID: message.providerID
+              )
+              await MacAppAnalytics.track(.chatTurnCompleted, detail: detail)
             case .cancelled(let message):
               didRecordAnalyticsOutcome = true
-              await MacAppAnalytics.track(.chatTurnCancelled, dimension: .provider(message.providerID))
+              let detail = await self.analyticsDimension(
+                conversationID: conversationID,
+                providerID: message.providerID
+              )
+              await MacAppAnalytics.track(.chatTurnCancelled, detail: detail)
             case .failed(let message):
               didRecordAnalyticsOutcome = true
-              await MacAppAnalytics.track(.chatTurnFailed, dimension: .provider(message.providerID))
+              await MacAppAnalytics.reportError("chat_generation_failed", component: "chat")
+              let detail = await self.analyticsDimension(
+                conversationID: conversationID,
+                providerID: message.providerID
+              )
+              await MacAppAnalytics.track(.chatTurnFailed, detail: detail)
             default:
               break
             }
@@ -1098,7 +1107,8 @@ final class MacChatSessionModel {
       } catch is CancellationError {
         if didStartTurn, !didRecordAnalyticsOutcome {
           didRecordAnalyticsOutcome = true
-          await MacAppAnalytics.track(.chatTurnCancelled, dimension: analyticsDimension)
+          let detail = await self.analyticsDimension(conversationID: conversationID)
+          await MacAppAnalytics.track(.chatTurnCancelled, detail: detail)
         }
         await self.handleGenerationCancellation(
           conversationID: conversationID,
@@ -1108,9 +1118,17 @@ final class MacChatSessionModel {
       } catch {
         if !didRecordAnalyticsOutcome {
           didRecordAnalyticsOutcome = true
+          await MacAppAnalytics.reportError("chat_generation_failed", component: "chat")
+          if !didStartTurn {
+            await MacAppAnalytics.reportError(
+              "conversation_prepare_failed",
+              component: "chat_storage"
+            )
+          }
+          let detail = await self.analyticsDimension(conversationID: conversationID)
           await MacAppAnalytics.track(
             didStartTurn ? .chatTurnFailed : .chatPreparationFailed,
-            dimension: analyticsDimension
+            detail: detail
           )
         }
         await self.handleGenerationFailure(
@@ -1123,23 +1141,51 @@ final class MacChatSessionModel {
 
       // Cancellation may end the stream without delivering its terminal event.
       if didStartTurn, !didRecordAnalyticsOutcome {
+        if !Task.isCancelled {
+          await MacAppAnalytics.reportError("chat_generation_failed", component: "chat")
+        }
+        let detail = await self.analyticsDimension(conversationID: conversationID)
         await MacAppAnalytics.track(
           Task.isCancelled ? .chatTurnCancelled : .chatTurnFailed,
-          dimension: analyticsDimension
+          detail: detail
         )
       }
       await self.finishGeneration(conversationID)
     }
   }
 
-  private func trackAcceptedTurn(
-    _ action: GenerationAction,
-    dimension: MacAppAnalytics.Dimension
-  ) {
-    MacAppAnalytics.track(.chatTurnStarted, dimension: dimension)
+  /// Composer-style provider · model · effort label, sanitized for analytics.
+  private func analyticsDimension(
+    conversationID: ConversationID?,
+    providerID: ProviderID? = nil
+  ) -> String? {
+    guard let conversationID,
+      let conversation = hydratedConversations[conversationID] ?? summary(conversationID)
+    else { return nil }
+    let resolvedProviderID = providerID ?? conversation.providerID
+    let kind = ProviderKind(providerID: resolvedProviderID)
+    let providerName = kind.displayName.isEmpty ? resolvedProviderID.rawValue : kind.displayName
+    let modelID = conversation.modelID
+    let modelRecord = providers.modelRecord(for: conversation.accountID, modelID: modelID)
+    let capabilities = ModelCapabilityResolver.resolve(
+      kind: kind,
+      modelID: modelID,
+      model: modelRecord?.model
+    )
+    return MacTargetLabelFormatter.analyticsDimension(
+      providerID: resolvedProviderID,
+      providerName: providerName,
+      modelName: modelRecord?.model.displayName ?? modelID.rawValue,
+      modelID: modelID.rawValue,
+      supportedParameters: modelRecord?.model.supportedParameters ?? [],
+      reasoning: conversation.options.reasoning,
+      capabilities: capabilities
+    )
+  }
+
+  private func trackAcceptedTurn(_ action: GenerationAction) {
     switch action {
     case .send(_, let attachments):
-      MacAppAnalytics.track(.messageSent)
       if !attachments.isEmpty {
         let category: MacAppAnalytics.Dimension = attachments.allSatisfy({ $0.isImage })
           ? .image : (attachments.contains(where: { $0.isImage }) ? .mixed : .file)
@@ -1176,7 +1222,6 @@ final class MacChatSessionModel {
     if !didStartTurn, let draft = action.draftToRestoreIfTurnNeverStarts {
       setDraft(draft, conversationID: conversationID)
     }
-    MacAppAnalytics.reportError("chat_generation_failed", component: "chat_runtime")
     errorMessage = error.localizedDescription
     try? await reloadConversation(conversationID)
     try? await reloadSummaries()
@@ -1208,7 +1253,6 @@ final class MacChatSessionModel {
       advanceStreamRevision(for: conversationID)
 
     case .toolRound(let messageID, _):
-      MacAppAnalytics.track(.toolRoundCompleted)
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       await flushStreamPresentation(messageID, conversationID: conversationID)
       livePresentations.removeValue(forKey: messageID)?.cancelPendingRenders()
@@ -1224,7 +1268,6 @@ final class MacChatSessionModel {
       await streamAccumulator.remove(message.id)
       livePresentations.removeValue(forKey: message.id)?.cancelPendingRenders()
       if message.status == .failed {
-        MacAppAnalytics.reportError("chat_generation_failed", component: "chat_runtime")
         errorMessage = message.errorDescription ?? "The response failed."
       }
       try? await reloadConversation(conversationID)

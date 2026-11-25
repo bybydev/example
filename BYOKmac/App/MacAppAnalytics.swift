@@ -2,45 +2,9 @@ import BYOKchatProviderCore
 import Foundation
 import MacAppFoundation
 
-struct MacAnalyticsGatedTransport: AppAnalyticsTransport {
-  let base: any AppAnalyticsTransport
-  let isAllowed: @Sendable () -> Bool
-
-  func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-    guard isAllowed() else {
-      throw CancellationError()
-    }
-    return try await base.data(for: request)
-  }
-}
-
-actor MacAnalyticsGatedStateStore: AppAnalyticsStateStoring {
-  private let base: any AppAnalyticsStateStoring
-  private let isAllowed: @Sendable () -> Bool
-
-  init(
-    base: any AppAnalyticsStateStoring,
-    isAllowed: @escaping @Sendable () -> Bool
-  ) {
-    self.base = base
-    self.isAllowed = isAllowed
-  }
-
-  func load() async throws -> Data? {
-    guard isAllowed() else { return nil }
-    return try await base.load()
-  }
-
-  func save(_ data: Data) async throws {
-    guard isAllowed() else { return }
-    try await base.save(data)
-  }
-
-  func remove() async throws {
-    try await base.remove()
-  }
-}
-
+/// Bounded product counters shared by lifecycle, commerce, and macOS app actions.
+/// Mirrors iOS `BYOKAppAnalytics`: ephemeral in-memory storage, runtime opt-out,
+/// and fixed product categories only (never content or resource identifiers).
 @MainActor
 enum MacAppAnalytics {
   typealias Event = BYOKProductAnalyticsEvent
@@ -92,50 +56,27 @@ enum MacAppAnalytics {
     set { UserDefaults.standard.set(newValue, forKey: preferenceKey) }
   }
 
-  private static let configuration = AppAnalyticsConfiguration(
-    appID: "byokchat",
-    appKey: Bundle.main.bundleIdentifier ?? "com.hoangbkit.byokchat",
-    baseURL: URL(string: "https://analytics.133043.xyz")!,
-    uploadInterval: 5 * 60
-  )
-
-  static let client = AppAnalyticsClient(
-    configuration: configuration,
-    transport: MacAnalyticsGatedTransport(
-      base: URLSessionAppAnalyticsTransport(),
-      isAllowed: { isCollectionAllowed() }
-    ),
-    stateStore: MacAnalyticsGatedStateStore(
-      base: UserDefaultsAppAnalyticsStateStore(storageKey: configuration.stateStorageKey),
-      isAllowed: { isCollectionAllowed() }
+  nonisolated static func makeConfiguration(enabled: Bool) -> AppAnalyticsConfiguration {
+    AppAnalyticsConfiguration(
+      appID: "byokchat",
+      appKey: Bundle.main.bundleIdentifier ?? "com.hoangbkit.byokchat",
+      baseURL: URL(string: "https://analytics.133043.xyz")!,
+      enabled: enabled,
+      storageMode: .inMemory
     )
-  )
+  }
+
+  static let configuration = makeConfiguration(enabled: isEnabled)
+
+  static let client = AppAnalyticsClient(configuration: configuration)
 
   private static var pendingTrack: Task<Void, Never>?
 
   static func setEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) async {
     defaults.set(enabled, forKey: preferenceKey)
-    if !enabled, defaults === UserDefaults.standard {
-      try? await client.resetLocalState()
+    if defaults === UserDefaults.standard {
+      await client.setEnabled(isSuppressedForTesting ? false : enabled)
     }
-  }
-
-  static func track(_ event: Event, dimension: Dimension? = nil) {
-    guard isEnabled else { return }
-    let previousTrack = pendingTrack
-    pendingTrack = Task {
-      await previousTrack?.value
-      guard isEnabled else { return }
-      try? await client.track(event.rawValue, dimension: dimension?.rawValue)
-    }
-  }
-
-  static func trackFirstResponse() {
-    guard isEnabled else { return }
-    let key = "byokchat.analytics.firstResponseCompleted.v1"
-    guard !UserDefaults.standard.bool(forKey: key) else { return }
-    UserDefaults.standard.set(true, forKey: key)
-    track(.firstResponseCompleted)
   }
 
   static func reportError(
@@ -147,6 +88,26 @@ enum MacAppAnalytics {
     Task {
       guard isEnabled else { return }
       try? await client.trackError(code, component: component, severity: severity)
+    }
+  }
+
+  static func track(_ event: Event, detail: String?) {
+    guard isEnabled else { return }
+    let previousTrack = pendingTrack
+    pendingTrack = Task {
+      await previousTrack?.value
+      guard isEnabled else { return }
+      try? await client.track(event.rawValue, dimension: detail)
+    }
+  }
+
+  static func track(_ event: Event, dimension: Dimension? = nil) {
+    guard isEnabled else { return }
+    let previousTrack = pendingTrack
+    pendingTrack = Task {
+      await previousTrack?.value
+      guard isEnabled else { return }
+      try? await client.track(event.rawValue, dimension: dimension?.rawValue)
     }
   }
 }

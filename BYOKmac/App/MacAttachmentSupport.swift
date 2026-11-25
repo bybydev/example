@@ -776,7 +776,12 @@ struct MacAttachmentPreviewSheet: View {
       previewContent
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .frame(minWidth: 720, idealWidth: 880, minHeight: 540, idealHeight: 660)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.previewMinWidth,
+      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
+      minHeight: MacDesignTokens.Sheet.previewMinHeight,
+      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .task(id: attachment.id) {
       await loadPreview()

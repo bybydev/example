@@ -16,6 +16,7 @@ final class MacWorkspaceModel {
   private let projectsStore: ProjectWorkspaceStore
   private let libraryStore: LibraryStore
   private let restrictions: MacProResourceRestrictions
+  @ObservationIgnored private var analyticsRecordedEntryIDs: Set<LibraryEntryID> = []
 
   init(
     services: BYOKCoreServices,
@@ -339,6 +340,11 @@ final class MacWorkspaceModel {
     return message
   }
 
+  private func trackLibraryItemSaved(_ entry: LibraryEntry) {
+    guard analyticsRecordedEntryIDs.insert(entry.id).inserted else { return }
+    MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+  }
+
   func addLibraryAttachments(_ attachments: [ChatAttachment]) async -> Bool {
     guard !attachments.isEmpty else { return true }
     let label = attachments.count == 1
@@ -348,7 +354,7 @@ final class MacWorkspaceModel {
       let existingIDs = Set(await libraryStore.entries().map(\.id))
       let savedEntries = try await libraryStore.addAttachments(attachments, source: .manual)
       for entry in savedEntries where !existingIDs.contains(entry.id) {
-        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+        trackLibraryItemSaved(entry)
       }
     }
   }
@@ -369,7 +375,7 @@ final class MacWorkspaceModel {
       )
       let added = !existingIDs.contains(entry.id)
       if added {
-        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+        trackLibraryItemSaved(entry)
       }
       return added
     }
@@ -393,7 +399,7 @@ final class MacWorkspaceModel {
       )
       let added = !existingIDs.contains(entry.id)
       if added {
-        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+        trackLibraryItemSaved(entry)
       }
       return added
     }
@@ -423,7 +429,7 @@ final class MacWorkspaceModel {
         data: Data(trimmed.utf8),
         source: .chat(conversationID: conversationID, messageID: messageID)
       )
-      MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+      trackLibraryItemSaved(entry)
     }
   }
 
@@ -478,7 +484,7 @@ final class MacWorkspaceModel {
         data: data,
         source: source
       )
-      MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+      trackLibraryItemSaved(entry)
       return entry
     }
   }
@@ -493,7 +499,7 @@ final class MacWorkspaceModel {
     return await performReturning(successMessage, referencesChanged: true) {
       let savedEntries = try await libraryStore.addAttachments(attachments, source: source)
       for entry in savedEntries {
-        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+        trackLibraryItemSaved(entry)
       }
       return savedEntries
     }

@@ -339,7 +339,10 @@ struct MacChatSettingsView: View {
         .padding(18)
       }
     }
-    .frame(width: 600, height: account?.kind == .openRouter ? 680 : 620)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .sheet(isPresented: $showingTargetPicker) {
       MacTargetPickerView(

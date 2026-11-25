@@ -371,7 +371,6 @@ final class MacMCPModel {
         defer { refreshingServerIDs.remove(server.id) }
         do {
           _ = try await runtime.refreshServer(server.id, force: true)
-          MacAppAnalytics.track(.mcpDiscoverySucceeded)
         } catch {
           MacAppAnalytics.track(.mcpDiscoveryFailed)
           warnings.append("Tool discovery failed: \(error.localizedDescription)")

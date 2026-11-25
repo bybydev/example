@@ -826,7 +826,10 @@ private struct MacChatPromptsPickerSheet: View {
         }
       }
     }
-    .frame(width: 540, height: 480)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 }
@@ -3131,9 +3134,7 @@ private struct MacUserMessageActions: View {
 
   private func copyText(_ value: String) {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(value, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: .message)
-    }
+    NSPasteboard.general.setString(value, forType: .string)
     copied = true
     copyResetTask?.cancel()
     copyResetTask = Task { @MainActor in
@@ -3356,7 +3357,7 @@ private struct MacAssistantMessageActions: View {
           systemImage: "brain"
         ) {
           showingMorePopover = false
-          copyToPasteboard(message.reasoning, dimension: .reasoning)
+          copyToPasteboard(message.reasoning)
           toastCenter?.success("Reasoning copied")
         }
       }
@@ -3439,7 +3440,7 @@ private struct MacAssistantMessageActions: View {
   }
 
   private func copyResponse() {
-    copyToPasteboard(message.content, dimension: .message)
+    copyToPasteboard(message.content)
     copied = true
     copyResetTask?.cancel()
     copyResetTask = Task { @MainActor in
@@ -3449,11 +3450,9 @@ private struct MacAssistantMessageActions: View {
     }
   }
 
-  private func copyToPasteboard(_ value: String, dimension: MacAppAnalytics.Dimension) {
+  private func copyToPasteboard(_ value: String) {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(value, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: dimension)
-    }
+    NSPasteboard.general.setString(value, forType: .string)
   }
 
   private func saveResponseToLibrary(conversationID: ConversationID) {

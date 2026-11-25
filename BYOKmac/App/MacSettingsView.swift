@@ -4,65 +4,69 @@ import MacAppFoundation
 import SwiftUI
 
 struct MacSettingsView: View {
+  static let contentWidth: CGFloat = 640
+  static let contentHeight: CGFloat = 440
+
   let model: MacAppModel
   let purchaseManager: PurchaseManager
 
+  @Environment(\.macAppTheme) private var theme
   @Environment(\.openWindow) private var openWindow
   @Environment(MacSettingsRouter.self) private var settingsRouter
   @State private var selection: MacSettingsTab = .general
 
   var body: some View {
-    VStack(spacing: 16) {
-      TabView(selection: $selection) {
-        MacGeneralSettingsView(
-          preferences: model.preferences,
-          chats: model.chats
-        )
-        .tabItem {
-          Label("General", systemImage: "gearshape")
-        }
-        .tag(MacSettingsTab.general)
-
-        MacDataSettingsView(model: model)
-          .frame(height: 440)
-          .tabItem {
-            Label("Data", systemImage: "externaldrive")
-          }
-          .tag(MacSettingsTab.data)
-
-        MacThemeSettingsTab(
-          themeStore: model.themeStore,
-          purchaseManager: purchaseManager,
-          onUpgrade: {
-            MacProAccess.requestUpgrade(.themes)
-          }
-        )
-        .frame(height: 380)
-        .tabItem {
-          Label("Theme", systemImage: "paintpalette")
-        }
-        .tag(MacSettingsTab.theme)
-
-        ProPlanPane(
-          purchaseManager: purchaseManager,
-          configuration: MacPurchaseStore.planConfiguration,
-          onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
-        )
-        .tabItem {
-          Label("Plan", systemImage: "creditcard")
-        }
-        .tag(MacSettingsTab.plan)
-
-        MacAboutSettingsView()
-          .tabItem {
-            Label("About", systemImage: "info.circle")
-          }
-          .tag(MacSettingsTab.about)
+    TabView(selection: $selection) {
+      MacGeneralSettingsView(
+        preferences: model.preferences,
+        chats: model.chats
+      )
+      .tabItem {
+        Label("General", systemImage: "gearshape")
       }
+      .tag(MacSettingsTab.general)
+
+      MacDataSettingsView(model: model)
+        .tabItem {
+          Label("Data", systemImage: "externaldrive")
+        }
+        .tag(MacSettingsTab.data)
+
+      ThemePickerView(
+        themeStore: model.themeStore,
+        purchaseManager: purchaseManager,
+        variant: .compact,
+        onUpgrade: {
+          MacProAccess.requestUpgrade(.themes)
+        }
+      )
+      .padding(20)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background(theme.canvas)
+      .tabItem {
+        Label("Theme", systemImage: "paintpalette")
+      }
+      .tag(MacSettingsTab.theme)
+
+      MacAppPlanSettingsPane(
+        purchaseManager: purchaseManager,
+        configuration: MacPurchaseStore.planConfiguration,
+        onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
+      )
+      .tabItem {
+        Label("Plan", systemImage: "creditcard")
+      }
+      .tag(MacSettingsTab.plan)
+
+      MacAboutSettingsView()
+        .tabItem {
+          Label("About", systemImage: "info.circle")
+        }
+        .tag(MacSettingsTab.about)
     }
-    .padding()
-    .frame(width: 500, alignment: .top)
-    .fixedSize()
+    .frame(width: Self.contentWidth, height: Self.contentHeight)
+    .background(theme.canvas)
+    .foregroundStyle(theme.textPrimary)
     .onAppear {
       consumeRouterRequest()
       MacAppAnalytics.track(.featureOpened, dimension: .settings)
@@ -80,6 +84,38 @@ struct MacSettingsView: View {
   }
 }
 
+struct MacSettingsCard<Content: View>: View {
+  @Environment(\.macAppTheme) private var theme
+  @ViewBuilder let content: () -> Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      content()
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      theme.surface,
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(theme.border, lineWidth: 1)
+    }
+  }
+}
+
+struct MacSettingsDivider: View {
+  @Environment(\.macAppTheme) private var theme
+
+  var body: some View {
+    Rectangle()
+      .fill(theme.separator.opacity(0.75))
+      .frame(height: 1)
+  }
+}
+
 struct MacSettingsButtonStyle: ButtonStyle {
   var isDestructive = false
 
@@ -91,7 +127,7 @@ struct MacSettingsButtonStyle: ButtonStyle {
   }
 
   private struct MacSettingsButtonStyleBody: View {
-    @Environment(\.macAppTheme) private var mafTheme
+    @Environment(\.macAppTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     let configuration: ButtonStyle.Configuration
     let isDestructive: Bool
@@ -103,7 +139,7 @@ struct MacSettingsButtonStyle: ButtonStyle {
         .font(.system(size: 12, weight: .medium))
         .foregroundStyle(foregroundColor)
         .lineLimit(1)
-        .padding(.horizontal, 9)
+        .padding(.horizontal, 10)
         .frame(height: 26)
         .background(backgroundColor)
         .clipShape(shape)
@@ -120,55 +156,55 @@ struct MacSettingsButtonStyle: ButtonStyle {
 
     private var foregroundColor: Color {
       guard isEnabled else {
-        return isDestructive ? Color.red.opacity(0.45) : Color.secondary
+        return isDestructive ? theme.destructive.opacity(0.45) : theme.textMuted
       }
-      return isDestructive ? Color.red : Color.primary
+      return isDestructive ? theme.destructive : theme.textPrimary
     }
 
     private var backgroundColor: Color {
       if isDestructive {
-        guard isEnabled else { return Color.red.opacity(0.03) }
-        if configuration.isPressed { return Color.red.opacity(0.16) }
-        if isHovered { return Color.red.opacity(0.10) }
-        return Color.red.opacity(0.05)
+        guard isEnabled else { return theme.destructive.opacity(0.03) }
+        if configuration.isPressed { return theme.destructive.opacity(0.18) }
+        if isHovered { return theme.destructive.opacity(0.12) }
+        return theme.destructive.opacity(0.06)
       }
 
       guard isEnabled else {
-        return Color.primary.opacity(0.03)
+        return theme.surfaceRaised.opacity(0.45)
       }
 
       if configuration.isPressed {
-        return mafTheme.accent.opacity(0.10)
+        return theme.accentSoft
       }
 
       if isHovered {
-        return Color.primary.opacity(0.06)
+        return theme.selection.opacity(0.75)
       }
 
-      return Color.primary.opacity(0.035)
+      return theme.surfaceRaised
     }
 
     private var borderColor: Color {
       if isDestructive {
-        guard isEnabled else { return Color.red.opacity(0.12) }
-        if configuration.isPressed { return Color.red.opacity(0.40) }
-        if isHovered { return Color.red.opacity(0.30) }
-        return Color.red.opacity(0.22)
+        guard isEnabled else { return theme.destructive.opacity(0.14) }
+        if configuration.isPressed { return theme.destructive.opacity(0.45) }
+        if isHovered { return theme.destructive.opacity(0.32) }
+        return theme.destructive.opacity(0.24)
       }
 
       guard isEnabled else {
-        return Color.primary.opacity(0.08)
+        return theme.border.opacity(0.55)
       }
 
       if configuration.isPressed {
-        return mafTheme.accent.opacity(0.30)
+        return theme.accent.opacity(0.45)
       }
 
       if isHovered {
-        return Color.primary.opacity(0.20)
+        return theme.accent.opacity(0.30)
       }
 
-      return Color.primary.opacity(0.14)
+      return theme.border
     }
   }
 }
@@ -177,6 +213,7 @@ private struct MacGeneralSettingsView: View {
   @Bindable var preferences: MacPreferencesModel
   let chats: MacChatSessionModel?
 
+  @Environment(\.macAppTheme) private var theme
   @State private var promptDraft: String
   @State private var lastSyncedPrompt: String
   @State private var confirmClearPrompt = false
@@ -195,90 +232,96 @@ private struct MacGeneralSettingsView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      GroupBox {
-        HStack {
-          Text("Keyboard")
-          Spacer()
-          Text("Return sends · Shift-Return new line")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 2)
-      }
-
-      GroupBox {
-        VStack(alignment: .leading, spacing: 8) {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 12) {
+        MacSettingsCard {
           HStack {
-            Text("Default system prompt")
+            Text("Keyboard")
+              .foregroundStyle(theme.textPrimary)
             Spacer()
-            Button("Clear", role: .destructive) {
-              confirmClearPrompt = true
-            }
-            .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
-            .disabled(trimmedPrompt.isEmpty)
+            Text("Return sends · Shift-Return new line")
+              .font(.caption)
+              .foregroundStyle(theme.textSecondary)
           }
+        }
 
-          ZStack(alignment: .topLeading) {
-            TextEditor(text: $promptDraft)
-              .font(.system(size: 12.5))
-              .scrollContentBackground(.hidden)
-              .focused($isPromptFocused)
-              .frame(height: 112)
-              .padding(6)
-              .accessibilityLabel("Default System Prompt")
+        MacSettingsCard {
+          VStack(alignment: .leading, spacing: 8) {
+            HStack {
+              Text("Default system prompt")
+                .foregroundStyle(theme.textPrimary)
+              Spacer()
+              Button("Clear", role: .destructive) {
+                confirmClearPrompt = true
+              }
+              .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+              .disabled(trimmedPrompt.isEmpty)
+            }
 
-            if promptDraft.isEmpty {
-              Text("e.g. Be concise, direct, and explain trade-offs clearly.")
+            ZStack(alignment: .topLeading) {
+              TextEditor(text: $promptDraft)
                 .font(.system(size: 12.5))
-                .foregroundStyle(.secondary.opacity(0.75))
-                .padding(.top, 8)
-                .padding(.leading, 11)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+                .foregroundStyle(theme.textPrimary)
+                .scrollContentBackground(.hidden)
+                .focused($isPromptFocused)
+                .frame(height: 92)
+                .padding(6)
+                .accessibilityLabel("Default System Prompt")
+
+              if promptDraft.isEmpty {
+                Text("e.g. Be concise, direct, and explain trade-offs clearly.")
+                  .font(.system(size: 12.5))
+                  .foregroundStyle(theme.textMuted)
+                  .padding(.top, 8)
+                  .padding(.leading, 11)
+                  .allowsHitTesting(false)
+                  .accessibilityHidden(true)
+              }
             }
-          }
-          .background(
-            Color.primary.opacity(0.03),
-            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-          )
-          .overlay {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-              .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1)
-          }
+            .background(
+              theme.canvas,
+              in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .overlay {
+              RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(
+                  isPromptFocused ? theme.accent.opacity(0.55) : theme.border,
+                  lineWidth: 1
+                )
+            }
 
-          Text("Copied into new conversations unless a project defines its own instructions. Existing conversations with messages are unchanged.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+            Text("Copied into new conversations unless a project defines its own instructions. Existing conversations with messages are unchanged.")
+              .font(.caption)
+              .foregroundStyle(theme.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-      }
 
-      GroupBox {
-        VStack(alignment: .leading, spacing: 4) {
-          HStack {
-            Text("Share anonymous usage data")
-            Spacer()
-            Toggle("Share anonymous usage data", isOn: $preferences.shareUsageData)
-              .labelsHidden()
-              .toggleStyle(.switch)
+        MacSettingsCard {
+          VStack(alignment: .leading, spacing: 4) {
+            HStack {
+              Text("Share anonymous usage data")
+                .foregroundStyle(theme.textPrimary)
+              Spacer()
+              Toggle("Share anonymous usage data", isOn: $preferences.shareUsageData)
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+
+            Text("Sends anonymous product usage counters to help improve BYOKchat. Messages, prompts, and file names are never collected.")
+              .font(.caption)
+              .foregroundStyle(theme.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
           }
-
-          Text("Sends anonymous product usage counters to help improve BYOKchat. Messages, prompts, and file names are never collected.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 2)
+        .onChange(of: preferences.shareUsageData) { _, enabled in
+          Task { await MacAppAnalytics.setEnabled(enabled) }
+        }
       }
-      .onChange(of: preferences.shareUsageData) { _, enabled in
-        Task { await MacAppAnalytics.setEnabled(enabled) }
-      }
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+    .background(theme.canvas)
     .confirmationDialog(
       "Clear default system prompt?",
       isPresented: $confirmClearPrompt,
@@ -333,6 +376,8 @@ private struct MacGeneralSettingsView: View {
 private struct MacDataSettingsView: View {
   let model: MacAppModel
 
+  @Environment(\.macAppTheme) private var theme
+
   var body: some View {
     if let data = model.dataManagement {
       MacDataManagementView(app: model, data: data)
@@ -342,126 +387,16 @@ private struct MacDataSettingsView: View {
         systemImage: "externaldrive.badge.exclamationmark",
         description: Text("Finish app startup before importing, exporting, or resetting data.")
       )
+      .foregroundStyle(theme.textPrimary)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(theme.canvas)
     }
-  }
-}
-
-/// Transparent compact Theme picker matching Spokio's `ThemePickerView` inside
-/// the native Settings window chrome without painting an opaque canvas fill.
-private struct MacThemeSettingsTab: View {
-  @Bindable var themeStore: MacAppThemeStore
-  let purchaseManager: PurchaseManager
-  let onUpgrade: () -> Void
-
-  @Environment(\.macAppTheme) private var theme
-
-  var body: some View {
-    TimelineView(.periodic(from: .now, by: 1)) { _ in
-      let hasPro = purchaseManager.hasPro
-      let proThemeIDs = themeStore.configuration.proThemeIDs
-      let previewableThemeIDs = hasPro
-        ? Set<MacAppThemeID>()
-        : Set(proThemeIDs.filter { themeStore.canPreview($0, hasPro: false) })
-      let lockedThemeIDs = hasPro
-        ? Set<MacAppThemeID>()
-        : proThemeIDs.subtracting(previewableThemeIDs)
-
-      ScrollView {
-        MacAppThemePicker(
-          themes: themeStore.configuration.themes,
-          selectedThemeID: themeStore.effectiveThemeID(hasPro: hasPro),
-          previewingThemeID: themeStore.isPreviewActive
-            ? themeStore.previewTheme?.id
-            : nil,
-          previewProgress: previewProgress,
-          previewableThemeIDs: previewableThemeIDs,
-          lockedThemeIDs: lockedThemeIDs,
-          compact: true,
-          onSelect: { themeID in
-            _ = themeStore.select(themeID, hasPro: hasPro)
-          },
-          onPreviewSelect: { themeID in
-            let result = themeStore.choose(themeID, hasPro: hasPro)
-            if case .requiresPro = result {
-              onUpgrade()
-            }
-          },
-          onLockedSelect: { _ in
-            onUpgrade()
-          }
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      .safeAreaInset(edge: .bottom, spacing: 12) {
-        if themeStore.isPreviewActive {
-          previewStatus(hasPro: hasPro)
-            .frame(maxWidth: .infinity)
-        }
-      }
-    }
-  }
-
-  private var previewProgress: Double {
-    guard themeStore.isPreviewActive else { return 0 }
-    let duration = themeStore.configuration.previewBehavior.defaultDuration
-    guard duration > 0 else { return 0 }
-    return min(1, max(0, Double(themeStore.previewRemainingSeconds) / duration))
-  }
-
-  private var countdown: String {
-    let seconds = themeStore.previewRemainingSeconds
-    return String(format: "%d:%02d", seconds / 60, seconds % 60)
-  }
-
-  private func previewStatus(hasPro: Bool) -> some View {
-    HStack(spacing: 12) {
-      Image(systemName: "timer")
-        .font(.headline)
-        .foregroundStyle(theme.accent)
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Previewing \(themeStore.previewTheme?.name ?? "Pro theme")")
-          .font(.subheadline.weight(.semibold))
-          .foregroundStyle(theme.textPrimary)
-
-        Text(
-          "Returns to \(themeStore.themeAfterPreview(hasPro: hasPro).name) in \(countdown)"
-        )
-        .font(.caption)
-        .foregroundStyle(theme.textSecondary)
-      }
-
-      Spacer(minLength: 8)
-
-      Button("Unlock Pro", action: onUpgrade)
-        .buttonStyle(.borderedProminent)
-        .controlSize(.small)
-
-      Button("End") {
-        themeStore.endPreview()
-      }
-      .buttonStyle(.bordered)
-      .controlSize(.small)
-    }
-    .padding(12)
-    .background(
-      theme.surfaceRaised,
-      in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-    )
-    .overlay {
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .stroke(theme.border, lineWidth: 1)
-    }
-    .shadow(color: theme.shadow, radius: 8, y: 3)
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(
-      "Previewing \(themeStore.previewTheme?.name ?? "Pro theme"). Returns to \(themeStore.themeAfterPreview(hasPro: hasPro).name) in \(countdown)."
-    )
   }
 }
 
 private struct MacAboutSettingsView: View {
+  @Environment(\.macAppTheme) private var theme
+
   private var appVersionSummary: String {
     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
@@ -469,64 +404,70 @@ private struct MacAboutSettingsView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      GroupBox {
-        HStack {
-          Text("Version")
-          Spacer()
-          Text(appVersionSummary)
-            .font(.system(size: 12, weight: .medium, design: .monospaced))
+    ScrollView {
+      VStack(alignment: .leading, spacing: 12) {
+        MacSettingsCard {
+          HStack {
+            Text("Version")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Text(appVersionSummary)
+              .font(.system(size: 12, weight: .medium, design: .monospaced))
+              .foregroundStyle(theme.textSecondary)
+          }
         }
-        .padding(.horizontal, 8)
+
+        MacSettingsCard {
+          HStack {
+            Text("Website")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button("spokiostudio.com/byokchat") {
+              NSWorkspace.shared.open(MacPurchaseStore.websiteURL)
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+          }
+
+          MacSettingsDivider()
+
+          HStack {
+            Text("Contact and feedback")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button("Contact Us") {
+              NSWorkspace.shared.open(MacPurchaseStore.contactURL)
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+          }
+
+          MacSettingsDivider()
+
+          HStack {
+            Text("Privacy Policy")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button("View Policy") {
+              NSWorkspace.shared.open(MacPurchaseStore.privacyURL)
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+          }
+
+          MacSettingsDivider()
+
+          HStack {
+            Text("Terms of Use")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button("View Terms") {
+              NSWorkspace.shared.open(MacPurchaseStore.termsURL)
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+          }
+        }
       }
-
-      GroupBox {
-        HStack {
-          Text("Website")
-          Spacer()
-          Button("spokiostudio.com/byokchat") {
-            NSWorkspace.shared.open(MacPurchaseStore.websiteURL)
-          }
-          .buttonStyle(MacSettingsButtonStyle())
-        }
-        .padding(.horizontal, 8)
-
-        Divider()
-
-        HStack {
-          Text("Contact and feedback")
-          Spacer()
-          Button("Contact Us") {
-            NSWorkspace.shared.open(MacPurchaseStore.contactURL)
-          }
-          .buttonStyle(MacSettingsButtonStyle())
-        }
-        .padding(.horizontal, 8)
-
-        Divider()
-
-        HStack {
-          Text("Privacy Policy")
-          Spacer()
-          Button("View Policy") {
-            NSWorkspace.shared.open(MacPurchaseStore.privacyURL)
-          }
-          .buttonStyle(MacSettingsButtonStyle())
-        }
-        .padding(.horizontal, 8)
-
-        Divider()
-
-        HStack {
-          Text("Terms of Use")
-          Spacer()
-          Button("View Terms") {
-            NSWorkspace.shared.open(MacPurchaseStore.termsURL)
-          }
-          .buttonStyle(MacSettingsButtonStyle())
-        }
-        .padding(.horizontal, 8)
-      }
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+    .background(theme.canvas)
   }
 }

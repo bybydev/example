@@ -1,5 +1,6 @@
 import AppKit
 import BYOKchatProviderCore
+import MacAppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -7,6 +8,7 @@ struct MacDataManagementView: View {
   let app: MacAppModel
   @Bindable var data: MacDataManagementModel
 
+  @Environment(\.macAppTheme) private var theme
   @State private var pendingImport: PendingImport?
   @State private var confirmClearThumbnails = false
   @State private var confirmClearSearchIndex = false
@@ -47,175 +49,166 @@ struct MacDataManagementView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 12) {
         storageUsageSection
 
-        GroupBox {
-          VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Full backup")
-              Text("Portable JSON backup of conversations, attachments, projects, Library items, MCP configuration, connections, and default system prompt.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Divider()
-
-            HStack(spacing: 8) {
-              Spacer()
-              Button("Export…") {
-                exportBackup()
-              }
-              .buttonStyle(MacSettingsButtonStyle())
-
-              Button("Import…") {
-                chooseImport(kind: .backup)
-              }
-              .buttonStyle(MacSettingsButtonStyle())
-            }
-            .disabled(data.isBusy)
-          }
-          .padding(.horizontal, 8)
-          .padding(.vertical, 4)
-        }
-
-        GroupBox {
-          VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Connection configuration")
-              Text("Export or import provider account configuration without chat history.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Divider()
-
-            HStack(spacing: 8) {
-              Spacer()
-              Button("Export…") {
-                exportProviderConfiguration()
-              }
-              .buttonStyle(MacSettingsButtonStyle())
-
-              Button("Import…") {
-                chooseImport(kind: .providers)
-              }
-              .buttonStyle(MacSettingsButtonStyle())
-            }
-            .disabled(data.isBusy)
-          }
-          .padding(.horizontal, 8)
-          .padding(.vertical, 4)
-        }
-
-        GroupBox {
-          VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Workspace location")
-              Text(app.storageEnvironment.rootDirectory.path)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            }
-
-            Divider()
-
-            HStack(spacing: 8) {
-              Spacer()
-              if app.lastRecoveryBackupURL != nil {
-                Button("Last Recovery Backup") {
-                  app.revealRecoveryBackup()
-                }
-                .buttonStyle(MacSettingsButtonStyle())
-              }
-
-              Button("Show in Finder") {
-                app.revealDataDirectory()
-              }
-              .buttonStyle(MacSettingsButtonStyle())
-            }
-
-            Text("Startup recovery and full reset preserve the previous workspace by moving it aside before creating a fresh one.")
+        MacSettingsCard {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Full backup")
+              .foregroundStyle(theme.textPrimary)
+            Text("Portable JSON backup of conversations, attachments, projects, Library items, MCP configuration, connections, and default system prompt.")
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.textSecondary)
               .fixedSize(horizontal: false, vertical: true)
           }
-          .padding(.horizontal, 8)
-          .padding(.vertical, 4)
-        }
 
-        GroupBox {
-          VStack(alignment: .leading, spacing: 10) {
-            HStack {
-              Text("Delete all conversations")
-              Spacer()
-              Button("Delete…", role: .destructive) {
-                confirmDeleteConversations = true
-              }
-              .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+          MacSettingsDivider()
+
+          HStack(spacing: 8) {
+            Spacer()
+            Button("Export…") {
+              exportBackup()
             }
+            .buttonStyle(MacSettingsButtonStyle())
 
-            Divider()
-
-            HStack {
-              Text("Delete all credentials")
-              Spacer()
-              Button("Delete…", role: .destructive) {
-                confirmDeleteCredentials = true
-              }
-              .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+            Button("Import…") {
+              chooseImport(kind: .backup)
             }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 4) {
-              HStack {
-                Text("Reset all application data")
-                Spacer()
-                Button("Reset…", role: .destructive) {
-                  confirmResetApplication = true
-                }
-                .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
-              }
-
-              Text("Moves the workspace to a recovery folder first, then removes provider/MCP credentials and telemetry. Keychain credentials cannot be recovered from the workspace backup.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
+            .buttonStyle(MacSettingsButtonStyle())
           }
           .disabled(data.isBusy)
-          .padding(.horizontal, 8)
-          .padding(.vertical, 4)
         }
+
+        MacSettingsCard {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Connection configuration")
+              .foregroundStyle(theme.textPrimary)
+            Text("Export or import provider account configuration without chat history.")
+              .font(.caption)
+              .foregroundStyle(theme.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          MacSettingsDivider()
+
+          HStack(spacing: 8) {
+            Spacer()
+            Button("Export…") {
+              exportProviderConfiguration()
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+
+            Button("Import…") {
+              chooseImport(kind: .providers)
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+          }
+          .disabled(data.isBusy)
+        }
+
+        MacSettingsCard {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Workspace location")
+              .foregroundStyle(theme.textPrimary)
+            Text(app.storageEnvironment.rootDirectory.path)
+              .font(.system(size: 10.5, design: .monospaced))
+              .foregroundStyle(theme.textSecondary)
+              .lineLimit(1)
+              .truncationMode(.middle)
+          }
+
+          MacSettingsDivider()
+
+          HStack(spacing: 8) {
+            Spacer()
+            if app.lastRecoveryBackupURL != nil {
+              Button("Last Recovery Backup") {
+                app.revealRecoveryBackup()
+              }
+              .buttonStyle(MacSettingsButtonStyle())
+            }
+
+            Button("Show in Finder") {
+              app.revealDataDirectory()
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+          }
+
+          Text("Startup recovery and full reset preserve the previous workspace by moving it aside before creating a fresh one.")
+            .font(.caption)
+            .foregroundStyle(theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        MacSettingsCard {
+          HStack {
+            Text("Delete all conversations")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button("Delete…", role: .destructive) {
+              confirmDeleteConversations = true
+            }
+            .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+          }
+
+          MacSettingsDivider()
+
+          HStack {
+            Text("Delete all credentials")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button("Delete…", role: .destructive) {
+              confirmDeleteCredentials = true
+            }
+            .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+          }
+
+          MacSettingsDivider()
+
+          VStack(alignment: .leading, spacing: 4) {
+            HStack {
+              Text("Reset all application data")
+                .foregroundStyle(theme.textPrimary)
+              Spacer()
+              Button("Reset…", role: .destructive) {
+                confirmResetApplication = true
+              }
+              .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+            }
+
+            Text("Moves the workspace to a recovery folder first, then removes provider/MCP credentials and telemetry. Keychain credentials cannot be recovered from the workspace backup.")
+              .font(.caption)
+              .foregroundStyle(theme.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .disabled(data.isBusy)
 
         if data.isBusy {
           HStack(spacing: 8) {
             ProgressView().controlSize(.small)
             Text("Working…")
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.textSecondary)
           }
           .padding(.horizontal, 4)
         } else if let status = data.statusMessage {
           Label(status, systemImage: "checkmark.circle")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.success)
             .padding(.horizontal, 4)
         }
 
         Text("Backups and connection exports never include API keys, secret headers, or MCP credentials.")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.textMuted)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal, 4)
       }
-      .padding(.vertical, 2)
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+    .background(theme.canvas)
     .task {
       await data.refreshStorageUsage()
     }
@@ -327,149 +320,151 @@ struct MacDataManagementView: View {
   }
 
   private var storageUsageSection: some View {
-    GroupBox {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack {
-          Text("Storage usage")
-          Spacer()
-          if data.isMeasuringStorage {
-            ProgressView()
-              .controlSize(.small)
-          }
-          Button("Refresh") {
-            Task { await data.refreshStorageUsage() }
-          }
-          .buttonStyle(MacSettingsButtonStyle())
-          .disabled(data.isMeasuringStorage || data.isBusy)
+    MacSettingsCard {
+      HStack {
+        Text("Storage usage")
+          .foregroundStyle(theme.textPrimary)
+        Spacer()
+        if data.isMeasuringStorage {
+          ProgressView()
+            .controlSize(.small)
         }
-
-        if let report, report.hasCleanupWarning || quarantinedCount > 0 {
-          VStack(alignment: .leading, spacing: 8) {
-            if report.isDeviceSpaceLow {
-              warningRow(
-                icon: "externaldrive.badge.exclamationmark",
-                title: "Mac storage is running low",
-                detail: "Less than 250 MB is available on this Mac. Clear cached thumbnails or remove large chats and files to avoid failed saves."
-              )
-            }
-            if report.isStorageLarge {
-              warningRow(
-                icon: "internaldrive",
-                title: "Local data is over 500 MB",
-                detail: "Consider clearing cached thumbnails or removing older conversations and unused Library files you no longer need."
-              )
-            }
-            if quarantinedCount > 0 {
-              warningRow(
-                icon: "doc.badge.exclamationmark",
-                title: "\(quarantinedCount) unreadable chat \(quarantinedCount == 1 ? "file" : "files") quarantined",
-                detail: "Corrupted conversation files were set aside so the rest of your history stays safe. You can remove them below to reclaim space."
-              )
-            }
-          }
+        Button("Refresh") {
+          Task { await data.refreshStorageUsage() }
         }
+        .buttonStyle(MacSettingsButtonStyle())
+        .disabled(data.isMeasuringStorage || data.isBusy)
+      }
 
-        Divider()
-
-        if let report {
-          VStack(alignment: .leading, spacing: 6) {
-            sizeRow("Chats (\(conversationCount))", bytes: report.conversationsBytes)
-            sizeRow("Files & attachments", bytes: report.attachmentsBytes)
-            sizeRow("Cached thumbnails", bytes: report.thumbnailCacheBytes)
-            sizeRow("Search index", bytes: report.searchIndexBytes)
-            sizeRow("Analytics & settings", bytes: report.analyticsBytes + report.otherBytes)
-            if report.quarantinedBytes > 0 || quarantinedCount > 0 {
-              sizeRow("Quarantined files", bytes: report.quarantinedBytes)
-            }
-
-            Divider()
-              .padding(.vertical, 2)
-
-            HStack {
-              Text("Total used")
-                .fontWeight(.medium)
-              Spacer()
-              Text(formattedBytes(report.totalBytes))
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-            }
-
-            if let available = report.availableDeviceBytes {
-              HStack {
-                Text("Available on Mac")
-                  .foregroundStyle(.secondary)
-                Spacer()
-                Text(formattedBytes(available))
-                  .font(.system(size: 12, weight: .medium, design: .monospaced))
-                  .foregroundStyle(report.isDeviceSpaceLow ? Color.orange : Color.secondary)
-              }
-            }
+      if let report, report.hasCleanupWarning || quarantinedCount > 0 {
+        VStack(alignment: .leading, spacing: 8) {
+          if report.isDeviceSpaceLow {
+            warningRow(
+              icon: "externaldrive.badge.exclamationmark",
+              title: "Mac storage is running low",
+              detail: "Less than 250 MB is available on this Mac. Clear cached thumbnails or remove large chats and files to avoid failed saves."
+            )
           }
-        } else {
-          HStack(spacing: 8) {
-            ProgressView()
-              .controlSize(.small)
-            Text("Calculating storage…")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+          if report.isStorageLarge {
+            warningRow(
+              icon: "internaldrive",
+              title: "Local data is over 500 MB",
+              detail: "Consider clearing cached thumbnails or removing older conversations and unused Library files you no longer need."
+            )
+          }
+          if quarantinedCount > 0 {
+            warningRow(
+              icon: "doc.badge.exclamationmark",
+              title: "\(quarantinedCount) unreadable chat \(quarantinedCount == 1 ? "file" : "files") quarantined",
+              detail: "Corrupted conversation files were set aside so the rest of your history stays safe. You can remove them below to reclaim space."
+            )
           }
         }
+      }
 
-        Divider()
+      MacSettingsDivider()
 
-        HStack {
-          Text("Cached thumbnails")
-          Spacer()
-          Button("Clear…") {
-            confirmClearThumbnails = true
+      if let report {
+        VStack(alignment: .leading, spacing: 6) {
+          sizeRow("Chats (\(conversationCount))", bytes: report.conversationsBytes)
+          sizeRow("Files & attachments", bytes: report.attachmentsBytes)
+          sizeRow("Cached thumbnails", bytes: report.thumbnailCacheBytes)
+          sizeRow("Search index", bytes: report.searchIndexBytes)
+          sizeRow("Analytics & settings", bytes: report.analyticsBytes + report.otherBytes)
+          if report.quarantinedBytes > 0 || quarantinedCount > 0 {
+            sizeRow("Quarantined files", bytes: report.quarantinedBytes)
           }
-          .buttonStyle(MacSettingsButtonStyle())
-          .disabled(data.isBusy || (report?.thumbnailCacheBytes ?? 0) == 0)
-        }
 
-        Divider()
-
-        HStack {
-          Text("Search index")
-          Spacer()
-          Button("Clear…") {
-            confirmClearSearchIndex = true
-          }
-          .buttonStyle(MacSettingsButtonStyle())
-          .disabled(data.isBusy || (report?.searchIndexBytes ?? 0) == 0)
-        }
-
-        if quarantinedCount > 0 {
-          Divider()
+          MacSettingsDivider()
+            .padding(.vertical, 2)
 
           HStack {
-            Text("Unreadable shards (\(quarantinedCount))")
+            Text("Total used")
+              .fontWeight(.medium)
+              .foregroundStyle(theme.textPrimary)
             Spacer()
-            Button("Remove…", role: .destructive) {
-              confirmPurgeQuarantined = true
+            Text(formattedBytes(report.totalBytes))
+              .font(.system(size: 12, weight: .semibold, design: .monospaced))
+              .foregroundStyle(theme.textPrimary)
+          }
+
+          if let available = report.availableDeviceBytes {
+            HStack {
+              Text("Available on Mac")
+                .foregroundStyle(theme.textSecondary)
+              Spacer()
+              Text(formattedBytes(available))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(report.isDeviceSpaceLow ? theme.warning : theme.textSecondary)
             }
-            .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
-            .disabled(data.isBusy)
           }
         }
-
-        Text("Cached thumbnails and the search index regenerate automatically when needed. Clearing cached thumbnails never deletes your chats, original attachments, or Library files.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+      } else {
+        HStack(spacing: 8) {
+          ProgressView()
+            .controlSize(.small)
+          Text("Calculating storage…")
+            .font(.caption)
+            .foregroundStyle(theme.textSecondary)
+        }
       }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 4)
+
+      MacSettingsDivider()
+
+      HStack {
+        Text("Cached thumbnails")
+          .foregroundStyle(theme.textPrimary)
+        Spacer()
+        Button("Clear…") {
+          confirmClearThumbnails = true
+        }
+        .buttonStyle(MacSettingsButtonStyle())
+        .disabled(data.isBusy || (report?.thumbnailCacheBytes ?? 0) == 0)
+      }
+
+      MacSettingsDivider()
+
+      HStack {
+        Text("Search index")
+          .foregroundStyle(theme.textPrimary)
+        Spacer()
+        Button("Clear…") {
+          confirmClearSearchIndex = true
+        }
+        .buttonStyle(MacSettingsButtonStyle())
+        .disabled(data.isBusy || (report?.searchIndexBytes ?? 0) == 0)
+      }
+
+      if quarantinedCount > 0 {
+        MacSettingsDivider()
+
+        HStack {
+          Text("Unreadable shards (\(quarantinedCount))")
+            .foregroundStyle(theme.textPrimary)
+          Spacer()
+          Button("Remove…", role: .destructive) {
+            confirmPurgeQuarantined = true
+          }
+          .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+          .disabled(data.isBusy)
+        }
+      }
+
+      Text("Cached thumbnails and the search index regenerate automatically when needed. Clearing cached thumbnails never deletes your chats, original attachments, or Library files.")
+        .font(.caption)
+        .foregroundStyle(theme.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
   private func sizeRow(_ title: String, bytes: Int64) -> some View {
     HStack {
       Text(title)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.textSecondary)
       Spacer()
       Text(formattedBytes(bytes))
         .font(.system(size: 12, weight: .medium, design: .monospaced))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.textSecondary)
     }
   }
 
@@ -477,27 +472,28 @@ struct MacDataManagementView: View {
     HStack(alignment: .top, spacing: 8) {
       Image(systemName: icon)
         .font(.caption.weight(.semibold))
-        .foregroundStyle(Color.orange)
+        .foregroundStyle(theme.warning)
         .padding(.top, 2)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
           .font(.caption.weight(.semibold))
+          .foregroundStyle(theme.textPrimary)
         Text(detail)
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.textSecondary)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
     .padding(8)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
-      Color.orange.opacity(0.1),
+      theme.warning.opacity(0.10),
       in: RoundedRectangle(cornerRadius: 6, style: .continuous)
     )
     .overlay {
       RoundedRectangle(cornerRadius: 6, style: .continuous)
-        .strokeBorder(Color.orange.opacity(0.28), lineWidth: 1)
+        .strokeBorder(theme.warning.opacity(0.30), lineWidth: 1)
     }
   }
 

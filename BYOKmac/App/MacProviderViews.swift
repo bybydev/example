@@ -1306,7 +1306,7 @@ struct MacTargetPickerView: View {
 
       HSplitView {
         accountListPane
-          .frame(minWidth: 190, idealWidth: 220, maxWidth: 255)
+          .frame(minWidth: 170, idealWidth: 195, maxWidth: 230)
           .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
         VStack(spacing: 0) {
@@ -1329,11 +1329,11 @@ struct MacTargetPickerView: View {
             selectedModelFooter
           }
         }
-        .frame(minWidth: 430)
+        .frame(minWidth: 390)
         .background(MacDesignTokens.Colors.canvas)
       }
     }
-    .frame(minWidth: 700, idealWidth: 760, minHeight: 500, idealHeight: 580)
+    .frame(minWidth: 580, idealWidth: 620, minHeight: 420, idealHeight: 460)
     .background(MacDesignTokens.Colors.canvas)
     .interactiveDismissDisabled(isSaving)
     .task(id: accountID) {
@@ -2910,7 +2910,10 @@ struct MacConnectionEditorView: View {
         .padding(16)
       }
     }
-    .frame(width: 650, height: isCustom ? 760 : 680)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .interactiveDismissDisabled(isSaving || hasUnsavedChanges)
     .onChange(of: discoveryInput) { _, _ in invalidateDiscovery() }
@@ -3633,7 +3636,10 @@ private struct MacConnectionModelPickerSheet: View {
         }
       }
     }
-    .frame(width: 540, height: 500)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 

@@ -43,7 +43,12 @@ struct MacAnswerSourcesSheet: View {
         }
       }
     }
-    .frame(minWidth: 480, idealWidth: 520, minHeight: 360, idealHeight: 440)
+    .frame(
+      minWidth: 500,
+      idealWidth: MacDesignTokens.Sheet.standardWidth,
+      minHeight: 340,
+      idealHeight: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .task(id: copyFeedbackRevision) {
       guard copyFeedbackRevision > 0 else { return }
@@ -99,9 +104,7 @@ struct MacAnswerSourcesSheet: View {
 
   private func copySource(_ source: MacAnswerSource) {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(source.url.absoluteString, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: .message)
-    }
+    NSPasteboard.general.setString(source.url.absoluteString, forType: .string)
     withAnimation(.easeOut(duration: 0.16)) {
       copiedAll = false
       copiedSourceID = source.id
@@ -113,9 +116,7 @@ struct MacAnswerSourcesSheet: View {
     let payload = sources.map(\.url.absoluteString).joined(separator: "\n")
     guard !payload.isEmpty else { return }
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(payload, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: .message)
-    }
+    NSPasteboard.general.setString(payload, forType: .string)
     withAnimation(.easeOut(duration: 0.16)) {
       copiedSourceID = nil
       copiedAll = true

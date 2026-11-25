@@ -692,9 +692,7 @@ struct MacMarkdownTableView: View {
 
   private func copyTable(_ payload: String) {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(payload, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: .message)
-    }
+    NSPasteboard.general.setString(payload, forType: .string)
     withAnimation(.easeOut(duration: 0.18)) {
       isCopied = true
     }
@@ -1056,7 +1054,12 @@ struct MacFullScreenTableView: View {
         }
       }
     }
-    .frame(minWidth: 740, minHeight: 500)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.previewMinWidth,
+      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
+      minHeight: MacDesignTokens.Sheet.previewMinHeight,
+      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
+    )
     .environment(
       \.openURL,
       OpenURLAction { url in
@@ -1079,9 +1082,7 @@ struct MacFullScreenTableView: View {
 
   private func copyTable(_ payload: String) {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(payload, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: .message)
-    }
+    NSPasteboard.general.setString(payload, forType: .string)
     withAnimation(.easeOut(duration: 0.18)) {
       isCopied = true
     }
@@ -1840,7 +1841,12 @@ struct MacZoomableImageSheet: View {
       }
       .animation(.easeInOut(duration: 0.18), value: statusBanner)
     }
-    .frame(minWidth: 740, minHeight: 540)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.previewMinWidth,
+      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
+      minHeight: MacDesignTokens.Sheet.previewMinHeight,
+      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
+    )
     .task(id: statusBannerRevision) {
       guard statusBannerRevision > 0 else { return }
       try? await Task.sleep(for: .seconds(1.8))
@@ -2205,9 +2211,7 @@ struct MacHighlightedCodeBlock: View {
 
   private func copyCode() {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(content, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: .code)
-    }
+    NSPasteboard.general.setString(content, forType: .string)
     copied = true
     Task { @MainActor in
       try? await Task.sleep(for: .seconds(1.2))
@@ -2389,9 +2393,7 @@ private struct MacFullScreenCodeView: View {
         .help("Share code")
         Button("Copy", systemImage: "doc.on.doc") {
           NSPasteboard.general.clearContents()
-          if NSPasteboard.general.setString(content, forType: .string) {
-            MacAppAnalytics.track(.contentCopied, dimension: .code)
-          }
+          NSPasteboard.general.setString(content, forType: .string)
         }
         .labelStyle(.iconOnly)
         .buttonStyle(MacIconButtonStyle())
@@ -2407,7 +2409,12 @@ private struct MacFullScreenCodeView: View {
           .padding(18)
       }
     }
-    .frame(minWidth: 720, minHeight: 500)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.previewMinWidth,
+      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
+      minHeight: MacDesignTokens.Sheet.previewMinHeight,
+      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
+    )
   }
 }
 
@@ -3244,9 +3251,7 @@ struct MacMermaidAnswerView: View {
 
   private func copySource() {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(source, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: .diagram)
-    }
+    NSPasteboard.general.setString(source, forType: .string)
     copied = true
     Task { @MainActor in
       try? await Task.sleep(for: .seconds(1.2))
@@ -3369,7 +3374,12 @@ private struct MacFullScreenMermaidView: View {
       }
       .animation(.easeInOut(duration: 0.18), value: statusBanner)
     }
-    .frame(minWidth: 780, minHeight: 560)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.previewMinWidth,
+      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
+      minHeight: MacDesignTokens.Sheet.previewMinHeight,
+      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
+    )
     .task(id: renderKey) {
       await renderDiagram()
     }
@@ -3475,9 +3485,7 @@ private struct MacFullScreenMermaidView: View {
         }
         Button("Copy Mermaid Source", systemImage: "doc.on.doc") {
           NSPasteboard.general.clearContents()
-          if NSPasteboard.general.setString(source, forType: .string) {
-            MacAppAnalytics.track(.contentCopied, dimension: .diagram)
-          }
+          NSPasteboard.general.setString(source, forType: .string)
           showStatusBanner("Copied Mermaid Source")
         }
       } label: {

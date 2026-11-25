@@ -7,6 +7,7 @@ import SwiftUI
 private struct MacAnalyticsOverviewComputation: Sendable {
   let snapshot: UsageAnalyticsSnapshot
   let budgetSnapshot: UsageAnalyticsSnapshot
+  let timeSeries: MacAnalyticsTimeSeries
   let conversationUsageByID: [ConversationID: ConversationUsageBreakdown]
   let conversationsByID: [String: ChatConversation]
   let overviewMetrics: [MacAnalyticsMetric]
@@ -50,6 +51,7 @@ final class MacAnalyticsModel {
     providerBreakdown: [],
     modelBreakdown: []
   )
+  private(set) var overviewTimeSeries: MacAnalyticsTimeSeries = .empty
   private(set) var overviewConversationUsageByID: [ConversationID: ConversationUsageBreakdown] = [:]
   private(set) var overviewMetrics: [MacAnalyticsMetric] = []
   private(set) var providerDisplayNamesByID: [String: String] = [:]
@@ -185,6 +187,11 @@ final class MacAnalyticsModel {
         range: effectiveRange,
         reference: reference
       )
+      let timeSeries = MacAnalyticsTimeSeriesBuilder.build(
+        conversations: loadedConversations,
+        range: effectiveRange,
+        reference: reference
+      )
       let budget: UsageAnalyticsSnapshot
       if budgetRange == effectiveRange {
         budget = snapshot
@@ -226,6 +233,7 @@ final class MacAnalyticsModel {
       return MacAnalyticsOverviewComputation(
         snapshot: snapshot,
         budgetSnapshot: budget,
+        timeSeries: timeSeries,
         conversationUsageByID: usageByID,
         conversationsByID: byID,
         overviewMetrics: metrics,
@@ -252,6 +260,7 @@ final class MacAnalyticsModel {
     overviewTelemetryUnavailable = unavailable
     overviewSnapshot = computed.snapshot
     budgetSnapshot = computed.budgetSnapshot
+    overviewTimeSeries = computed.timeSeries
     cachedBudgetRange = budgetRange
     overviewConversationUsageByID = computed.conversationUsageByID
     overviewMetrics = computed.overviewMetrics
@@ -418,16 +427,28 @@ enum MacAnalyticsWorkspaceSection: String, CaseIterable, Identifiable {
   var id: String { rawValue }
 }
 
+private enum MacAnalyticsBreakdownTab: String, CaseIterable, Identifiable {
+  case models = "Models"
+  case providers = "Providers"
+
+  var id: String { rawValue }
+}
+
 struct MacAnalyticsView: View {
   @State private var analytics: MacAnalyticsModel
   @State private var range: UsageAnalyticsRange = .today
   @State private var section: MacAnalyticsWorkspaceSection
   @State private var selectedConversationID: String?
   @State private var conversationSearchText = ""
+  @State private var chartMetric: MacAnalyticsChartMetric = .spend
+  @State private var breakdownTab: MacAnalyticsBreakdownTab = .models
+  @State private var showAllBreakdownRows = false
+  @State private var showAllErrors = false
   @State private var confirmClearTelemetry = false
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
 
+  @Environment(\.macAppTheme) private var theme
   @Environment(PurchaseManager.self) private var purchaseManager
 
   private struct OverviewReloadKey: Equatable {
@@ -469,11 +490,11 @@ struct MacAnalyticsView: View {
     }
   }
 
-  private static let contentMaxWidth: CGFloat = 960
-  private static let contentPadding: CGFloat = 18
-  private static let detailGridColumns = [
-    GridItem(.flexible(), spacing: 12),
-    GridItem(.flexible(), spacing: 12),
+  private static let contentMaxWidth: CGFloat = 920
+  private static let contentPadding: CGFloat = 16
+  private static let twoColumnGrid = [
+    GridItem(.flexible(), spacing: 12, alignment: .top),
+    GridItem(.flexible(), spacing: 12, alignment: .top),
   ]
 
   private var selectedConversation: ChatConversation? {
@@ -496,7 +517,9 @@ struct MacAnalyticsView: View {
   var body: some View {
     VStack(spacing: 0) {
       workspaceControls
-      Divider()
+      Rectangle()
+        .fill(theme.separator.opacity(0.75))
+        .frame(height: 1)
 
       Group {
         if !analytics.hasLoaded {
@@ -528,8 +551,12 @@ struct MacAnalyticsView: View {
         value: showsRangeSwitchSkeleton
       )
     }
-    .frame(minWidth: 920, minHeight: 620)
-    .background(MacDesignTokens.Colors.canvas)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
+      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
+    )
+    .background(theme.canvas)
+    .foregroundStyle(theme.textPrimary)
     .task(id: overviewReloadKey) {
       await analytics.load(
         range: accessibleRange,
@@ -547,7 +574,12 @@ struct MacAnalyticsView: View {
     }
     .onChange(of: range) { oldRange, newRange in
       guard oldRange != newRange else { return }
+      showAllBreakdownRows = false
+      showAllErrors = false
       MacAppAnalytics.track(.analyticsRangeSelected, dimension: .init(range: accessibleRange))
+    }
+    .onChange(of: breakdownTab) { _, _ in
+      showAllBreakdownRows = false
     }
     .onChange(of: purchaseManager.hasPro) { _, hasPro in
       if !hasPro { range = .today }
@@ -580,15 +612,17 @@ struct MacAnalyticsView: View {
     }
   }
 
+  // MARK: - Top Control Bar
+
   private var workspaceControls: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: 10) {
       if selectedConversationID != nil {
         Button {
           selectedConversationID = nil
           section = .conversations
         } label: {
           Label("Conversations", systemImage: "chevron.left")
-            .foregroundStyle(MacDesignTokens.Colors.accent)
+            .foregroundStyle(theme.accent)
         }
         .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
       } else {
@@ -597,24 +631,13 @@ struct MacAnalyticsView: View {
           selection: $section,
           title: \.rawValue
         )
-        .frame(width: 260)
+        .frame(width: 210)
       }
 
-      Spacer()
+      Spacer(minLength: 8)
 
       if selectedConversationID == nil {
-        Menu {
-          ForEach(UsageAnalyticsRange.allCases) { value in
-            rangeMenuButton(for: value)
-          }
-        } label: {
-          MacMenuButtonLabel(title: accessibleRange.label)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .accessibilityLabel("Analytics date range, \(accessibleRange.label)")
-        .accessibilityHint("Choose the analytics date range.")
+        inlineRangePicker
       }
 
       Button {
@@ -629,39 +652,46 @@ struct MacAnalyticsView: View {
           }
         }
       } label: {
-        Label(
-          (analytics.isLoading || analytics.isLoadingConversation) ? "Refreshing…" : "Refresh",
-          systemImage: "arrow.clockwise"
-        )
+        Group {
+          if analytics.isLoading || analytics.isLoadingConversation {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Image(systemName: "arrow.clockwise")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(theme.textSecondary)
+          }
+        }
+        .frame(width: 28, height: 28)
       }
-      .buttonStyle(MacActionButtonStyle(.secondary))
+      .buttonStyle(MacIconButtonStyle())
       .disabled(analytics.isLoading || analytics.isLoadingConversation || analytics.isClearingTelemetry)
+      .help("Refresh analytics")
+      .accessibilityLabel("Refresh analytics")
     }
     .padding(.horizontal, 16)
-    .frame(height: 54)
-    .background(MacDesignTokens.Colors.surface.opacity(0.45))
+    .frame(height: 48)
+    .background(theme.surface.opacity(0.65))
   }
 
-  private func rangeMenuButton(for value: UsageAnalyticsRange) -> some View {
-    let locked = value.requiresPro && !purchaseManager.hasPro
-    let selected = accessibleRange == value
-
-    return Button {
-      if locked {
+  private var inlineRangePicker: some View {
+    MacSegmentedControl(
+      options: UsageAnalyticsRange.allCases,
+      selection: Binding(
+        get: { accessibleRange },
+        set: { range = $0 }
+      ),
+      equalWidth: false,
+      isLocked: { $0.requiresPro && !purchaseManager.hasPro },
+      isOptionDisabled: {
+        $0.requiresPro && !purchaseManager.hasPro && purchaseManager.entitlementState == .checking
+      },
+      onLockedSelect: { _ in
         MacProAccess.requestUpgrade(.analytics)
-      } else {
-        range = value
-      }
-    } label: {
-      if locked {
-        Label(value.label, systemImage: "lock.fill")
-      } else if selected {
-        Label(value.label, systemImage: "checkmark")
-      } else {
-        Text(value.label)
-      }
-    }
-    .disabled(locked && purchaseManager.entitlementState == .checking)
+      },
+      title: \.label
+    )
+    .accessibilityLabel("Analytics date range, \(accessibleRange.label)")
   }
 
   @ViewBuilder
@@ -677,32 +707,29 @@ struct MacAnalyticsView: View {
     }
   }
 
+  // MARK: - Overview Dashboard
+
   private var overview: some View {
     let snapshot = analytics.overviewSnapshot
     let budget = analytics.budgetSnapshot
     let aggregate = snapshot.aggregate
+    let series = analytics.overviewTimeSeries
 
     return ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        analyticsHeading(
-          title: "Usage",
-          subtitle: "Local usage and spend for \(accessibleRange.label.lowercased())."
+      VStack(alignment: .leading, spacing: 14) {
+        overviewHeroStrip(snapshot: snapshot, budget: budget, series: series)
+
+        MacAnalyticsActivityChartCard(
+          series: series,
+          metric: $chartMetric
         )
 
-        MacAnalyticsMetricGrid(
-          metrics: analytics.overviewMetrics
-        )
+        LazyVGrid(columns: Self.twoColumnGrid, alignment: .leading, spacing: 12) {
+          breakdownMixCard(snapshot: snapshot)
+          tokenMixCard(aggregate: aggregate)
+        }
 
-        Label(macUsageHistoryFootnote(aggregate), systemImage: "info.circle")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          .fixedSize(horizontal: false, vertical: true)
-
-        LazyVGrid(
-          columns: Self.detailGridColumns,
-          alignment: .leading,
-          spacing: 12
-        ) {
+        LazyVGrid(columns: Self.twoColumnGrid, alignment: .leading, spacing: 12) {
           if analytics.overviewTelemetryUnavailable {
             telemetryUnavailableCard(
               isDisabled: analytics.isLoading || analytics.isClearingTelemetry
@@ -717,82 +744,702 @@ struct MacAnalyticsView: View {
               }
             }
           } else {
-            performanceCard(snapshot.performance)
-            reliabilityCard(snapshot.performance, includeToolAndMCP: true)
-
-            if !snapshot.failureBreakdown.isEmpty {
-              errorsCard(snapshot.failureBreakdown)
-            }
+            performanceAndReliabilityCard(
+              snapshot.performance,
+              failures: snapshot.failureBreakdown,
+              includeToolAndMCP: true
+            )
           }
 
           if !snapshot.conversationBreakdown.isEmpty {
-            topChatsCard(snapshot.conversationBreakdown)
+            topChatsCard(snapshot.conversationBreakdown, overallSpend: aggregate.costUSD)
+          } else {
+            emptyTopChatsCard
           }
+        }
 
-          if !snapshot.providerBreakdown.isEmpty {
-            MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
-              MacAnalyticsBreakdownList(
-                rows: snapshot.providerBreakdown,
-                displayName: { analytics.overviewProviderDisplayName(for: $0) }
-              )
-            }
-          }
-
-          if !snapshot.modelBreakdown.isEmpty {
-            MacAnalyticsSection(title: "Models", symbol: "cpu") {
-              MacAnalyticsBreakdownList(
-                rows: snapshot.modelBreakdown,
-                displayName: { analytics.overviewModelDisplayName(for: $0) }
-              )
-            }
-          }
-
+        LazyVGrid(columns: Self.twoColumnGrid, alignment: .leading, spacing: 12) {
           budgetCard(budget.aggregate)
           localAnalyticsCard
         }
+
+        Label(macUsageHistoryFootnote(aggregate), systemImage: "info.circle")
+          .font(.caption)
+          .foregroundStyle(theme.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.horizontal, 2)
       }
       .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
       .padding(Self.contentPadding)
       .frame(maxWidth: .infinity, alignment: .top)
     }
-    .background(MacDesignTokens.Colors.canvas)
+    .background(theme.canvas)
   }
 
-  private func topChatsCard(_ rows: [ConversationUsageBreakdown]) -> some View {
-    let topRows = Array(rows.prefix(5))
-    return MacAnalyticsSection(title: "Top Chats", symbol: "bubble.left.and.bubble.right") {
-      VStack(spacing: 0) {
-        ForEach(topRows) { item in
-          MacAnalyticsTopChatRow(item: item) {
-            section = .conversations
-            selectedConversationID = item.id.rawValue
-          }
+  private func overviewHeroStrip(
+    snapshot: UsageAnalyticsSnapshot,
+    budget: UsageAnalyticsSnapshot,
+    series: MacAnalyticsTimeSeries
+  ) -> some View {
+    let aggregate = snapshot.aggregate
+    let performance = snapshot.performance
 
-          if item.id != topRows.last?.id {
-            Divider()
+    let spendSubtitle: String = {
+      if monthlyBudgetUSD > 0 {
+        let pct = macUsagePercent(budgetProgress(budget.aggregate))
+        return "\(pct) of \(macUsageFormatUSD(Decimal(monthlyBudgetUSD))) mo budget"
+      }
+      if series.hasKnownSpend && series.buckets.count > 1 {
+        let avg = macUsageFormatUSD(Decimal(series.averageValue(for: .spend)))
+        return "\(avg)/\(series.granularity.singularUnit) avg"
+      }
+      return "\(accessibleRange.label) total"
+    }()
+
+    let spendAccentColor: Color =
+      (monthlyBudgetUSD > 0 && budgetWarningReached(budget.aggregate))
+        ? theme.warning
+        : theme.accent
+
+    let tokensSubtitle: String = {
+      var parts = [
+        "\(macUsageCompactTokens(aggregate.inputTokens)) in",
+        "\(macUsageCompactTokens(aggregate.outputTokens)) out",
+      ]
+      if aggregate.cachedInputTokens > 0 && aggregate.inputTokens > 0 {
+        let rate = min(max(Double(aggregate.cachedInputTokens) / Double(aggregate.inputTokens), 0), 1)
+        parts.append("\(macUsagePercent(rate)) cached")
+      }
+      return parts.joined(separator: " · ")
+    }()
+
+    let requestsSubtitle: String = {
+      var parts = [
+        "\(snapshot.activeConversationCount) chat\(snapshot.activeConversationCount == 1 ? "" : "s")"
+      ]
+      if aggregate.toolCallCount > 0 {
+        parts.append("\(aggregate.toolCallCount.formatted()) tools")
+      }
+      return parts.joined(separator: " · ")
+    }()
+
+    let healthValue: String = {
+      if let rate = performance.providerSuccessRate {
+        return macUsagePercent(rate)
+      }
+      if let ttft = performance.medianTTFTMilliseconds {
+        return macUsageDuration(ttft)
+      }
+      return "—"
+    }()
+
+    let healthSubtitle: String = {
+      var parts: [String] = []
+      if let ttft = performance.medianTTFTMilliseconds {
+        parts.append("\(macUsageDuration(ttft)) TTFT")
+      }
+      if let speed = performance.medianOutputTokensPerSecond {
+        parts.append(macUsageRate(speed))
+      }
+      if parts.isEmpty {
+        return performance.providerRequestCount > 0
+          ? "\(performance.providerRequestCount.formatted()) tracked"
+          : "No recent telemetry"
+      }
+      return parts.joined(separator: " · ")
+    }()
+
+    let healthTint: Color = {
+      guard let rate = performance.providerSuccessRate else { return theme.textMuted }
+      if rate >= 0.98 { return theme.success }
+      if rate >= 0.90 { return theme.warning }
+      return theme.destructive
+    }()
+
+    return LazyVGrid(
+      columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 4),
+      spacing: 10
+    ) {
+      MacAnalyticsHeroCard(
+        title: "Spend",
+        value: macUsageAggregateCost(aggregate),
+        subtitle: spendSubtitle,
+        symbol: "dollarsign.circle",
+        tint: spendAccentColor
+      )
+      MacAnalyticsHeroCard(
+        title: "Tokens",
+        value: macUsageCompactTokens(aggregate.totalTokens),
+        subtitle: tokensSubtitle,
+        symbol: "sum",
+        tint: Color.teal
+      )
+      MacAnalyticsHeroCard(
+        title: "Requests",
+        value: aggregate.modelRequestCount.formatted(),
+        subtitle: requestsSubtitle,
+        symbol: "arrow.up.arrow.down",
+        tint: Color.indigo
+      )
+      MacAnalyticsHeroCard(
+        title: "Reliability",
+        value: healthValue,
+        subtitle: healthSubtitle,
+        symbol: "checkmark.shield",
+        tint: healthTint
+      )
+    }
+  }
+
+  // MARK: - Models & Providers Mix Card (Capped + Expandable)
+
+  private func breakdownMixCard(snapshot: UsageAnalyticsSnapshot) -> some View {
+    let rows = breakdownTab == .models ? snapshot.modelBreakdown : snapshot.providerBreakdown
+    let resolveName: (String) -> String = breakdownTab == .models
+      ? { analytics.overviewModelDisplayName(for: $0) }
+      : { analytics.overviewProviderDisplayName(for: $0) }
+
+    let useCostBasis = rows.contains { $0.aggregate.hasKnownCost && $0.aggregate.costUSD > 0 }
+    let metricValue: (UsageAnalyticsBreakdown) -> Double = { row in
+      if useCostBasis {
+        return row.aggregate.hasKnownCost
+          ? max(0, NSDecimalNumber(decimal: row.aggregate.costUSD).doubleValue)
+          : 0
+      }
+      if row.aggregate.totalTokens > 0 {
+        return Double(row.aggregate.totalTokens)
+      }
+      return Double(max(row.aggregate.modelRequestCount, row.performance.providerRequestCount))
+    }
+
+    let totalMetric = rows.reduce(0.0) { $0 + metricValue($1) }
+    let topLimit = 5
+    let visibleRows = showAllBreakdownRows ? rows : Array(rows.prefix(topLimit))
+    let hiddenCount = max(0, rows.count - topLimit)
+
+    let segments: [MacAnalyticsBarSegment] = {
+      var list = rows.prefix(topLimit).enumerated().map { index, row in
+        MacAnalyticsBarSegment(
+          id: row.id,
+          label: resolveName(row.id),
+          value: metricValue(row),
+          color: MacAnalyticsPalette.color(at: index, accent: theme.accent)
+        )
+      }
+      if rows.count > topLimit {
+        let otherValue = rows.dropFirst(topLimit).reduce(0.0) { $0 + metricValue($1) }
+        if otherValue > 0 {
+          list.append(
+            MacAnalyticsBarSegment(
+              id: "__other__",
+              label: "Other",
+              value: otherValue,
+              color: theme.textMuted.opacity(0.45)
+            )
+          )
+        }
+      }
+      return list
+    }()
+
+    return MacAnalyticsCardContainer {
+      HStack(spacing: 8) {
+        Label(
+          breakdownTab == .models ? "Model Share" : "Provider Share",
+          systemImage: breakdownTab == .models ? "cpu" : "server.rack"
+        )
+        .font(.system(size: 13.5, weight: .semibold))
+        .foregroundStyle(theme.textPrimary)
+
+        Spacer(minLength: 8)
+
+        HStack(spacing: 2) {
+          ForEach(MacAnalyticsBreakdownTab.allCases) { tab in
+            let isSelected = breakdownTab == tab
+            Button {
+              breakdownTab = tab
+            } label: {
+              Text(tab.rawValue)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(
+                  isSelected ? theme.surfaceRaised : Color.clear,
+                  in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(2)
+        .background(theme.canvas.opacity(0.85), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .strokeBorder(theme.border.opacity(0.8), lineWidth: 0.75)
+        }
+      }
+
+      if rows.isEmpty {
+        Text("Usage breakdown appears here after your first reply in this range.")
+          .font(.callout)
+          .foregroundStyle(theme.textMuted)
+          .padding(.vertical, 8)
+      } else {
+        MacAnalyticsProportionalBar(segments: segments, height: 8)
+
+        VStack(spacing: 0) {
+          ForEach(Array(visibleRows.enumerated()), id: \.element.id) { index, row in
+            let rowValue = metricValue(row)
+            let share = totalMetric > 0 ? rowValue / totalMetric : 0
+            let dotColor = index < topLimit
+              ? MacAnalyticsPalette.color(at: index, accent: theme.accent)
+              : theme.textMuted.opacity(0.55)
+
+            MacAnalyticsRankedRow(
+              title: resolveName(row.id),
+              aggregate: row.aggregate,
+              performance: row.performance,
+              share: share,
+              tint: dotColor
+            )
+
+            if row.id != visibleRows.last?.id {
+              Rectangle()
+                .fill(theme.separator.opacity(0.55))
+                .frame(height: 1)
+            }
+          }
+        }
+
+        if hiddenCount > 0 {
+          Button {
+            showAllBreakdownRows.toggle()
+          } label: {
+            Text(showAllBreakdownRows ? "Show top \(topLimit)" : "Show all \(rows.count)")
+              .font(.caption.weight(.medium))
+              .foregroundStyle(theme.accent)
+          }
+          .buttonStyle(.plain)
+          .padding(.top, 2)
+        }
+      }
+    }
+  }
+
+  // MARK: - Token Mix & Efficiency Card
+
+  private func tokenMixCard(aggregate: ChatUsageAggregate) -> some View {
+    let cachedInput = min(max(0, aggregate.cachedInputTokens), max(0, aggregate.inputTokens))
+    let freshInput = max(0, aggregate.inputTokens - cachedInput)
+    let output = max(0, aggregate.outputTokens)
+    let reasoning = max(0, aggregate.reasoningTokens)
+    let totalVisual = Double(freshInput + cachedInput + output + reasoning)
+
+    let segments: [MacAnalyticsBarSegment] = [
+      .init(id: "fresh-input", label: "Fresh Input", value: Double(freshInput), color: theme.accent),
+      .init(id: "cached-input", label: "Cached Input", value: Double(cachedInput), color: theme.success),
+      .init(id: "output", label: "Output", value: Double(output), color: Color.teal),
+      .init(id: "reasoning", label: "Reasoning", value: Double(reasoning), color: Color.indigo),
+    ]
+
+    let cacheHitRate: Double? = aggregate.inputTokens > 0 && aggregate.cachedInputTokens > 0
+      ? min(max(Double(aggregate.cachedInputTokens) / Double(aggregate.inputTokens), 0), 1)
+      : nil
+
+    return MacAnalyticsCardContainer {
+      HStack(spacing: 8) {
+        Label("Token Mix", systemImage: "square.stack.3d.up")
+          .font(.system(size: 13.5, weight: .semibold))
+          .foregroundStyle(theme.textPrimary)
+
+        Spacer(minLength: 8)
+
+        if let cacheHitRate {
+          Text("\(macUsagePercent(cacheHitRate)) cache hit")
+            .font(.caption2.weight(.semibold).monospacedDigit())
+            .foregroundStyle(theme.success)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(theme.success.opacity(0.14), in: Capsule())
+        }
+      }
+
+      if aggregate.totalTokens == 0 && reasoning == 0 {
+        Text("Input, cached, output, and reasoning token proportions appear here once replies are recorded.")
+          .font(.callout)
+          .foregroundStyle(theme.textMuted)
+          .padding(.vertical, 8)
+      } else {
+        MacAnalyticsProportionalBar(segments: segments, height: 8)
+
+        VStack(spacing: 8) {
+          tokenMixRow(
+            label: "Fresh Input",
+            tokens: freshInput,
+            share: totalVisual > 0 ? Double(freshInput) / totalVisual : 0,
+            color: theme.accent
+          )
+          tokenMixRow(
+            label: "Cached Input",
+            tokens: cachedInput,
+            share: totalVisual > 0 ? Double(cachedInput) / totalVisual : 0,
+            color: theme.success
+          )
+          tokenMixRow(
+            label: "Output",
+            tokens: output,
+            share: totalVisual > 0 ? Double(output) / totalVisual : 0,
+            color: Color.teal
+          )
+          if reasoning > 0 {
+            tokenMixRow(
+              label: "Reasoning",
+              tokens: reasoning,
+              share: totalVisual > 0 ? Double(reasoning) / totalVisual : 0,
+              color: Color.indigo
+            )
+          }
+        }
+
+        if aggregate.cacheWriteTokens > 0 || aggregate.toolCallCount > 0 {
+          Rectangle()
+            .fill(theme.separator.opacity(0.55))
+            .frame(height: 1)
+
+          HStack(spacing: 14) {
+            if aggregate.cacheWriteTokens > 0 {
+              compactBadgeStat(
+                icon: "square.and.arrow.down",
+                label: "Cache write",
+                value: macUsageCompactTokens(aggregate.cacheWriteTokens)
+              )
+            }
+            if aggregate.toolCallCount > 0 {
+              compactBadgeStat(
+                icon: "wrench.and.screwdriver",
+                label: "Tool calls",
+                value: aggregate.toolCallCount.formatted()
+              )
+            }
+            Spacer(minLength: 0)
           }
         }
       }
     }
   }
 
+  private func tokenMixRow(
+    label: String,
+    tokens: Int,
+    share: Double,
+    color: Color
+  ) -> some View {
+    HStack(spacing: 8) {
+      Circle()
+        .fill(color)
+        .frame(width: 7, height: 7)
+      Text(label)
+        .font(.system(size: 12.5))
+        .foregroundStyle(theme.textSecondary)
+      Spacer(minLength: 12)
+      Text(macUsageCompactTokens(tokens))
+        .font(.system(size: 12.5, weight: .medium).monospacedDigit())
+        .foregroundStyle(theme.textPrimary)
+      Text(macUsagePercent(share))
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(theme.textMuted)
+        .frame(width: 40, alignment: .trailing)
+    }
+  }
+
+  private func compactBadgeStat(icon: String, label: String, value: String) -> some View {
+    HStack(spacing: 5) {
+      Image(systemName: icon)
+        .font(.caption2)
+        .foregroundStyle(theme.textMuted)
+      Text(label)
+        .font(.caption)
+        .foregroundStyle(theme.textMuted)
+      Text(value)
+        .font(.caption.weight(.semibold).monospacedDigit())
+        .foregroundStyle(theme.textPrimary)
+    }
+  }
+
+  // MARK: - Unified Performance & Reliability Card
+
+  private func performanceAndReliabilityCard(
+    _ performance: TelemetryPerformanceAggregate,
+    failures: [TelemetryFailureBreakdown],
+    includeToolAndMCP: Bool,
+    singleRequestAware: Bool = false
+  ) -> some View {
+    let isSingleRequest = singleRequestAware && performance.providerRequestCount <= 1
+    let showPercentiles = !singleRequestAware || performance.providerRequestCount >= 5
+    let hasAnyTelemetry = hasPerformance(performance) || performance.hasLatencyOrSpeedMetrics || !failures.isEmpty
+
+    return MacAnalyticsCardContainer {
+      HStack(spacing: 8) {
+        Label("Performance & Reliability", systemImage: "waveform.path.ecg")
+          .font(.system(size: 13.5, weight: .semibold))
+          .foregroundStyle(theme.textPrimary)
+        Spacer(minLength: 8)
+        if let rate = performance.providerSuccessRate {
+          Text("\(macUsagePercent(rate)) ok")
+            .font(.caption2.weight(.semibold).monospacedDigit())
+            .foregroundStyle(rate >= 0.98 ? theme.success : (rate >= 0.9 ? theme.warning : theme.destructive))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+              (rate >= 0.98 ? theme.success : (rate >= 0.9 ? theme.warning : theme.destructive)).opacity(0.14),
+              in: Capsule()
+            )
+        }
+      }
+
+      if !hasAnyTelemetry {
+        Text("Send a few messages to start collecting local latency, speed, and reliability metrics.")
+          .font(.callout)
+          .foregroundStyle(theme.textMuted)
+          .padding(.vertical, 8)
+      } else {
+        if performance.providerRequestCount > 0 {
+          let healthSegments: [MacAnalyticsBarSegment] = [
+            .init(id: "ok", label: "Succeeded", value: Double(performance.providerSuccessCount), color: theme.success),
+            .init(id: "fail", label: "Failed", value: Double(performance.providerFailureCount), color: theme.destructive),
+            .init(id: "cancel", label: "Cancelled", value: Double(performance.providerCancelledCount), color: theme.textMuted.opacity(0.55)),
+          ]
+
+          VStack(alignment: .leading, spacing: 6) {
+            MacAnalyticsProportionalBar(segments: healthSegments, height: 7)
+
+            HStack(spacing: 12) {
+              healthCountPill(label: "OK", count: performance.providerSuccessCount, color: theme.success)
+              if performance.providerFailureCount > 0 {
+                healthCountPill(label: "Failed", count: performance.providerFailureCount, color: theme.destructive)
+              }
+              if performance.providerCancelledCount > 0 {
+                healthCountPill(label: "Cancelled", count: performance.providerCancelledCount, color: theme.textMuted)
+              }
+              Spacer(minLength: 0)
+            }
+          }
+        }
+
+        if performance.hasLatencyOrSpeedMetrics {
+          HStack(spacing: 8) {
+            latencyTile(
+              title: isSingleRequest ? "TTFT" : "Median TTFT",
+              value: macUsageDuration(performance.medianTTFTMilliseconds),
+              footnote: showPercentiles ? performance.p95TTFTMilliseconds.map { "P95 \(macUsageDuration($0))" } : nil
+            )
+            latencyTile(
+              title: isSingleRequest ? "Duration" : "Median Dur.",
+              value: macUsageDuration(performance.medianDurationMilliseconds),
+              footnote: showPercentiles ? performance.p95DurationMilliseconds.map { "P95 \(macUsageDuration($0))" } : nil
+            )
+            latencyTile(
+              title: isSingleRequest ? "Speed" : "Median Speed",
+              value: macUsageRate(performance.medianOutputTokensPerSecond),
+              footnote: nil
+            )
+          }
+        }
+
+        if includeToolAndMCP && (performance.toolCallCount > 0 || performance.mcpRequestCount > 0) {
+          Rectangle()
+            .fill(theme.separator.opacity(0.55))
+            .frame(height: 1)
+
+          VStack(spacing: 6) {
+            if performance.toolCallCount > 0 {
+              MacAnalyticsLabeledRow(
+                "Tools (\(performance.toolCallCount.formatted()))",
+                value: "\(macUsagePercent(performance.toolSuccessRate)) ok"
+                  + (performance.toolFailureCount > 0 ? " · \(performance.toolFailureCount) err" : "")
+              )
+            }
+            if performance.mcpRequestCount > 0 {
+              MacAnalyticsLabeledRow(
+                "MCP Requests",
+                value: "\(performance.mcpRequestCount.formatted())"
+                  + (performance.mcpFailureCount > 0 ? " · \(performance.mcpFailureCount) failed" : "")
+              )
+            }
+          }
+        }
+
+        if !failures.isEmpty {
+          Rectangle()
+            .fill(theme.separator.opacity(0.55))
+            .frame(height: 1)
+
+          let displayed = showAllErrors ? failures : Array(failures.prefix(4))
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Recent Error Codes")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(theme.textSecondary)
+
+            ForEach(displayed) { failure in
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                  Text(macAnalyticsErrorTitle(failure.errorCode))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textPrimary)
+                    .lineLimit(1)
+                  Text("\(macUsageCategoryTitle(failure.category)) · \(failure.classification.replacingOccurrences(of: "_", with: " "))")
+                    .font(.caption2)
+                    .foregroundStyle(theme.textMuted)
+                }
+                Spacer(minLength: 8)
+                Text(failure.count.formatted())
+                  .font(.caption.weight(.semibold).monospacedDigit())
+                  .foregroundStyle(theme.warning)
+              }
+            }
+
+            if failures.count > 4 {
+              Button {
+                showAllErrors.toggle()
+              } label: {
+                Text(showAllErrors ? "Show fewer errors" : "Show all \(failures.count) error codes")
+                  .font(.caption.weight(.medium))
+                  .foregroundStyle(theme.accent)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func healthCountPill(label: String, count: Int, color: Color) -> some View {
+    HStack(spacing: 4) {
+      Circle()
+        .fill(color)
+        .frame(width: 6, height: 6)
+      Text("\(count.formatted()) \(label)")
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(theme.textSecondary)
+    }
+  }
+
+  private func latencyTile(title: String, value: String, footnote: String?) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(title)
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(theme.textMuted)
+        .lineLimit(1)
+      Text(value)
+        .font(.system(size: 13.5, weight: .semibold, design: .rounded).monospacedDigit())
+        .foregroundStyle(theme.textPrimary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+      if let footnote {
+        Text(footnote)
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(theme.textMuted)
+          .lineLimit(1)
+      }
+    }
+    .padding(.horizontal, 9)
+    .padding(.vertical, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(theme.canvas.opacity(0.7), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .strokeBorder(theme.border.opacity(0.65), lineWidth: 0.5)
+    }
+  }
+
+  // MARK: - Top Chats Card
+
+  private func topChatsCard(
+    _ rows: [ConversationUsageBreakdown],
+    overallSpend: Decimal
+  ) -> some View {
+    let topRows = Array(rows.prefix(5))
+    let totalCost = NSDecimalNumber(decimal: overallSpend).doubleValue
+    let totalTokens = rows.reduce(0) { $0 + $1.aggregate.totalTokens }
+
+    return MacAnalyticsCardContainer {
+      HStack(spacing: 8) {
+        Label("Top Chats", systemImage: "bubble.left.and.bubble.right")
+          .font(.system(size: 13.5, weight: .semibold))
+          .foregroundStyle(theme.textPrimary)
+        Spacer(minLength: 8)
+        if rows.count > 5 {
+          Button {
+            section = .conversations
+          } label: {
+            Text("All \(rows.count)")
+              .font(.caption.weight(.medium))
+              .foregroundStyle(theme.accent)
+          }
+          .buttonStyle(.plain)
+        }
+      }
+
+      VStack(spacing: 0) {
+        ForEach(topRows) { item in
+          let share: Double = {
+            if totalCost > 0 && item.aggregate.hasKnownCost {
+              return min(max(NSDecimalNumber(decimal: item.aggregate.costUSD).doubleValue / totalCost, 0), 1)
+            }
+            if totalTokens > 0 {
+              return min(max(Double(item.aggregate.totalTokens) / Double(totalTokens), 0), 1)
+            }
+            return 0
+          }()
+
+          MacAnalyticsTopChatRow(item: item, share: share) {
+            section = .conversations
+            selectedConversationID = item.id.rawValue
+          }
+
+          if item.id != topRows.last?.id {
+            Rectangle()
+              .fill(theme.separator.opacity(0.55))
+              .frame(height: 1)
+          }
+        }
+      }
+    }
+  }
+
+  private var emptyTopChatsCard: some View {
+    MacAnalyticsCardContainer {
+      Label("Top Chats", systemImage: "bubble.left.and.bubble.right")
+        .font(.system(size: 13.5, weight: .semibold))
+        .foregroundStyle(theme.textPrimary)
+
+      Text("Your highest-usage conversations in this range will appear here.")
+        .font(.callout)
+        .foregroundStyle(theme.textMuted)
+        .padding(.vertical, 8)
+    }
+  }
+
+  // MARK: - Conversations Tab
+
   private var conversations: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        analyticsHeading(
-          title: "Conversations",
-          subtitle: "Inspect usage, context window fill, and reliability for individual chats."
-        )
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(spacing: 12) {
+          MacAnalyticsSearchField(
+            placeholder: "Search conversations",
+            text: $conversationSearchText
+          )
+          .frame(maxWidth: 340)
 
-        MacAnalyticsSearchField(
-          placeholder: "Search conversations",
-          text: $conversationSearchText
-        )
-        .frame(maxWidth: 420)
+          Spacer(minLength: 8)
 
-        Text("\(filteredConversations.count) conversation\(filteredConversations.count == 1 ? "" : "s")")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          Text("\(filteredConversations.count) conversation\(filteredConversations.count == 1 ? "" : "s") · \(accessibleRange.label)")
+            .font(.caption)
+            .foregroundStyle(theme.textMuted)
+        }
 
         if filteredConversations.isEmpty {
           if conversationSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -802,14 +1449,14 @@ struct MacAnalyticsView: View {
               description: Text("Start chatting to see per-conversation analytics here.")
             )
             .frame(maxWidth: .infinity)
-            .padding(.top, 70)
+            .padding(.top, 56)
           } else {
             ContentUnavailableView.search(text: conversationSearchText)
               .frame(maxWidth: .infinity)
-              .padding(.top, 70)
+              .padding(.top, 56)
           }
         } else {
-          LazyVStack(spacing: 9) {
+          LazyVStack(spacing: 8) {
             ForEach(filteredConversations) { conversation in
               conversationCard(conversation)
             }
@@ -820,7 +1467,7 @@ struct MacAnalyticsView: View {
       .padding(Self.contentPadding)
       .frame(maxWidth: .infinity, alignment: .top)
     }
-    .background(MacDesignTokens.Colors.canvas)
+    .background(theme.canvas)
   }
 
   private func conversationCard(_ conversation: ChatConversation) -> some View {
@@ -830,46 +1477,50 @@ struct MacAnalyticsView: View {
     return Button {
       selectedConversationID = conversation.id.rawValue
     } label: {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack(alignment: .top, spacing: 12) {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-              .font(.system(size: 14, weight: .semibold))
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-              .lineLimit(1)
+      HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(title)
+            .font(.system(size: 13.5, weight: .semibold))
+            .foregroundStyle(theme.textPrimary)
+            .lineLimit(1)
+          HStack(spacing: 10) {
             Text(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))
               .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .foregroundStyle(theme.textMuted)
+            conversationStat(aggregate.modelRequestCount.formatted(), label: "req")
+            conversationStat(macUsageCompactTokens(aggregate.totalTokens), label: "tok")
           }
-          Spacer()
-          Image(systemName: "chevron.right")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
 
-        HStack(spacing: 16) {
-          conversationStat(aggregate.modelRequestCount.formatted(), label: "requests")
-          conversationStat(macUsageCompactTokens(aggregate.totalTokens), label: "tokens")
-          conversationStat(macUsageAggregateCost(aggregate), label: "spend")
-          Spacer()
-        }
+        Spacer(minLength: 12)
+
+        Text(macUsageAggregateCost(aggregate))
+          .font(.system(size: 13, weight: .semibold).monospacedDigit())
+          .foregroundStyle(theme.textPrimary)
+
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(theme.textMuted)
       }
-      .padding(14)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 11)
       .frame(maxWidth: .infinity, alignment: .leading)
     }
     .buttonStyle(MacCardButtonStyle(cornerRadius: 10))
   }
 
   private func conversationStat(_ value: String, label: String) -> some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 3) {
       Text(value)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .font(.caption.weight(.semibold).monospacedDigit())
+        .foregroundStyle(theme.textSecondary)
       Text(label)
         .font(.caption)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .foregroundStyle(theme.textMuted)
     }
   }
+
+  // MARK: - Conversation Detail
 
   private func conversationDetail(_ conversation: ChatConversation) -> some View {
     let isCurrentConversationLoaded =
@@ -891,27 +1542,21 @@ struct MacAnalyticsView: View {
         MacAnalyticsConversationDetailSkeleton(title: title, subtitle: subtitle)
       } else {
         ScrollView {
-          VStack(alignment: .leading, spacing: 16) {
+          VStack(alignment: .leading, spacing: 14) {
             analyticsHeading(title: title, subtitle: subtitle)
 
-            MacAnalyticsMetricGrid(
-              metrics: analytics.selectedConversationMetrics
+            conversationHeroStrip(
+              messageCount: conversation.messages.count,
+              snapshot: snapshot
             )
-
-            Label(macUsageHistoryFootnote(snapshot.aggregate), systemImage: "info.circle")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              .fixedSize(horizontal: false, vertical: true)
 
             if let contextUsage {
               contextWindowCard(contextUsage)
             }
 
-            LazyVGrid(
-              columns: Self.detailGridColumns,
-              alignment: .leading,
-              spacing: 12
-            ) {
+            LazyVGrid(columns: Self.twoColumnGrid, alignment: .leading, spacing: 12) {
+              tokenMixCard(aggregate: snapshot.aggregate)
+
               if analytics.conversationTelemetryUnavailable {
                 telemetryUnavailableCard(isDisabled: analytics.isLoadingConversation) {
                   Task { await analytics.loadConversation(conversation, retry: true) }
@@ -921,44 +1566,46 @@ struct MacAnalyticsView: View {
                   hasSavedReplies: snapshot.aggregate.assistantMessageCount > 0
                 )
               } else {
-                if snapshot.performance.hasLatencyOrSpeedMetrics {
-                  performanceCard(snapshot.performance, singleRequestAware: true)
-                }
-                if snapshot.performance.providerRequestCount > 0 {
-                  reliabilityCard(snapshot.performance, includeToolAndMCP: false)
-                }
-                if snapshot.performance.toolCallCount > 0 || snapshot.performance.mcpRequestCount > 0 {
-                  toolsAndMCPCard(snapshot.performance)
-                }
-                if !snapshot.failureBreakdown.isEmpty {
-                  errorsCard(snapshot.failureBreakdown)
-                }
+                performanceAndReliabilityCard(
+                  snapshot.performance,
+                  failures: snapshot.failureBreakdown,
+                  includeToolAndMCP: true,
+                  singleRequestAware: true
+                )
               }
+            }
 
-              if !snapshot.providerBreakdown.isEmpty {
-                MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
-                  MacAnalyticsBreakdownList(
-                    rows: snapshot.providerBreakdown,
-                    displayName: { analytics.conversationProviderDisplayName(for: $0) }
-                  )
+            if !snapshot.providerBreakdown.isEmpty || !snapshot.modelBreakdown.isEmpty {
+              LazyVGrid(columns: Self.twoColumnGrid, alignment: .leading, spacing: 12) {
+                if !snapshot.modelBreakdown.isEmpty {
+                  MacAnalyticsSection(title: "Models", symbol: "cpu") {
+                    MacAnalyticsBreakdownList(
+                      rows: snapshot.modelBreakdown,
+                      displayName: { analytics.conversationModelDisplayName(for: $0) }
+                    )
+                  }
                 }
-              }
-
-              if !snapshot.modelBreakdown.isEmpty {
-                MacAnalyticsSection(title: "Models", symbol: "cpu") {
-                  MacAnalyticsBreakdownList(
-                    rows: snapshot.modelBreakdown,
-                    displayName: { analytics.conversationModelDisplayName(for: $0) }
-                  )
+                if !snapshot.providerBreakdown.isEmpty {
+                  MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
+                    MacAnalyticsBreakdownList(
+                      rows: snapshot.providerBreakdown,
+                      displayName: { analytics.conversationProviderDisplayName(for: $0) }
+                    )
+                  }
                 }
               }
             }
+
+            Label(macUsageHistoryFootnote(snapshot.aggregate), systemImage: "info.circle")
+              .font(.caption)
+              .foregroundStyle(theme.textMuted)
+              .fixedSize(horizontal: false, vertical: true)
           }
           .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
           .padding(Self.contentPadding)
           .frame(maxWidth: .infinity, alignment: .top)
         }
-        .background(MacDesignTokens.Colors.canvas)
+        .background(theme.canvas)
       }
     }
     .animation(
@@ -967,16 +1614,59 @@ struct MacAnalyticsView: View {
     )
   }
 
+  private func conversationHeroStrip(
+    messageCount: Int,
+    snapshot: ConversationUsageAnalyticsSnapshot
+  ) -> some View {
+    let aggregate = snapshot.aggregate
+    let performance = snapshot.performance
+    let replyCount = aggregate.assistantMessageCount
+
+    return LazyVGrid(
+      columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 4),
+      spacing: 10
+    ) {
+      MacAnalyticsHeroCard(
+        title: "Spend",
+        value: macUsageAggregateCost(aggregate),
+        subtitle: "\(aggregate.modelRequestCount.formatted()) request\(aggregate.modelRequestCount == 1 ? "" : "s")",
+        symbol: "dollarsign.circle",
+        tint: theme.accent
+      )
+      MacAnalyticsHeroCard(
+        title: "Tokens",
+        value: macUsageCompactTokens(aggregate.totalTokens),
+        subtitle: "\(macUsageCompactTokens(aggregate.inputTokens)) in · \(macUsageCompactTokens(aggregate.outputTokens)) out",
+        symbol: "sum",
+        tint: Color.teal
+      )
+      MacAnalyticsHeroCard(
+        title: "Messages",
+        value: messageCount.formatted(),
+        subtitle: "\(replyCount.formatted()) \(replyCount == 1 ? "reply" : "replies")",
+        symbol: "text.bubble",
+        tint: Color.indigo
+      )
+      MacAnalyticsHeroCard(
+        title: "Speed",
+        value: macUsageRate(performance.medianOutputTokensPerSecond),
+        subtitle: performance.medianTTFTMilliseconds.map { "\(macUsageDuration($0)) TTFT" } ?? "No recent telemetry",
+        symbol: "gauge.with.dots.needle.67percent",
+        tint: theme.success
+      )
+    }
+  }
+
   private func contextWindowCard(_ contextUsage: ConversationContextUsage) -> some View {
     MacAnalyticsSection(title: "Context Window", symbol: "gauge.with.dots.needle.33percent") {
-      VStack(alignment: .leading, spacing: 10) {
+      VStack(alignment: .leading, spacing: 9) {
         if let window = contextUsage.contextWindow, let fill = contextUsage.fillFraction {
           MacAnalyticsLabeledRow(
             "Latest Turn",
             value: "\(macUsageCompactTokens(contextUsage.usedInputTokens)) / \(macUsageCompactTokens(window)) (\(macUsagePercent(fill)))"
           )
           ProgressView(value: fill)
-            .tint(fill >= 0.95 ? .red : fill >= 0.8 ? .orange : MacDesignTokens.Colors.accent)
+            .tint(fill >= 0.95 ? theme.destructive : fill >= 0.8 ? theme.warning : theme.accent)
         } else {
           MacAnalyticsLabeledRow(
             "Latest Turn Input",
@@ -990,7 +1680,7 @@ struct MacAnalyticsView: View {
             systemImage: "scissors"
           )
           .font(.caption)
-          .foregroundStyle(.orange)
+          .foregroundStyle(theme.warning)
         }
 
         Text(
@@ -999,7 +1689,7 @@ struct MacAnalyticsView: View {
             : "Based on the latest request's input tokens."
         )
         .font(.caption)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .foregroundStyle(theme.textMuted)
       }
     }
   }
@@ -1012,10 +1702,10 @@ struct MacAnalyticsView: View {
       VStack(alignment: .leading, spacing: 10) {
         Text("Local telemetry could not be read. Saved usage and spend remain available.")
           .font(.callout)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(theme.textSecondary)
 
         Button("Retry", action: retryAction)
-          .buttonStyle(MacActionButtonStyle(.primary))
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
           .disabled(isDisabled)
       }
     }
@@ -1031,164 +1721,24 @@ struct MacAnalyticsView: View {
           ? "Local performance telemetry is retained for up to 30 days. Saved usage and spend above remain available."
           : "Send a message in this chat to start collecting local performance metrics."
       )
-      .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      .font(.callout)
+      .foregroundStyle(theme.textMuted)
     }
   }
 
-  @ViewBuilder
-  private func performanceCard(
-    _ performance: TelemetryPerformanceAggregate,
-    singleRequestAware: Bool = false
-  ) -> some View {
-    let isSingleRequest = singleRequestAware && performance.providerRequestCount <= 1
-    let showPercentiles = !singleRequestAware || performance.providerRequestCount >= 5
-
-    MacAnalyticsSection(
-      title: "Performance",
-      symbol: performance.hasLatencyOrSpeedMetrics ? "gauge.with.dots.needle.67percent" : "waveform.path.ecg"
-    ) {
-      if performance.hasLatencyOrSpeedMetrics {
-        VStack(spacing: 9) {
-          MacAnalyticsLabeledRow(
-            isSingleRequest ? "TTFT" : "Median TTFT",
-            value: macUsageDuration(performance.medianTTFTMilliseconds)
-          )
-          if showPercentiles, performance.p95TTFTMilliseconds != nil {
-            MacAnalyticsLabeledRow("P95 TTFT", value: macUsageDuration(performance.p95TTFTMilliseconds))
-          }
-          MacAnalyticsLabeledRow(
-            isSingleRequest ? "Duration" : "Median Duration",
-            value: macUsageDuration(performance.medianDurationMilliseconds)
-          )
-          if showPercentiles, performance.p95DurationMilliseconds != nil {
-            MacAnalyticsLabeledRow("P95 Duration", value: macUsageDuration(performance.p95DurationMilliseconds))
-          }
-          MacAnalyticsLabeledRow(
-            isSingleRequest ? "Speed" : "Median Speed",
-            value: macUsageRate(performance.medianOutputTokensPerSecond)
-          )
-        }
-      } else {
-        Text("Send a few messages to start collecting local performance metrics.")
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      }
-    }
-  }
-
-  private func reliabilityCard(
-    _ performance: TelemetryPerformanceAggregate,
-    includeToolAndMCP: Bool
-  ) -> some View {
-    MacAnalyticsSection(title: "Reliability", symbol: "checkmark.shield") {
-      VStack(alignment: .leading, spacing: 9) {
-        if hasPerformance(performance) {
-          if performance.providerRequestCount > 0 {
-            MacAnalyticsLabeledRow("Success Rate", value: macUsagePercent(performance.providerSuccessRate))
-            MacAnalyticsLabeledRow("Succeeded", value: performance.providerSuccessCount.formatted())
-            MacAnalyticsLabeledRow("Failed", value: performance.providerFailureCount.formatted())
-            if performance.providerCancelledCount > 0 {
-              MacAnalyticsLabeledRow("Cancelled", value: performance.providerCancelledCount.formatted())
-            }
-          }
-          if includeToolAndMCP && performance.toolCallCount > 0 {
-            if performance.providerRequestCount > 0 { Divider() }
-            MacAnalyticsLabeledRow("Tool Success", value: macUsagePercent(performance.toolSuccessRate))
-            MacAnalyticsLabeledRow("Tool Calls", value: performance.toolCallCount.formatted())
-            if performance.toolFailureCount > 0 {
-              MacAnalyticsLabeledRow("Tool Failures", value: performance.toolFailureCount.formatted())
-            }
-            if performance.toolCancelledCount > 0 {
-              MacAnalyticsLabeledRow("Tool Cancelled", value: performance.toolCancelledCount.formatted())
-            }
-          }
-          if includeToolAndMCP && performance.mcpRequestCount > 0 {
-            if performance.providerRequestCount > 0 || performance.toolCallCount > 0 { Divider() }
-            MacAnalyticsLabeledRow("MCP Requests", value: performance.mcpRequestCount.formatted())
-            MacAnalyticsLabeledRow("MCP Failures", value: performance.mcpFailureCount.formatted())
-          }
-
-          Text(
-            includeToolAndMCP
-              ? "Provider success rate excludes user cancellations. Expected MCP legacy-protocol fallback is not counted as an MCP failure."
-              : "Provider success rate excludes user cancellations."
-          )
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          .padding(.top, 2)
-        } else {
-          Text("Reliability metrics appear after provider, tool, or MCP requests are recorded.")
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-      }
-    }
-  }
-
-  private func toolsAndMCPCard(_ performance: TelemetryPerformanceAggregate) -> some View {
-    MacAnalyticsSection(title: "Tools & MCP", symbol: "wrench.and.screwdriver") {
-      VStack(spacing: 9) {
-        if performance.toolCallCount > 0 {
-          MacAnalyticsLabeledRow("Tool Calls", value: performance.toolCallCount.formatted())
-          MacAnalyticsLabeledRow("Tool Success", value: macUsagePercent(performance.toolSuccessRate))
-          if performance.toolFailureCount > 0 {
-            MacAnalyticsLabeledRow("Tool Failures", value: performance.toolFailureCount.formatted())
-          }
-          if performance.toolCancelledCount > 0 {
-            MacAnalyticsLabeledRow("Tool Cancelled", value: performance.toolCancelledCount.formatted())
-          }
-        }
-        if performance.mcpRequestCount > 0 {
-          if performance.toolCallCount > 0 { Divider() }
-          MacAnalyticsLabeledRow("MCP Requests", value: performance.mcpRequestCount.formatted())
-          MacAnalyticsLabeledRow("MCP Failures", value: performance.mcpFailureCount.formatted())
-        }
-      }
-    }
-  }
-
-  private func errorsCard(_ failureBreakdown: [TelemetryFailureBreakdown]) -> some View {
-    MacAnalyticsSection(title: "Errors", symbol: "exclamationmark.triangle") {
-      VStack(alignment: .leading, spacing: 0) {
-        let failures = Array(failureBreakdown.prefix(8))
-        ForEach(failures) { failure in
-          HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-              Text(macAnalyticsErrorTitle(failure.errorCode))
-                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-              Text("\(macUsageCategoryTitle(failure.category)) · \(failure.classification.replacingOccurrences(of: "_", with: " "))")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            }
-            Spacer()
-            Text(failure.count.formatted())
-              .monospacedDigit()
-              .foregroundStyle(Color.orange)
-          }
-          .padding(.vertical, 7)
-
-          if failure.id != failures.last?.id {
-            Divider()
-          }
-        }
-
-        Text("Only stable, privacy-safe error codes are shown. Provider response text and request content are never stored in analytics.")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          .padding(.top, 8)
-      }
-    }
-  }
+  // MARK: - Budget & Local Telemetry Cards
 
   private func budgetCard(_ aggregate: ChatUsageAggregate) -> some View {
     MacAnalyticsSection(title: "Monthly Budget", symbol: "gauge.with.needle") {
-      VStack(alignment: .leading, spacing: 10) {
+      VStack(alignment: .leading, spacing: 9) {
         HStack(spacing: 8) {
-          Text("Budget")
-            .font(.system(size: 13))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          Text("Limit")
+            .font(.system(size: 12.5))
+            .foregroundStyle(theme.textSecondary)
           Spacer()
           Text("$")
-            .font(.system(size: 13))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .font(.system(size: 12.5))
+            .foregroundStyle(theme.textMuted)
           TextField(
             "0",
             value: $monthlyBudgetUSD,
@@ -1197,13 +1747,13 @@ struct MacAnalyticsView: View {
           .textFieldStyle(.roundedBorder)
           .multilineTextAlignment(.trailing)
           .monospacedDigit()
-          .frame(width: 100)
+          .frame(width: 92)
         }
 
         HStack(spacing: 8) {
           Text("Warn at")
-            .font(.system(size: 13))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .font(.system(size: 12.5))
+            .foregroundStyle(theme.textSecondary)
           Spacer()
           Picker("Warn at", selection: $budgetWarningFraction) {
             Text("50%").tag(0.5)
@@ -1212,46 +1762,48 @@ struct MacAnalyticsView: View {
             Text("90%").tag(0.9)
           }
           .labelsHidden()
-          .frame(width: 100)
+          .frame(width: 92)
         }
 
         if monthlyBudgetUSD > 0 {
-          ProgressView(value: budgetProgress(aggregate))
+          let progress = budgetProgress(aggregate)
+          ProgressView(value: progress)
+            .tint(progress >= 1 ? theme.destructive : (budgetWarningReached(aggregate) ? theme.warning : theme.accent))
           MacAnalyticsLabeledRow(
             purchaseManager.hasPro ? "This Month" : "Today Only",
-            value: macUsageAggregateCost(aggregate)
+            value: "\(macUsageAggregateCost(aggregate)) (\(macUsagePercent(progress)))"
           )
           if budgetWarningReached(aggregate) {
             Label("Budget warning threshold reached", systemImage: "exclamationmark.triangle.fill")
-              .foregroundStyle(.orange)
-              .frame(maxWidth: .infinity, alignment: .leading)
+              .font(.caption.weight(.medium))
+              .foregroundStyle(theme.warning)
           }
         }
 
         Text(purchaseManager.hasPro
-          ? "This local warning does not change provider-side spending limits or include API-key usage from other apps."
-          : "Free evaluates this monthly threshold using today's saved usage only. Earlier days are excluded, so warnings may underestimate monthly spending. Pro includes the complete month. This does not change provider spending limits.")
+          ? "Local warning only; does not set provider spending caps or track other apps."
+          : "Free evaluates today's saved usage only. Pro includes the full calendar month.")
           .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .foregroundStyle(theme.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
 
   private var localAnalyticsCard: some View {
-    MacAnalyticsSection(title: "Local Analytics", symbol: "internaldrive") {
-      VStack(alignment: .leading, spacing: 9) {
+    MacAnalyticsSection(title: "Local Telemetry", symbol: "internaldrive") {
+      VStack(alignment: .leading, spacing: 8) {
         if analytics.overviewTelemetryUnavailable {
           MacAnalyticsLabeledRow("Telemetry", value: "Unavailable")
         } else {
-          MacAnalyticsLabeledRow("Telemetry Events", value: analytics.telemetryEvents.count.formatted())
+          MacAnalyticsLabeledRow("Detailed Events", value: analytics.telemetryEvents.count.formatted())
           if analytics.statistics.rollupRowCount > 0 {
             MacAnalyticsLabeledRow("Daily Rollups", value: analytics.statistics.rollupRowCount.formatted())
           }
         }
         if analytics.statistics.databaseBytes > 0 {
           MacAnalyticsLabeledRow(
-            "Local Database",
+            "Database Size",
             value: ByteCountFormatter.string(
               fromByteCount: analytics.statistics.databaseBytes,
               countStyle: .file
@@ -1271,32 +1823,32 @@ struct MacAnalyticsView: View {
         }
         Text(telemetryFootnote)
           .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .foregroundStyle(theme.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
 
   private func analyticsHeading(title: String, subtitle: String) -> some View {
-    VStack(alignment: .leading, spacing: 3) {
+    VStack(alignment: .leading, spacing: 2) {
       Text(title)
-        .font(.title3.weight(.semibold))
-        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(theme.textPrimary)
       Text(subtitle)
         .font(.caption)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .foregroundStyle(theme.textSecondary)
     }
   }
 
   private var telemetryFootnote: String {
     if !purchaseManager.hasPro {
-      return "Only today's local telemetry is shown. Historical ranges require Pro. Detailed events are kept for up to 30 days and summarized into lightweight daily rollups for long-term history."
+      return "Only today's telemetry is shown on Free. Detailed events stay on device for 30 days and roll up daily."
     }
     if analytics.telemetryEvents.count >= TelemetryStoreConfiguration.maximumRecentEventQueryCount {
       let limit = TelemetryStoreConfiguration.maximumRecentEventQueryCount.formatted()
-      return "Recent performance uses up to \(limit) detailed events in this range plus archived daily rollups. Raw telemetry is device-local, and saved chat usage remains available from message history."
+      return "Uses up to \(limit) recent detailed events plus archived daily rollups. Chat history keeps usage and spend."
     }
-    return "Detailed telemetry is kept on device for up to 30 days and automatically summarized into daily rollups before pruning. Chat usage and spend remain available from message history even if telemetry is cleared."
+    return "Detailed events stay on device for 30 days before rolling up daily. Chat usage and spend come from saved chats."
   }
 
   private func hasPerformance(_ performance: TelemetryPerformanceAggregate) -> Bool {
@@ -1316,6 +1868,79 @@ struct MacAnalyticsView: View {
   }
 }
 
+// MARK: - Redesigned Cards & Components
+
+private struct MacAnalyticsHeroCard: View {
+  let title: String
+  let value: String
+  let subtitle: String
+  let symbol: String
+  let tint: Color
+
+  @Environment(\.macAppTheme) private var theme
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(spacing: 5) {
+        Image(systemName: symbol)
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(tint)
+        Text(title.uppercased())
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(theme.textMuted)
+          .lineLimit(1)
+      }
+
+      Text(value)
+        .font(.system(size: 20, weight: .semibold, design: .rounded))
+        .foregroundStyle(theme.textPrimary)
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+
+      Text(subtitle)
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(theme.textSecondary)
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
+    .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
+    .padding(12)
+    .background(
+      theme.surface,
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(theme.border, lineWidth: 1)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(title)
+    .accessibilityValue("\(value), \(subtitle)")
+  }
+}
+
+private struct MacAnalyticsCardContainer<Content: View>: View {
+  @Environment(\.macAppTheme) private var theme
+  @ViewBuilder let content: () -> Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 11) {
+      content()
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(
+      theme.surface,
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(theme.border, lineWidth: 1)
+    }
+  }
+}
+
 struct MacAnalyticsMetric: Identifiable, Sendable {
   let title: String
   let value: String
@@ -1327,39 +1952,41 @@ struct MacAnalyticsMetric: Identifiable, Sendable {
 struct MacAnalyticsMetricGrid: View {
   let metrics: [MacAnalyticsMetric]
 
+  @Environment(\.macAppTheme) private var theme
+
   private static let columns = Array(
     repeating: GridItem(.flexible(), spacing: 10, alignment: .top),
-    count: 5
+    count: 4
   )
 
   var body: some View {
     LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
       ForEach(metrics) { metric in
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
           HStack(spacing: 5) {
             Image(systemName: metric.symbol)
             Text(metric.title.uppercased())
               .lineLimit(1)
           }
           .font(.caption2.weight(.semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(theme.textMuted)
 
           Text(metric.value)
-            .font(.system(size: 19, weight: .semibold, design: .rounded))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .font(.system(size: 18, weight: .semibold, design: .rounded))
+            .foregroundStyle(theme.textPrimary)
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.72)
         }
-        .frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
-        .padding(13)
+        .frame(maxWidth: .infinity, minHeight: 70, alignment: .topLeading)
+        .padding(12)
         .background(
-          MacDesignTokens.Colors.surface,
+          theme.surface,
           in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .overlay {
           RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+            .strokeBorder(theme.border, lineWidth: 1)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(metric.title)
@@ -1374,6 +2001,8 @@ struct MacAnalyticsSection<Content: View>: View {
   let symbol: String
   let content: Content
 
+  @Environment(\.macAppTheme) private var theme
+
   init(title: String, symbol: String, @ViewBuilder content: () -> Content) {
     self.title = title
     self.symbol = symbol
@@ -1381,10 +2010,10 @@ struct MacAnalyticsSection<Content: View>: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 11) {
       Label(title, systemImage: symbol)
-        .font(.headline)
-        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .font(.system(size: 13.5, weight: .semibold))
+        .foregroundStyle(theme.textPrimary)
         .accessibilityAddTraits(.isHeader)
 
       content
@@ -1393,41 +2022,146 @@ struct MacAnalyticsSection<Content: View>: View {
     .padding(14)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(
-      MacDesignTokens.Colors.surface,
+      theme.surface,
       in: RoundedRectangle(cornerRadius: 10, style: .continuous)
     )
     .overlay {
       RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+        .strokeBorder(theme.border, lineWidth: 1)
     }
+  }
+}
+
+private struct MacAnalyticsRankedRow: View {
+  let title: String
+  let aggregate: ChatUsageAggregate
+  let performance: TelemetryPerformanceAggregate
+  let share: Double
+  let tint: Color
+
+  @Environment(\.macAppTheme) private var theme
+
+  private var hasSavedMessages: Bool {
+    aggregate.assistantMessageCount > 0
+  }
+
+  private var secondaryLine: String {
+    var parts: [String] = []
+    if hasSavedMessages {
+      parts.append("\(macUsageCompactTokens(aggregate.totalTokens)) tok")
+      parts.append(macUsageRequestCountLabel(aggregate.modelRequestCount))
+    } else if performance.providerRequestCount > 0 {
+      parts.append(macUsageRequestCountLabel(performance.providerRequestCount))
+    }
+    if let ttft = performance.medianTTFTMilliseconds {
+      parts.append("\(macUsageDuration(ttft)) TTFT")
+    }
+    if let speed = performance.medianOutputTokensPerSecond {
+      parts.append(macUsageRate(speed))
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Circle()
+          .fill(tint)
+          .frame(width: 7, height: 7)
+
+        Text(title)
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(theme.textPrimary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+
+        Spacer(minLength: 8)
+
+        Text(
+          hasSavedMessages || performance.providerRequestCount == 0
+            ? macUsageAggregateCost(aggregate)
+            : "—"
+        )
+        .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+        .foregroundStyle(theme.textPrimary)
+
+        if share > 0 {
+          Text(macUsagePercent(share))
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(theme.textMuted)
+            .frame(width: 34, alignment: .trailing)
+        }
+      }
+
+      if !secondaryLine.isEmpty {
+        Text(secondaryLine)
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(theme.textMuted)
+          .lineLimit(1)
+          .padding(.leading, 15)
+      }
+    }
+    .padding(.vertical, 7)
   }
 }
 
 private struct MacAnalyticsTopChatRow: View {
   let item: ConversationUsageBreakdown
+  let share: Double
   let action: () -> Void
 
+  @Environment(\.macAppTheme) private var theme
   @State private var isHovered = false
 
   var body: some View {
     Button(action: action) {
-      HStack(alignment: .top, spacing: 12) {
-        MacAnalyticsBreakdownRowContent(
-          title: item.title,
-          aggregate: item.aggregate,
-          performance: item.performance
-        )
-        Image(systemName: "chevron.right")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(
-            isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .center, spacing: 8) {
+          Text(item.title)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(theme.textPrimary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+
+          Spacer(minLength: 8)
+
+          Text(macUsageAggregateCost(item.aggregate))
+            .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+            .foregroundStyle(theme.textPrimary)
+
+          Image(systemName: "chevron.right")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(isHovered ? theme.textPrimary : theme.textMuted)
+        }
+
+        HStack(spacing: 8) {
+          Text(
+            "\(macUsageCompactTokens(item.aggregate.totalTokens)) tok · \(macUsageRequestCountLabel(item.aggregate.modelRequestCount))"
           )
-          .padding(.top, 2)
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(theme.textMuted)
+          .lineLimit(1)
+
+          Spacer(minLength: 8)
+
+          if share > 0 {
+            GeometryReader { proxy in
+              ZStack(alignment: .leading) {
+                Capsule()
+                  .fill(theme.separator.opacity(0.45))
+                Capsule()
+                  .fill(theme.accent.opacity(0.75))
+                  .frame(width: max(3, proxy.size.width * share))
+              }
+            }
+            .frame(width: 56, height: 4)
+          }
+        }
       }
       .padding(.horizontal, 6)
-      .padding(.vertical, 8)
+      .padding(.vertical, 7)
       .background(
-        Color.primary.opacity(isHovered ? MacDesignTokens.Control.hoverOpacity : 0),
+        isHovered ? theme.selection.opacity(0.6) : Color.clear,
         in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
       )
       .contentShape(Rectangle())
@@ -1477,36 +2211,73 @@ private struct MacAnalyticsSkeletonBar: View {
   }
 }
 
-private struct MacAnalyticsMetricGridSkeleton: View {
+private struct MacAnalyticsHeroSkeleton: View {
+  @Environment(\.macAppTheme) private var theme
+
   private static let columns = Array(
     repeating: GridItem(.flexible(), spacing: 10, alignment: .top),
-    count: 5
+    count: 4
   )
 
   var body: some View {
     LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
-      ForEach(0..<10, id: \.self) { index in
-        VStack(alignment: .leading, spacing: 12) {
-          MacAnalyticsSkeletonBar(width: index.isMultiple(of: 2) ? 74 : 90, height: 9, opacity: 0.075)
-          MacAnalyticsSkeletonBar(width: index.isMultiple(of: 3) ? 84 : 64, height: 18, opacity: 0.10)
+      ForEach(0..<4, id: \.self) { index in
+        VStack(alignment: .leading, spacing: 10) {
+          MacAnalyticsSkeletonBar(width: 64, height: 9, opacity: 0.075)
+          MacAnalyticsSkeletonBar(width: index == 0 ? 92 : 76, height: 19, opacity: 0.11)
+          MacAnalyticsSkeletonBar(width: 112, height: 9, opacity: 0.065)
         }
-        .frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
-        .padding(13)
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
+        .padding(12)
         .background(
-          MacDesignTokens.Colors.surface,
+          theme.surface,
           in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .overlay {
           RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
+            .strokeBorder(theme.border.opacity(0.8), lineWidth: 1)
         }
       }
     }
   }
 }
 
+private struct MacAnalyticsChartSkeleton: View {
+  @Environment(\.macAppTheme) private var theme
+
+  private static let barHeights: [CGFloat] = [38, 62, 48, 84, 72, 108, 66, 94, 52, 118, 88, 64]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        MacAnalyticsSkeletonBar(width: 130, height: 13, opacity: 0.10)
+        Spacer()
+        MacAnalyticsSkeletonBar(width: 150, height: 22, opacity: 0.08)
+      }
+
+      HStack(alignment: .bottom, spacing: 8) {
+        ForEach(Array(Self.barHeights.enumerated()), id: \.offset) { _, height in
+          RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Color.primary.opacity(0.08))
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+        }
+      }
+      .frame(height: 158, alignment: .bottom)
+    }
+    .padding(14)
+    .background(theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(theme.border.opacity(0.8), lineWidth: 1)
+    }
+  }
+}
+
 private struct MacAnalyticsSectionSkeleton: View {
   let rowCount: Int
+
+  @Environment(\.macAppTheme) private var theme
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -1532,18 +2303,20 @@ private struct MacAnalyticsSectionSkeleton: View {
     .padding(14)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(
-      MacDesignTokens.Colors.surface,
+      theme.surface,
       in: RoundedRectangle(cornerRadius: 10, style: .continuous)
     )
     .overlay {
       RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
+        .strokeBorder(theme.border.opacity(0.8), lineWidth: 1)
     }
   }
 }
 
 private struct MacAnalyticsOverviewSkeleton: View {
   let subtitle: String
+
+  @Environment(\.macAppTheme) private var theme
 
   private static let columns = [
     GridItem(.flexible(), spacing: 12),
@@ -1552,99 +2325,75 @@ private struct MacAnalyticsOverviewSkeleton: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Usage")
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          Text(subtitle)
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
+      VStack(alignment: .leading, spacing: 14) {
+        Text(subtitle)
+          .font(.caption)
+          .foregroundStyle(theme.textMuted)
 
-        VStack(alignment: .leading, spacing: 16) {
-          MacAnalyticsMetricGridSkeleton()
-
-          MacAnalyticsSkeletonBar(width: 520, height: 10, opacity: 0.065)
-
+        VStack(alignment: .leading, spacing: 14) {
+          MacAnalyticsHeroSkeleton()
+          MacAnalyticsChartSkeleton()
           LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 12) {
             MacAnalyticsSectionSkeleton(rowCount: 4)
             MacAnalyticsSectionSkeleton(rowCount: 4)
-            MacAnalyticsSectionSkeleton(rowCount: 3)
-            MacAnalyticsSectionSkeleton(rowCount: 3)
           }
         }
         .modifier(MacAnalyticsSkeletonPulse())
       }
-      .frame(maxWidth: 960, alignment: .leading)
-      .padding(18)
+      .frame(maxWidth: 920, alignment: .leading)
+      .padding(16)
       .frame(maxWidth: .infinity, alignment: .top)
     }
-    .background(MacDesignTokens.Colors.canvas)
+    .background(theme.canvas)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Loading analytics overview")
   }
 }
 
 private struct MacAnalyticsConversationsSkeleton: View {
+  @Environment(\.macAppTheme) private var theme
+
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Conversations")
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          Text("Inspect usage, context window fill, and reliability for individual chats.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
+      VStack(alignment: .leading, spacing: 12) {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(theme.surface)
+          .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(theme.border.opacity(0.8), lineWidth: 1)
+          }
+          .frame(maxWidth: 340, minHeight: 32, maxHeight: 32)
 
-        VStack(alignment: .leading, spacing: 12) {
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(MacDesignTokens.Colors.surface)
-            .overlay {
-              RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
-            }
-            .frame(maxWidth: 420, minHeight: 32, maxHeight: 32)
-
-          MacAnalyticsSkeletonBar(width: 110, height: 10, opacity: 0.07)
-
-          VStack(spacing: 9) {
-            ForEach(0..<5, id: \.self) { index in
-              VStack(alignment: .leading, spacing: 11) {
+        VStack(spacing: 8) {
+          ForEach(0..<5, id: \.self) { index in
+            HStack {
+              VStack(alignment: .leading, spacing: 8) {
                 MacAnalyticsSkeletonBar(
-                  width: index.isMultiple(of: 2) ? 240 : 190,
-                  height: 13,
+                  width: index.isMultiple(of: 2) ? 220 : 170,
+                  height: 12,
                   opacity: 0.095
                 )
-                MacAnalyticsSkeletonBar(width: 120, height: 9, opacity: 0.065)
-                HStack(spacing: 16) {
-                  MacAnalyticsSkeletonBar(width: 72, height: 10, opacity: 0.075)
-                  MacAnalyticsSkeletonBar(width: 82, height: 10, opacity: 0.075)
-                  MacAnalyticsSkeletonBar(width: 68, height: 10, opacity: 0.075)
-                }
+                MacAnalyticsSkeletonBar(width: 150, height: 9, opacity: 0.065)
               }
-              .padding(14)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .background(
-                MacDesignTokens.Colors.surface,
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-              )
-              .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                  .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
-              }
+              Spacer()
+              MacAnalyticsSkeletonBar(width: 58, height: 12, opacity: 0.09)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(theme.border.opacity(0.8), lineWidth: 1)
             }
           }
         }
         .modifier(MacAnalyticsSkeletonPulse())
       }
-      .frame(maxWidth: 960, alignment: .leading)
-      .padding(18)
+      .frame(maxWidth: 920, alignment: .leading)
+      .padding(16)
       .frame(maxWidth: .infinity, alignment: .top)
     }
-    .background(MacDesignTokens.Colors.canvas)
+    .background(theme.canvas)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Loading conversations analytics")
   }
@@ -1654,6 +2403,8 @@ private struct MacAnalyticsConversationDetailSkeleton: View {
   let title: String?
   let subtitle: String?
 
+  @Environment(\.macAppTheme) private var theme
+
   private static let columns = [
     GridItem(.flexible(), spacing: 12),
     GridItem(.flexible(), spacing: 12),
@@ -1661,15 +2412,15 @@ private struct MacAnalyticsConversationDetailSkeleton: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 14) {
         if let title, let subtitle {
-          VStack(alignment: .leading, spacing: 3) {
+          VStack(alignment: .leading, spacing: 2) {
             Text(title)
-              .font(.title3.weight(.semibold))
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .font(.system(size: 16, weight: .semibold))
+              .foregroundStyle(theme.textPrimary)
             Text(subtitle)
               .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .foregroundStyle(theme.textSecondary)
           }
         } else {
           VStack(alignment: .leading, spacing: 6) {
@@ -1679,13 +2430,9 @@ private struct MacAnalyticsConversationDetailSkeleton: View {
           .modifier(MacAnalyticsSkeletonPulse())
         }
 
-        VStack(alignment: .leading, spacing: 16) {
-          MacAnalyticsMetricGridSkeleton()
-
-          MacAnalyticsSkeletonBar(width: 480, height: 10, opacity: 0.065)
-
+        VStack(alignment: .leading, spacing: 14) {
+          MacAnalyticsHeroSkeleton()
           MacAnalyticsSectionSkeleton(rowCount: 2)
-
           LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 12) {
             MacAnalyticsSectionSkeleton(rowCount: 4)
             MacAnalyticsSectionSkeleton(rowCount: 4)
@@ -1693,11 +2440,11 @@ private struct MacAnalyticsConversationDetailSkeleton: View {
         }
         .modifier(MacAnalyticsSkeletonPulse())
       }
-      .frame(maxWidth: 960, alignment: .leading)
-      .padding(18)
+      .frame(maxWidth: 920, alignment: .leading)
+      .padding(16)
       .frame(maxWidth: .infinity, alignment: .top)
     }
-    .background(MacDesignTokens.Colors.canvas)
+    .background(theme.canvas)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Loading conversation analytics")
   }
@@ -1707,6 +2454,8 @@ struct MacAnalyticsLabeledRow: View {
   let title: String
   let value: String
 
+  @Environment(\.macAppTheme) private var theme
+
   init(_ title: String, value: String) {
     self.title = title
     self.value = value
@@ -1715,14 +2464,14 @@ struct MacAnalyticsLabeledRow: View {
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
       Text(title)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      Spacer(minLength: 20)
+        .foregroundStyle(theme.textSecondary)
+      Spacer(minLength: 16)
       Text(value)
-        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .foregroundStyle(theme.textPrimary)
         .monospacedDigit()
         .textSelection(.enabled)
     }
-    .font(.system(size: 13))
+    .font(.system(size: 12.5))
   }
 }
 
@@ -1730,6 +2479,8 @@ private struct MacAnalyticsBreakdownRowContent: View {
   let title: String
   let aggregate: ChatUsageAggregate
   let performance: TelemetryPerformanceAggregate
+
+  @Environment(\.macAppTheme) private var theme
 
   private var hasSavedMessages: Bool {
     aggregate.assistantMessageCount > 0
@@ -1748,11 +2499,11 @@ private struct MacAnalyticsBreakdownRowContent: View {
   }
 
   var body: some View {
-    HStack(alignment: .top, spacing: 16) {
+    HStack(alignment: .top, spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
         Text(title)
-          .fontWeight(.medium)
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(theme.textPrimary)
           .lineLimit(1)
 
         if hasSavedMessages {
@@ -1760,30 +2511,30 @@ private struct MacAnalyticsBreakdownRowContent: View {
             "\(macUsageCompactTokens(aggregate.totalTokens)) tokens · \(macUsageRequestCountLabel(aggregate.modelRequestCount))"
           )
           .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(theme.textMuted)
         } else if performance.providerRequestCount > 0 {
           Text("\(macUsageRequestCountLabel(performance.providerRequestCount)) · no saved messages")
             .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .foregroundStyle(theme.textMuted)
         }
 
         if let performanceSummaryLine {
           Text(performanceSummaryLine)
             .font(.caption2)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.85))
+            .foregroundStyle(theme.textMuted)
             .monospacedDigit()
         }
       }
 
-      Spacer(minLength: 16)
+      Spacer(minLength: 12)
 
       Text(
         hasSavedMessages || performance.providerRequestCount == 0
           ? macUsageAggregateCost(aggregate)
           : "—"
       )
-      .monospacedDigit()
-      .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+      .foregroundStyle(theme.textPrimary)
     }
   }
 }
@@ -1791,6 +2542,8 @@ private struct MacAnalyticsBreakdownRowContent: View {
 private struct MacAnalyticsBreakdownList: View {
   let rows: [UsageAnalyticsBreakdown]
   let displayName: (String) -> String
+
+  @Environment(\.macAppTheme) private var theme
 
   var body: some View {
     VStack(spacing: 0) {
@@ -1800,10 +2553,12 @@ private struct MacAnalyticsBreakdownList: View {
           aggregate: row.aggregate,
           performance: row.performance
         )
-        .padding(.vertical, 8)
+        .padding(.vertical, 7)
 
         if row.id != rows.last?.id {
-          Divider()
+          Rectangle()
+            .fill(theme.separator.opacity(0.55))
+            .frame(height: 1)
         }
       }
     }
@@ -1814,26 +2569,29 @@ struct MacAnalyticsSearchField: View {
   let placeholder: String
   @Binding var text: String
 
+  @Environment(\.macAppTheme) private var theme
+
   var body: some View {
     HStack(spacing: 7) {
       Image(systemName: "magnifyingglass")
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .foregroundStyle(theme.textMuted)
       TextField(placeholder, text: $text)
         .textFieldStyle(.plain)
+        .foregroundStyle(theme.textPrimary)
       if !text.isEmpty {
         Button { text = "" } label: {
           Image(systemName: "xmark.circle.fill")
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .foregroundStyle(theme.textMuted)
         }
         .buttonStyle(.plain)
       }
     }
     .padding(.horizontal, 10)
-    .frame(height: 32)
-    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
+    .frame(height: 30)
+    .background(theme.surface, in: RoundedRectangle(cornerRadius: 8))
     .overlay {
       RoundedRectangle(cornerRadius: 8)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+        .strokeBorder(theme.border, lineWidth: 1)
     }
   }
 }

@@ -117,7 +117,10 @@ struct MacMCPServerManagementView: View {
         serverList
       }
     }
-    .frame(minWidth: 760, minHeight: 600)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
+      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: mcp.servers.map(\.id)) { _, ids in
       if let selectedServerID, !ids.contains(selectedServerID) {
@@ -1152,7 +1155,10 @@ private struct MacMCPServerConnectionEditorView: View {
         .disabled(isSaving)
       }
     }
-    .frame(width: 560, height: 540)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       nameFocused = true
@@ -1344,23 +1350,25 @@ struct MacChatToolsView: View {
         }
 
         if hasChatOverride, project != nil {
-          Button("Reset to Project Defaults") {
+          Button("Reset") {
             resetToProjectDefaults()
           }
-          .buttonStyle(MacActionButtonStyle(.secondary))
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .help("Reset to Project Defaults")
           .disabled(isMutationDisabled)
         }
 
         if let manageServers, !mcp.servers.isEmpty {
-          Button("Manage Servers…", systemImage: "shippingbox") {
+          Button("Servers…", systemImage: "shippingbox") {
             dismiss()
             manageServers()
           }
-          .buttonStyle(MacActionButtonStyle(.secondary))
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .help("Manage MCP Servers")
         }
 
         Button("Done") { dismiss() }
-          .buttonStyle(MacActionButtonStyle(.primary))
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
           .keyboardShortcut(.cancelAction)
       }
       .padding(16)
@@ -1399,7 +1407,10 @@ struct MacChatToolsView: View {
         }
       )
     }
-    .frame(width: 720, height: 650)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .macToastOverlay(localToastCenter)
     .onChange(of: mcp.statusMessage) { _, message in

@@ -76,7 +76,12 @@ struct MacMCPServerListView: View {
       MacMCPServerManagementView(mcp: mcp)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .frame(minWidth: 920, idealWidth: 980, minHeight: 620, idealHeight: 680)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
+      idealWidth: MacDesignTokens.Sheet.workspaceIdealWidth,
+      minHeight: MacDesignTokens.Sheet.workspaceMinHeight,
+      idealHeight: MacDesignTokens.Sheet.workspaceIdealHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .macToastOverlay(toastCenter)
     .onChange(of: mcp.statusMessage) { _, message in

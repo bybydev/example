@@ -159,8 +159,8 @@ struct MacDataAndSettingsTests {
     #expect(suiteDefaults.string(forKey: MacSidebarPinStore.storageKey) == nil)
   }
 
-  @Test("Anonymous usage opt-out preference persists and gates transport and storage")
-  func analyticsOptOutPersistenceAndGating() async throws {
+  @Test("Anonymous usage uses in-memory storage, persists opt-out preference, and toggles runtime collection")
+  func analyticsOptOutPersistenceAndInMemoryRuntimeToggle() async throws {
     let suiteName = "byokchat.mac.tests.analytics.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defaults.removePersistentDomain(forName: suiteName)
@@ -171,6 +171,10 @@ struct MacDataAndSettingsTests {
     #expect(MacAppAnalytics.isCollectionAllowed(in: defaults, ignoreTestSuppression: true))
     #expect(MacAppAnalytics.isSuppressedForTesting)
     #expect(!MacAppAnalytics.isEnabled)
+    #expect(MacAppAnalytics.configuration.storageMode == .inMemory)
+    #expect(
+      MacAppAnalytics.configuration.uploadInterval == AppAnalyticsConfiguration.defaultUploadInterval
+    )
 
     await MacAppAnalytics.setEnabled(false, defaults: defaults)
     #expect(!MacAppAnalytics.shareUsageDataPreference(in: defaults))
@@ -183,34 +187,29 @@ struct MacDataAndSettingsTests {
     #expect(MacAppAnalytics.shareUsageDataPreference(in: defaults))
     #expect(MacAppAnalytics.isCollectionAllowed(in: defaults, ignoreTestSuppression: true))
 
-    // Gated transport & state store block network and state writes when opted out.
+    // In-memory runtime client respects setEnabled(false/true) and never writes UserDefaults state.
     let spyTransport = SpyAnalyticsTransport()
-    let spyStore = InMemoryAnalyticsStateStore()
-    let flag = AtomicFlag(false)
-    let gatedTransport = MacAnalyticsGatedTransport(base: spyTransport) { flag.value }
-    let gatedStore = MacAnalyticsGatedStateStore(base: spyStore) { flag.value }
+    let config = MacAppAnalytics.makeConfiguration(enabled: false)
+    let client = AppAnalyticsClient(configuration: config, transport: spyTransport)
 
-    let request = URLRequest(url: URL(string: "https://analytics.133043.xyz/v1/analytics/batch")!)
-    await #expect(throws: CancellationError.self) {
-      _ = try await gatedTransport.data(for: request)
-    }
+    #expect(!(await client.isEnabled))
+    try await client.track(MacAppAnalytics.Event.messageEdited.rawValue)
+    try await client.flush()
     #expect(await spyTransport.requestCount() == 0)
 
-    try await gatedStore.save(Data("blocked".utf8))
-    #expect(try await spyStore.load() == nil)
-    #expect(try await gatedStore.load() == nil)
-
-    flag.set(true)
-    try await gatedStore.save(Data("allowed".utf8))
-    #expect(try await gatedStore.load() == Data("allowed".utf8))
-    _ = try await gatedTransport.data(for: request)
+    await client.setEnabled(true)
+    #expect(await client.isEnabled)
+    try await client.track(MacAppAnalytics.Event.messageEdited.rawValue)
+    try await client.flush()
     #expect(await spyTransport.requestCount() == 1)
+    #expect(UserDefaults.standard.data(forKey: config.stateStorageKey) == nil)
 
-    // Disabling hides stored state until cleared or re-enabled.
-    flag.set(false)
-    #expect(try await gatedStore.load() == nil)
-    try await gatedStore.remove()
-    #expect(try await spyStore.load() == nil)
+    // Disabling at runtime clears pending in-memory data and sends no final upload.
+    try await client.track(MacAppAnalytics.Event.projectCreated.rawValue)
+    await client.setEnabled(false)
+    #expect(!(await client.isEnabled))
+    try await client.flush()
+    #expect(await spyTransport.requestCount() == 1)
   }
 
   @Test("Paywall URLs and simulated product prices match iOS parity")
@@ -441,27 +440,6 @@ private func makeIsolatedServices(environment: BYOKStorageEnvironment) throws ->
   )
 }
 
-private final class AtomicFlag: @unchecked Sendable {
-  private let lock = NSLock()
-  private var storage: Bool
-
-  init(_ initialValue: Bool) {
-    storage = initialValue
-  }
-
-  var value: Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    return storage
-  }
-
-  func set(_ newValue: Bool) {
-    lock.lock()
-    storage = newValue
-    lock.unlock()
-  }
-}
-
 private actor SpyAnalyticsTransport: AppAnalyticsTransport {
   private var count = 0
 
@@ -478,21 +456,5 @@ private actor SpyAnalyticsTransport: AppAnalyticsTransport {
 
   func requestCount() -> Int {
     count
-  }
-}
-
-private actor InMemoryAnalyticsStateStore: AppAnalyticsStateStoring {
-  private var data: Data?
-
-  func load() async throws -> Data? {
-    data
-  }
-
-  func save(_ data: Data) async throws {
-    self.data = data
-  }
-
-  func remove() async throws {
-    data = nil
   }
 }

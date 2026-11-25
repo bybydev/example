@@ -206,7 +206,10 @@ struct MacProjectsWorkspaceView: View {
         projectsHome
       }
     }
-    .frame(minWidth: 920, minHeight: 620)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
+      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: initialProjectID) { _, projectID in
       if let projectID {
@@ -1495,7 +1498,10 @@ private struct MacProjectAddChatsSheet: View {
         }
       }
     }
-    .frame(width: 560, height: 500)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .overlay {
       if isSaving {
@@ -2020,7 +2026,12 @@ private struct MacProjectSourcesWorkspaceView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .frame(minWidth: 760, idealWidth: 900, minHeight: 560, idealHeight: 680)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.previewMinWidth,
+      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
+      minHeight: MacDesignTokens.Sheet.previewMinHeight,
+      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 
@@ -2884,7 +2895,10 @@ private struct MacProjectCreateSheet: View {
         .padding(20)
       }
     }
-    .frame(width: 520, height: 510)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       nameFocused = true
@@ -3026,7 +3040,10 @@ private struct MacProjectIdentityEditor: View {
         .padding(20)
       }
     }
-    .frame(width: 500, height: 370)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.compactHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       nameFocused = true
@@ -3180,7 +3197,10 @@ private struct MacProjectDefaultsEditor: View {
         .padding(10)
       }
     }
-    .frame(width: 520, height: 370)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.compactHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: accountID) { _, value in
       guard let value else {
@@ -3288,7 +3308,10 @@ private struct MacProjectInstructionsEditor: View {
       }
       .padding(16)
     }
-    .frame(width: 600, height: 430)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.compactHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       editorFocused = true
@@ -3410,7 +3433,10 @@ private struct MacProjectPromptEditor: View {
       }
       .padding(16)
     }
-    .frame(width: 520, height: 400)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.compactHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       nameFocused = true
@@ -3898,7 +3924,10 @@ private struct MacProjectLibrarySourcePickerSheet: View {
         }
       }
     }
-    .frame(width: 580, height: 480)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .overlay {
       if isLoading {

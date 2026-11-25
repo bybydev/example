@@ -453,7 +453,10 @@ struct MacLibraryView: View {
         }
       }
     }
-    .frame(minWidth: 920, minHeight: 620)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
+      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .background { keyboardShortcutTriggers }
     .overlay {
@@ -1231,7 +1234,12 @@ struct MacLibraryView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .frame(minWidth: 760, idealWidth: 900, minHeight: 560, idealHeight: 680)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.previewMinWidth,
+      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
+      minHeight: MacDesignTokens.Sheet.previewMinHeight,
+      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
   }
 

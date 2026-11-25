@@ -546,6 +546,113 @@ struct MacAnalyticsTests {
     #expect(coordinator.destination == nil)
     #expect(coordinator.analyticsInitialConversationID == nil)
   }
+
+  // MARK: - Adaptive Time-Series Chart Bucketing
+
+  @Test("Time-series builder adapts granularity cleanly across Today, 7D, 30D, and long All Time spans")
+  func adaptiveTimeSeriesGranularityAndTicks() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let reference = calendar.date(from: DateComponents(year: 2026, month: 11, day: 25, hour: 15))!
+
+    func makeChat(dates: [Date], inputTokens: Int = 1_000, outputTokens: Int = 500) -> ChatConversation {
+      let messages = dates.map { date in
+        ChatMessage(
+          role: .assistant,
+          content: "Reply",
+          createdAt: date,
+          updatedAt: date,
+          status: .completed,
+          providerID: BuiltInProviders.openAIID,
+          modelID: ModelID(rawValue: "gpt-4o"),
+          usage: ProviderUsage(inputTokens: inputTokens, outputTokens: outputTokens)
+        )
+      }
+      return ChatConversation(
+        title: "Chart Test",
+        createdAt: dates.first ?? reference,
+        updatedAt: dates.last ?? reference,
+        providerID: BuiltInProviders.openAIID,
+        accountID: ProviderAccountID(rawValue: "acct-chart-test"),
+        modelID: ModelID(rawValue: "gpt-4o"),
+        messages: messages
+      )
+    }
+
+    // Today -> 24 hourly buckets with 5 clean x-axis ticks.
+    let todaySeries = MacAnalyticsTimeSeriesBuilder.build(
+      conversations: [makeChat(dates: [reference])],
+      range: .today,
+      reference: reference,
+      calendar: calendar
+    )
+    #expect(todaySeries.granularity == .hourly)
+    #expect(todaySeries.buckets.count == 24)
+    #expect(todaySeries.axisTickIndices == [0, 6, 12, 18, 23])
+    #expect(todaySeries.activeBucketCount == 1)
+    #expect(todaySeries.peakBucket(for: .tokens)?.totalTokens == 1_500)
+
+    // 7D -> 7 daily buckets with all 7 labels.
+    let sevenDaySeries = MacAnalyticsTimeSeriesBuilder.build(
+      conversations: [makeChat(dates: [reference])],
+      range: .sevenDays,
+      reference: reference,
+      calendar: calendar
+    )
+    #expect(sevenDaySeries.granularity == .daily)
+    #expect(sevenDaySeries.buckets.count == 7)
+    #expect(sevenDaySeries.axisTickIndices.count == 7)
+
+    // 30D -> 30 daily buckets with sparse non-overlapping ticks (<= 6) ending on last bucket.
+    let thirtyDaySeries = MacAnalyticsTimeSeriesBuilder.build(
+      conversations: [makeChat(dates: [reference])],
+      range: .thirtyDays,
+      reference: reference,
+      calendar: calendar
+    )
+    #expect(thirtyDaySeries.granularity == .daily)
+    #expect(thirtyDaySeries.buckets.count == 30)
+    #expect(thirtyDaySeries.axisTickIndices.count <= 6)
+    #expect(thirtyDaySeries.axisTickIndices.first == 0)
+    #expect(thirtyDaySeries.axisTickIndices.last == 29)
+
+    // All spanning 120 days -> weekly buckets.
+    let fourMonthsAgo = calendar.date(byAdding: .day, value: -120, to: reference)!
+    let weeklySeries = MacAnalyticsTimeSeriesBuilder.build(
+      conversations: [makeChat(dates: [fourMonthsAgo, reference])],
+      range: .all,
+      reference: reference,
+      calendar: calendar
+    )
+    #expect(weeklySeries.granularity == .weekly)
+    #expect(weeklySeries.activeBucketCount == 2)
+    #expect(weeklySeries.buckets.count >= 16 && weeklySeries.buckets.count <= 20)
+    #expect(weeklySeries.axisTickIndices.count <= 6)
+
+    // All spanning 12 months -> monthly buckets.
+    let oneYearAgo = calendar.date(byAdding: .day, value: -350, to: reference)!
+    let monthlySeries = MacAnalyticsTimeSeriesBuilder.build(
+      conversations: [makeChat(dates: [oneYearAgo, reference])],
+      range: .all,
+      reference: reference,
+      calendar: calendar
+    )
+    #expect(monthlySeries.granularity == .monthly)
+    #expect(monthlySeries.activeBucketCount == 2)
+    #expect(monthlySeries.buckets.count >= 12 && monthlySeries.buckets.count <= 14)
+
+    // All spanning 3 years -> quarterly buckets.
+    let threeYearsAgo = calendar.date(byAdding: .year, value: -3, to: reference)!
+    let quarterlySeries = MacAnalyticsTimeSeriesBuilder.build(
+      conversations: [makeChat(dates: [threeYearsAgo, reference])],
+      range: .all,
+      reference: reference,
+      calendar: calendar
+    )
+    #expect(quarterlySeries.granularity == .quarterly)
+    #expect(quarterlySeries.activeBucketCount == 2)
+    #expect(quarterlySeries.buckets.count >= 12 && quarterlySeries.buckets.count <= 14)
+  }
 }
 
 @MainActor

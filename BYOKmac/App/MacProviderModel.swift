@@ -770,10 +770,12 @@ final class MacProviderModel {
       }
       try await runtime.testConnection(accountID: accountID, modelID: selectedModelID)
     }
-    MacAppAnalytics.track(
-      succeeded ? .connectionTestSucceeded : .connectionTestFailed,
-      dimension: .init(providerKind: account(accountID)?.kind ?? .openAICompatible)
-    )
+    if !succeeded {
+      MacAppAnalytics.track(
+        .connectionTestFailed,
+        dimension: .init(providerKind: account(accountID)?.kind ?? .openAICompatible)
+      )
+    }
     return succeeded
   }
 

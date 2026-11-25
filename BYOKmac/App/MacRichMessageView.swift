@@ -241,7 +241,7 @@ struct MacRichMessageView: View {
   private var contextActions: some View {
     if !message.content.isEmpty {
       Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
-        copyToPasteboard(message.content, dimension: .message)
+        copyToPasteboard(message.content)
         copied = true
         Task { @MainActor in
           try? await Task.sleep(for: .seconds(1.2))
@@ -252,7 +252,7 @@ struct MacRichMessageView: View {
 
     if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       Button("Copy Reasoning", systemImage: "brain") {
-        copyToPasteboard(message.reasoning, dimension: .reasoning)
+        copyToPasteboard(message.reasoning)
       }
     }
 
@@ -437,11 +437,9 @@ struct MacRichMessageView: View {
     onRequestRegenerate()
   }
 
-  private func copyToPasteboard(_ value: String, dimension: MacAppAnalytics.Dimension) {
+  private func copyToPasteboard(_ value: String) {
     NSPasteboard.general.clearContents()
-    if NSPasteboard.general.setString(value, forType: .string) {
-      MacAppAnalytics.track(.contentCopied, dimension: dimension)
-    }
+    NSPasteboard.general.setString(value, forType: .string)
   }
 
   private func exportMessage() {
@@ -737,7 +735,12 @@ struct MacEditAndResendView: View {
       }
     }
     .padding(20)
-    .frame(minWidth: 560, idealWidth: 560, maxWidth: 560, minHeight: 320)
+    .frame(
+      minWidth: MacDesignTokens.Sheet.standardWidth,
+      idealWidth: MacDesignTokens.Sheet.standardWidth,
+      maxWidth: MacDesignTokens.Sheet.standardWidth,
+      minHeight: 320
+    )
     .onAppear { focused = true }
   }
 
@@ -1816,7 +1819,10 @@ struct MacMessageDetailsView: View {
         .padding(18)
       }
     }
-    .frame(width: 540, height: 620)
+    .frame(
+      width: MacDesignTokens.Sheet.standardWidth,
+      height: MacDesignTokens.Sheet.standardHeight
+    )
     .background(MacDesignTokens.Colors.canvas)
     .task(id: message.id) {
       await loadMessageTelemetry()
