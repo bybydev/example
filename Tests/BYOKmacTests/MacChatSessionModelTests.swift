@@ -748,6 +748,7 @@ struct MacChatNavigationTests {
     await slow.value
     #expect(navigation.displayedID == nil)
     #expect(navigation.requestedID == nil)
+    #expect(!navigation.isPreparing)
     #expect(navigation.canFollowSend(from: nil))
   }
 
@@ -798,6 +799,57 @@ struct MacChatNavigationTests {
     #expect(navigation.messageTarget?.request == request)
     navigation.requestedID = "b"
     #expect(navigation.messageTarget == nil)
+  }
+
+  @Test("Skeleton shows immediately for cold chats and clears only after layout reveal")
+  func switchPresentationPolicy() {
+    let a: ConversationID = "a"
+    let b: ConversationID = "b"
+
+    // New chat never shows skeleton.
+    #expect(
+      !MacChatSwitchPresentationPolicy.shouldShowLoadingSkeleton(
+        requestedConversationID: nil,
+        retainedConversationIDs: [a],
+        revealedConversationIDs: [a]
+      )
+    )
+
+    // Cold switch to uncached chat B shows skeleton immediately.
+    #expect(
+      MacChatSwitchPresentationPolicy.shouldShowLoadingSkeleton(
+        requestedConversationID: b,
+        retainedConversationIDs: [a],
+        revealedConversationIDs: [a]
+      )
+    )
+
+    // Once B is prepared and retained, skeleton stays up until initial layout reveals.
+    #expect(
+      MacChatSwitchPresentationPolicy.shouldShowLoadingSkeleton(
+        requestedConversationID: b,
+        retainedConversationIDs: [a, b],
+        revealedConversationIDs: [a]
+      )
+    )
+
+    // Once B finishes initial layout and scroll, skeleton dismisses.
+    #expect(
+      !MacChatSwitchPresentationPolicy.shouldShowLoadingSkeleton(
+        requestedConversationID: b,
+        retainedConversationIDs: [a, b],
+        revealedConversationIDs: [a, b]
+      )
+    )
+
+    // Switching back to already-retained and revealed chat A skips skeleton.
+    #expect(
+      !MacChatSwitchPresentationPolicy.shouldShowLoadingSkeleton(
+        requestedConversationID: a,
+        retainedConversationIDs: [a, b],
+        revealedConversationIDs: [a, b]
+      )
+    )
   }
 }
 

@@ -45,6 +45,25 @@ enum MacChatMessageWindowPolicy {
   }
 }
 
+enum MacChatSwitchPresentationPolicy {
+  /// Returns `true` when the loading skeleton should cover the transcript area.
+  ///
+  /// Persisted chats that are not yet retained and laid out show the skeleton
+  /// immediately on selection and keep it visible until the new transcript has
+  /// finished preparing, mounting, and positioning its initial scroll offset.
+  /// Switching to New Chat (`nil`) or to an already-retained, laid-out chat
+  /// skips the skeleton.
+  static func shouldShowLoadingSkeleton(
+    requestedConversationID: ConversationID?,
+    retainedConversationIDs: Set<ConversationID>,
+    revealedConversationIDs: Set<ConversationID>
+  ) -> Bool {
+    guard let requestedConversationID else { return false }
+    return !(retainedConversationIDs.contains(requestedConversationID)
+      && revealedConversationIDs.contains(requestedConversationID))
+  }
+}
+
 struct MacChatPane: View {
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
@@ -55,7 +74,6 @@ struct MacChatPane: View {
   let requestedSummary: ChatConversation?
   let retainedConversations: [MacPreparedConversation]
   let navigationTarget: MacTranscriptNavigationTarget?
-  let isPreparingConversation: Bool
   let composerFocusRequestID: Int
   let attachments: [ChatAttachment]
   let sidebarVisible: Bool
@@ -80,7 +98,19 @@ struct MacChatPane: View {
   @State private var composerHeight: CGFloat = 0
   @State private var showingPromptsPicker = false
   @State private var dismissedOmittedBannerKey: String?
-  @State private var showLoadingSkeleton = false
+  @State private var revealedConversationIDs: Set<ConversationID> = []
+
+  private var retainedConversationIDs: Set<ConversationID> {
+    Set(retainedConversations.compactMap(\.id))
+  }
+
+  private var showLoadingSkeleton: Bool {
+    MacChatSwitchPresentationPolicy.shouldShowLoadingSkeleton(
+      requestedConversationID: requestedConversationID,
+      retainedConversationIDs: retainedConversationIDs,
+      revealedConversationIDs: revealedConversationIDs
+    )
+  }
 
   private var transcriptBottomSpace: CGFloat {
     max(
@@ -218,39 +248,44 @@ struct MacChatPane: View {
               openChatSettings: openChatSettings,
               configureTools: configureTools,
               openProjects: openProjects,
-              applyPromptPreset: applyPromptPreset
+              applyPromptPreset: applyPromptPreset,
+              onInitialLayoutReady: {
+                if let id = retained.id {
+                  revealedConversationIDs.insert(id)
+                }
+              }
             )
             .environment(\.macPreparedAnswers, retained.answers)
             .environment(\.macTranscriptIsActive, isCurrent)
             .opacity(isVisible ? 1 : 0)
-            .offset(y: isVisible || reduceMotion ? 0 : 4)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
             .disabled(!isCurrent)
-            .animation(
-              reduceMotion ? nil : .easeOut(duration: 0.18),
-              value: isVisible
-            )
+            .zIndex(isCurrent ? 1 : 0)
           }
 
-          if showLoadingSkeleton {
-            MacTranscriptSkeletonView(bottomSpace: transcriptBottomSpace)
-              .transition(reduceMotion ? .identity : .opacity)
-              .allowsHitTesting(false)
+          ZStack {
+            if showLoadingSkeleton {
+              MacTranscriptSkeletonView(bottomSpace: transcriptBottomSpace)
+                .transition(
+                  reduceMotion
+                    ? .identity
+                    : .asymmetric(
+                      insertion: .identity,
+                      removal: .opacity
+                    )
+                )
+            }
           }
+          .allowsHitTesting(false)
+          .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.14),
+            value: showLoadingSkeleton
+          )
+          .zIndex(2)
         }
-        .animation(
-          reduceMotion ? nil : .easeOut(duration: 0.16),
-          value: showLoadingSkeleton
-        )
-        .task(id: isPreparingConversation) {
-          guard isPreparingConversation else {
-            showLoadingSkeleton = false
-            return
-          }
-          try? await Task.sleep(for: .milliseconds(70))
-          guard !Task.isCancelled, isPreparingConversation else { return }
-          showLoadingSkeleton = true
+        .onChange(of: retainedConversations.map(\.id)) { _, ids in
+          revealedConversationIDs.formIntersection(Set(ids.compactMap { $0 }))
         }
 
         VStack(spacing: 10) {
@@ -811,6 +846,7 @@ private struct MacTranscriptView: View {
   let configureTools: () -> Void
   let openProjects: () -> Void
   let applyPromptPreset: (ProjectPromptPreset) -> Void
+  let onInitialLayoutReady: () -> Void
   @State private var retainedConversation: ChatConversation?
   @State private var retainedBottomSpace: CGFloat
   @State private var lastNavigationToken: UUID?
@@ -880,7 +916,8 @@ private struct MacTranscriptView: View {
     openChatSettings: @escaping () -> Void,
     configureTools: @escaping () -> Void,
     openProjects: @escaping () -> Void,
-    applyPromptPreset: @escaping (ProjectPromptPreset) -> Void
+    applyPromptPreset: @escaping (ProjectPromptPreset) -> Void,
+    onInitialLayoutReady: @escaping () -> Void
   ) {
     _providers = Bindable(wrappedValue: providers)
     _chats = Bindable(wrappedValue: chats)
@@ -896,6 +933,7 @@ private struct MacTranscriptView: View {
     self.configureTools = configureTools
     self.openProjects = openProjects
     self.applyPromptPreset = applyPromptPreset
+    self.onInitialLayoutReady = onInitialLayoutReady
     _retainedConversation = State(initialValue: initialConversation)
     _retainedBottomSpace = State(initialValue: bottomSpace)
     _hasRevealedInitialLayout = State(
@@ -1048,11 +1086,6 @@ private struct MacTranscriptView: View {
         .scrollClipDisabled(false)
         .clipped()
         .opacity(hasRevealedInitialLayout ? 1 : 0)
-        .offset(y: hasRevealedInitialLayout || reduceMotion ? 0 : 6)
-        .animation(
-          reduceMotion ? nil : .easeOut(duration: 0.2),
-          value: hasRevealedInitialLayout
-        )
         .background {
           MacTranscriptScrollObserver(isEnabled: isActive, connection: scrollConnection) { previous, current in
             guard isActive else { return }
@@ -1154,13 +1187,22 @@ private struct MacTranscriptView: View {
           guard let target = pendingScrollTarget else { return }
           await Task.yield()
           guard !Task.isCancelled, isActive else { return }
+          let shouldAnimate = hasRevealedInitialLayout && !reduceMotion
           let scroll = {
             proxy.scrollTo(target.messageID.rawValue, anchor: .center)
           }
-          if reduceMotion {
-            scroll()
-          } else {
+          if shouldAnimate {
             withAnimation(.easeOut(duration: 0.18), scroll)
+          } else {
+            scroll()
+          }
+          if !hasRevealedInitialLayout {
+            await Task.yield()
+            guard !Task.isCancelled, isActive else { return }
+            hasCompletedInitialScroll = true
+            hasRevealedInitialLayout = true
+            onInitialLayoutReady()
+            showJumpToLatest = !isNearBottom
           }
           pendingScrollTarget = nil
         }
@@ -1172,12 +1214,16 @@ private struct MacTranscriptView: View {
           if !scrollToPendingSourceMessageIfAvailable(proxy), followsLatest {
             scrollToBottom(proxy, animated: false)
           }
+          // If navigating to an older message required expanding the visible
+          // window, let `pendingScrollTarget` finish scrolling before revealing.
+          guard pendingScrollTarget == nil else { return }
           await Task.yield()
           guard !Task.isCancelled else { return }
           hasCompletedInitialScroll = true
           if !hasRevealedInitialLayout {
             hasRevealedInitialLayout = true
           }
+          onInitialLayoutReady()
           showJumpToLatest = !isNearBottom
         }
 
@@ -1784,10 +1830,10 @@ private struct MacTranscriptView: View {
     let scroll = {
       proxy.scrollTo(messageID.rawValue, anchor: .center)
     }
-    if reduceMotion {
-      scroll()
-    } else {
+    if hasRevealedInitialLayout && !reduceMotion {
       withAnimation(.easeOut(duration: 0.18), scroll)
+    } else {
+      scroll()
     }
     return true
   }

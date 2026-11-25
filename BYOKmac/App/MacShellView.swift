@@ -92,7 +92,6 @@ struct MacShellView: View {
         requestedSummary: chats.summary(navigation.requestedID),
         retainedConversations: navigation.retainedConversations,
         navigationTarget: navigation.messageTarget,
-        isPreparingConversation: navigation.isPreparing,
         composerFocusRequestID: composerFocusRequestID,
         attachments: pendingAttachments(for: paneConversationID),
         sidebarVisible: sidebarVisible,
@@ -1672,6 +1671,7 @@ final class MacChatNavigation {
     defer { os_signpost(.end, log: log, name: "Chat Selection", signpostID: signpostID) }
 
     if retainedConversations.contains(where: { $0.id == requested }) {
+      isPreparing = false
       touchRecency(requested)
       displayedID = requested
       os_signpost(.event, log: log, name: "Display Prepared Chat")
