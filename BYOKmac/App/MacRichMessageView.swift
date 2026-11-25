@@ -608,7 +608,7 @@ nonisolated enum MacEditAndResendGuard {
   }
 }
 
-private struct MacEditAndResendView: View {
+struct MacEditAndResendView: View {
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID
   let original: String
