@@ -47,110 +47,149 @@ struct MacDataManagementView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
+      VStack(alignment: .leading, spacing: 14) {
         storageUsageSection
 
-        GroupBox("Full Backup") {
-          VStack(alignment: .leading, spacing: 12) {
-            Text("A portable JSON backup includes conversations, attachments, projects, Library items, MCP configuration, connection configuration, and the default system prompt.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        GroupBox {
+          VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+              Text("Full backup")
+              Text("Portable JSON backup of conversations, attachments, projects, Library items, MCP configuration, connections, and default system prompt.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
 
             HStack(spacing: 8) {
-              Button("Export Full Backup…", systemImage: "archivebox") {
+              Spacer()
+              Button("Export…") {
                 exportBackup()
               }
-              .buttonStyle(MacActionButtonStyle(.secondary))
-              Button("Import Full Backup…", systemImage: "square.and.arrow.down") {
+              .buttonStyle(MacSettingsButtonStyle())
+
+              Button("Import…") {
                 chooseImport(kind: .backup)
               }
-              .buttonStyle(MacActionButtonStyle(.secondary))
+              .buttonStyle(MacSettingsButtonStyle())
             }
             .disabled(data.isBusy)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(8)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
         }
 
-        GroupBox("Connection Configuration") {
-          VStack(alignment: .leading, spacing: 12) {
-            Text("Export or import provider account configuration without chat history.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        GroupBox {
+          VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+              Text("Connection configuration")
+              Text("Export or import provider account configuration without chat history.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
 
             HStack(spacing: 8) {
-              Button("Export Connections…", systemImage: "key.viewfinder") {
+              Spacer()
+              Button("Export…") {
                 exportProviderConfiguration()
               }
-              .buttonStyle(MacActionButtonStyle(.secondary))
-              Button("Import Connections…", systemImage: "key.radiowaves.forward") {
+              .buttonStyle(MacSettingsButtonStyle())
+
+              Button("Import…") {
                 chooseImport(kind: .providers)
               }
-              .buttonStyle(MacActionButtonStyle(.secondary))
+              .buttonStyle(MacSettingsButtonStyle())
             }
             .disabled(data.isBusy)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(8)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
         }
 
-        GroupBox("Local Storage & Recovery") {
+        GroupBox {
           VStack(alignment: .leading, spacing: 10) {
-            LabeledContent("Storage") {
+            VStack(alignment: .leading, spacing: 3) {
+              Text("Workspace location")
               Text(app.storageEnvironment.rootDirectory.path)
-                .font(.caption.monospaced())
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             }
 
+            Divider()
+
             HStack(spacing: 8) {
-              Button("Show Data in Finder", systemImage: "folder") {
-                app.revealDataDirectory()
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary))
+              Spacer()
               if app.lastRecoveryBackupURL != nil {
-                Button("Show Last Recovery Backup", systemImage: "clock.arrow.circlepath") {
+                Button("Last Recovery Backup") {
                   app.revealRecoveryBackup()
                 }
-                .buttonStyle(MacActionButtonStyle(.secondary))
+                .buttonStyle(MacSettingsButtonStyle())
               }
+
+              Button("Show in Finder") {
+                app.revealDataDirectory()
+              }
+              .buttonStyle(MacSettingsButtonStyle())
             }
 
             Text("Startup recovery and full reset preserve the previous workspace by moving it aside before creating a fresh one.")
               .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(8)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
         }
 
-        GroupBox("Destructive Actions") {
-          VStack(alignment: .leading, spacing: 12) {
-            Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
-              confirmDeleteConversations = true
+        GroupBox {
+          VStack(alignment: .leading, spacing: 10) {
+            HStack {
+              Text("Delete all conversations")
+              Spacer()
+              Button("Delete…", role: .destructive) {
+                confirmDeleteConversations = true
+              }
+              .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
             }
-            .buttonStyle(MacActionButtonStyle(.destructive))
-
-            Button("Delete All Credentials", systemImage: "key.slash", role: .destructive) {
-              confirmDeleteCredentials = true
-            }
-            .buttonStyle(MacActionButtonStyle(.destructive))
 
             Divider()
 
-            Button("Reset All Application Data…", systemImage: "arrow.counterclockwise.circle", role: .destructive) {
-              confirmResetApplication = true
+            HStack {
+              Text("Delete all credentials")
+              Spacer()
+              Button("Delete…", role: .destructive) {
+                confirmDeleteCredentials = true
+              }
+              .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
             }
-            .buttonStyle(MacActionButtonStyle(.destructive))
 
-            Text("Reset moves the workspace to a recovery folder first, then removes provider/MCP credentials and telemetry. Keychain credentials cannot be recovered from the workspace backup.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+              HStack {
+                Text("Reset all application data")
+                Spacer()
+                Button("Reset…", role: .destructive) {
+                  confirmResetApplication = true
+                }
+                .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
+              }
+
+              Text("Moves the workspace to a recovery folder first, then removes provider/MCP credentials and telemetry. Keychain credentials cannot be recovered from the workspace backup.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
           }
           .disabled(data.isBusy)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(8)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
         }
 
         if data.isBusy {
@@ -158,22 +197,25 @@ struct MacDataManagementView: View {
             ProgressView().controlSize(.small)
             Text("Working…")
               .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .foregroundStyle(.secondary)
           }
+          .padding(.horizontal, 4)
         } else if let status = data.statusMessage {
           Label(status, systemImage: "checkmark.circle")
             .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
         }
 
         Text("Backups and connection exports never include API keys, secret headers, or MCP credentials.")
           .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.horizontal, 4)
       }
-      .padding(20)
-      .frame(maxWidth: 720, alignment: .leading)
+      .padding(.vertical, 2)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .background(MacDesignTokens.Colors.canvas)
     .task {
       await data.refreshStorageUsage()
     }
@@ -286,23 +328,18 @@ struct MacDataManagementView: View {
 
   private var storageUsageSection: some View {
     GroupBox {
-      VStack(alignment: .leading, spacing: 12) {
+      VStack(alignment: .leading, spacing: 10) {
         HStack {
-          Text("Storage Usage")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-
+          Text("Storage usage")
           Spacer()
-
           if data.isMeasuringStorage {
             ProgressView()
               .controlSize(.small)
           }
-
-          Button("Refresh", systemImage: "arrow.clockwise") {
+          Button("Refresh") {
             Task { await data.refreshStorageUsage() }
           }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .buttonStyle(MacSettingsButtonStyle())
           .disabled(data.isMeasuringStorage || data.isBusy)
         }
 
@@ -332,31 +369,38 @@ struct MacDataManagementView: View {
           }
         }
 
+        Divider()
+
         if let report {
-          VStack(alignment: .leading, spacing: 8) {
+          VStack(alignment: .leading, spacing: 6) {
             sizeRow("Chats (\(conversationCount))", bytes: report.conversationsBytes)
-            sizeRow("Files & Attachments", bytes: report.attachmentsBytes)
-            sizeRow("Cached Thumbnails", bytes: report.thumbnailCacheBytes)
-            sizeRow("Search Index", bytes: report.searchIndexBytes)
-            sizeRow("Analytics & Settings", bytes: report.analyticsBytes + report.otherBytes)
+            sizeRow("Files & attachments", bytes: report.attachmentsBytes)
+            sizeRow("Cached thumbnails", bytes: report.thumbnailCacheBytes)
+            sizeRow("Search index", bytes: report.searchIndexBytes)
+            sizeRow("Analytics & settings", bytes: report.analyticsBytes + report.otherBytes)
             if report.quarantinedBytes > 0 || quarantinedCount > 0 {
-              sizeRow("Quarantined Files", bytes: report.quarantinedBytes)
+              sizeRow("Quarantined files", bytes: report.quarantinedBytes)
             }
 
             Divider()
+              .padding(.vertical, 2)
 
-            LabeledContent("Total Used") {
+            HStack {
+              Text("Total used")
+                .fontWeight(.medium)
+              Spacer()
               Text(formattedBytes(report.totalBytes))
-                .fontWeight(.semibold)
-                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
             }
 
             if let available = report.availableDeviceBytes {
-              LabeledContent("Available on Mac") {
+              HStack {
+                Text("Available on Mac")
+                  .foregroundStyle(.secondary)
+                Spacer()
                 Text(formattedBytes(available))
-                  .foregroundStyle(
-                    report.isDeviceSpaceLow ? Color.orange : MacDesignTokens.Colors.textMuted
-                  )
+                  .font(.system(size: 12, weight: .medium, design: .monospaced))
+                  .foregroundStyle(report.isDeviceSpaceLow ? Color.orange : Color.secondary)
               }
             }
           }
@@ -366,80 +410,94 @@ struct MacDataManagementView: View {
               .controlSize(.small)
             Text("Calculating storage…")
               .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .foregroundStyle(.secondary)
           }
         }
 
         Divider()
 
-        HStack(spacing: 10) {
-          Button("Clear Cached Thumbnails…", systemImage: "photo.on.rectangle.angled") {
+        HStack {
+          Text("Cached thumbnails")
+          Spacer()
+          Button("Clear…") {
             confirmClearThumbnails = true
           }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .buttonStyle(MacSettingsButtonStyle())
           .disabled(data.isBusy || (report?.thumbnailCacheBytes ?? 0) == 0)
+        }
 
-          Button("Clear Search Index…", systemImage: "magnifyingglass") {
+        Divider()
+
+        HStack {
+          Text("Search index")
+          Spacer()
+          Button("Clear…") {
             confirmClearSearchIndex = true
           }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .buttonStyle(MacSettingsButtonStyle())
           .disabled(data.isBusy || (report?.searchIndexBytes ?? 0) == 0)
+        }
 
-          if quarantinedCount > 0 {
-            Button(
-              "Remove Unreadable Shards (\(quarantinedCount))…",
-              systemImage: "trash",
-              role: .destructive
-            ) {
+        if quarantinedCount > 0 {
+          Divider()
+
+          HStack {
+            Text("Unreadable shards (\(quarantinedCount))")
+            Spacer()
+            Button("Remove…", role: .destructive) {
               confirmPurgeQuarantined = true
             }
-            .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
+            .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
             .disabled(data.isBusy)
           }
         }
 
         Text("Cached thumbnails and the search index regenerate automatically when needed. Clearing cached thumbnails never deletes your chats, original attachments, or Library files.")
           .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(8)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 4)
     }
   }
 
   private func sizeRow(_ title: String, bytes: Int64) -> some View {
-    LabeledContent(title) {
+    HStack {
+      Text(title)
+        .foregroundStyle(.secondary)
+      Spacer()
       Text(formattedBytes(bytes))
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .font(.system(size: 12, weight: .medium, design: .monospaced))
+        .foregroundStyle(.secondary)
     }
   }
 
   private func warningRow(icon: String, title: String, detail: String) -> some View {
-    HStack(alignment: .top, spacing: 10) {
+    HStack(alignment: .top, spacing: 8) {
       Image(systemName: icon)
-        .font(.subheadline.weight(.semibold))
+        .font(.caption.weight(.semibold))
         .foregroundStyle(Color.orange)
-        .padding(.top, 1)
+        .padding(.top, 2)
 
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.subheadline.weight(.semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .font(.caption.weight(.semibold))
         Text(detail)
           .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .padding(10)
+    .padding(8)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
       Color.orange.opacity(0.1),
-      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+      in: RoundedRectangle(cornerRadius: 6, style: .continuous)
     )
     .overlay {
-      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
-        .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .strokeBorder(Color.orange.opacity(0.28), lineWidth: 1)
     }
   }
 

@@ -31,6 +31,8 @@ struct MacShellView: View {
   @State private var deleteTarget: ChatConversation?
   @State private var pendingAttachmentsByKey: [String: [ChatAttachment]] = [:]
   @State private var didRestorePendingAttachments = false
+  @State private var sendingKeys: Set<String> = []
+  @State private var importingAttachmentCountsByKey: [String: Int] = [:]
   @State private var activeUpsellFeature: MacProFeature?
   @State private var pendingUpsellFeature: MacProFeature?
   @State private var upsellFallbackTask: Task<Void, Never>?
@@ -94,6 +96,8 @@ struct MacShellView: View {
         navigationTarget: navigation.messageTarget,
         composerFocusRequestID: composerFocusRequestID,
         attachments: pendingAttachments(for: paneConversationID),
+        isSending: sendingKeys.contains(attachmentKey(paneConversationID)),
+        isImportingAttachments: (importingAttachmentCountsByKey[attachmentKey(paneConversationID)] ?? 0) > 0,
         sidebarVisible: sidebarVisible,
         toggleSidebar: { sidebarVisible.toggle() },
         chooseTarget: {
@@ -136,20 +140,39 @@ struct MacShellView: View {
         },
         startNewChat: { startNewChat(chats: chats, forceReset: true) },
         focusComposer: { composerFocusRequestID &+= 1 },
-        appendAttachments: { additions in
-          appendAttachments(
-            additions,
-            conversationID: paneConversationID,
-            chats: chats,
-            providers: providers
-          )
+        runAttachmentImport: { operation in
+          let sourceConversationID = paneConversationID
+          let key = attachmentKey(sourceConversationID)
+          importingAttachmentCountsByKey[key, default: 0] += 1
+          Task { @MainActor in
+            defer {
+              let remaining = (importingAttachmentCountsByKey[key] ?? 1) - 1
+              if remaining <= 0 {
+                importingAttachmentCountsByKey.removeValue(forKey: key)
+              } else {
+                importingAttachmentCountsByKey[key] = remaining
+              }
+            }
+            if let additions = await operation(), !additions.isEmpty {
+              await appendAttachments(
+                additions,
+                conversationID: sourceConversationID,
+                chats: chats,
+                providers: providers
+              )
+            }
+          }
         },
         removeAttachment: { id in
           removePendingAttachment(id, conversationID: paneConversationID, chats: chats)
         },
         send: { text, attachments in
           let sourceConversationID = paneConversationID
+          let sourceKey = attachmentKey(sourceConversationID)
+          guard !sendingKeys.contains(sourceKey) else { return }
+          sendingKeys.insert(sourceKey)
           Task { @MainActor in
+            defer { sendingKeys.remove(sourceKey) }
             var preparedAttachments = attachments
             if let target = chats.target(for: sourceConversationID), !attachments.isEmpty {
               do {
@@ -503,29 +526,27 @@ struct MacShellView: View {
     conversationID: ConversationID?,
     chats: MacChatSessionModel,
     providers: MacProviderModel
-  ) {
+  ) async {
     guard !additions.isEmpty else { return }
     let key = attachmentKey(conversationID)
 
-    Task { @MainActor in
-      do {
-        var prepared = additions
-        if let target = chats.target(for: conversationID) {
-          prepared = try await providers.prepareAttachments(additions, for: target)
-        }
-
-        if let store = model.pendingAttachmentStore {
-          pendingAttachmentsByKey[key] = try await store.append(prepared, to: key)
-        } else {
-          pendingAttachmentsByKey[key] = try MacAttachmentImporter.validateCombined(
-            existing: pendingAttachmentsByKey[key] ?? [],
-            additions: prepared
-          )
-        }
-      } catch {
-        MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
-        chats.errorMessage = error.localizedDescription
+    do {
+      var prepared = additions
+      if let target = chats.target(for: conversationID) {
+        prepared = try await providers.prepareAttachments(additions, for: target)
       }
+
+      if let store = model.pendingAttachmentStore {
+        pendingAttachmentsByKey[key] = try await store.append(prepared, to: key)
+      } else {
+        pendingAttachmentsByKey[key] = try MacAttachmentImporter.validateCombined(
+          existing: pendingAttachmentsByKey[key] ?? [],
+          additions: prepared
+        )
+      }
+    } catch {
+      MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
+      chats.errorMessage = error.localizedDescription
     }
   }
 

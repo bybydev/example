@@ -72,6 +72,16 @@ enum MacAttachmentImporter {
   }
 
   @MainActor
+  private static let pasteboardImageTypes: [NSPasteboard.PasteboardType] = [
+    NSPasteboard.PasteboardType(UTType.png.identifier),
+    NSPasteboard.PasteboardType(UTType.jpeg.identifier),
+    NSPasteboard.PasteboardType(UTType.tiff.identifier),
+    NSPasteboard.PasteboardType(UTType.webP.identifier),
+    NSPasteboard.PasteboardType(UTType.heic.identifier),
+    NSPasteboard.PasteboardType(UTType.gif.identifier),
+  ]
+
+  @MainActor
   static func importPasteboard() async throws -> [ChatAttachment] {
     let pasteboard = NSPasteboard.general
     let options: [NSPasteboard.ReadingOptionKey: Any] = [
@@ -83,14 +93,11 @@ enum MacAttachmentImporter {
       return try await importURLs(values.map { $0 as URL })
     }
 
-    let imageTypes = [
-      NSPasteboard.PasteboardType(UTType.png.identifier),
-      NSPasteboard.PasteboardType(UTType.jpeg.identifier),
-      NSPasteboard.PasteboardType(UTType.tiff.identifier),
-    ]
-    for type in imageTypes {
+    for type in pasteboardImageTypes {
       if let data = pasteboard.data(forType: type), !data.isEmpty {
-        return [try normalizedImageAttachment(data: data, suggestedName: "clipboard-image")]
+        return try await Task.detached(priority: .userInitiated) {
+          [try normalizedImageAttachment(data: data, suggestedName: "clipboard-image")]
+        }.value
       }
     }
 
@@ -106,11 +113,42 @@ enum MacAttachmentImporter {
     if let values = pasteboard.readObjects(forClasses: [NSURL.self], options: options), !values.isEmpty {
       return true
     }
-    return pasteboard.availableType(from: [
-      NSPasteboard.PasteboardType(UTType.png.identifier),
-      NSPasteboard.PasteboardType(UTType.jpeg.identifier),
-      NSPasteboard.PasteboardType(UTType.tiff.identifier),
-    ]) != nil
+    return pasteboard.availableType(from: pasteboardImageTypes) != nil
+  }
+
+  /// Determines whether `⌘V` in the composer should attach clipboard contents
+  /// rather than letting `TextField` perform a plain text paste.
+  ///
+  /// File URLs always attach (Finder also puts filenames as plain text). Raw
+  /// clipboard images attach only when no non-empty plain text is present, so
+  /// rich text copied from apps like Word or Keynote still pastes as text.
+  @MainActor
+  static func pasteboardPrefersAttachmentOnPaste() -> Bool {
+    let pasteboard = NSPasteboard.general
+    let options: [NSPasteboard.ReadingOptionKey: Any] = [
+      .urlReadingFileURLsOnly: true
+    ]
+    let hasFileURLs =
+      (pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [NSURL])?.isEmpty == false
+    let hasImageData = pasteboard.availableType(from: pasteboardImageTypes) != nil
+    let hasPlainText =
+      pasteboard.string(forType: .string)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .isEmpty == false
+    return shouldAttachOnPaste(
+      hasFileURLs: hasFileURLs,
+      hasImageData: hasImageData,
+      hasPlainText: hasPlainText
+    )
+  }
+
+  nonisolated static func shouldAttachOnPaste(
+    hasFileURLs: Bool,
+    hasImageData: Bool,
+    hasPlainText: Bool
+  ) -> Bool {
+    if hasFileURLs { return true }
+    return hasImageData && !hasPlainText
   }
 
   static func validateCombined(
@@ -293,6 +331,7 @@ struct MacAttachmentStrip: View {
   var addAttachment: (() -> Void)? = nil
   var maxAttachments: Int = MacAttachmentImporter.maximumCount
   var isImportingAttachments: Bool = false
+  var isEditingDisabled: Bool = false
   var onOpenAttachment: ((ChatAttachment) -> Void)? = nil
   var saveToLibrary: ((ChatAttachment) -> Void)? = nil
   var loadThumbnail: ((String, CGFloat) async -> Data?)?
@@ -313,7 +352,7 @@ struct MacAttachmentStrip: View {
           MacAttachmentTile(
             attachment: attachment,
             presentation: presentation,
-            remove: remove,
+            remove: isEditingDisabled ? nil : remove,
             onOpenAttachment: onOpenAttachment,
             saveToLibrary: saveToLibrary,
             loadThumbnail: loadThumbnail
@@ -324,7 +363,12 @@ struct MacAttachmentStrip: View {
           attachments.count < maxAttachments,
           let addAttachment
         {
-          addAttachmentTile(action: addAttachment)
+          MacAddAttachmentTile(
+            height: presentation.imageSize.height,
+            isImporting: isImportingAttachments,
+            isDisabled: isEditingDisabled || isImportingAttachments,
+            action: addAttachment
+          )
         }
       }
       .padding(.horizontal, presentation == .message ? 1 : 0)
@@ -335,36 +379,53 @@ struct MacAttachmentStrip: View {
     .frame(maxWidth: messageContentWidth)
     .frame(height: presentation.imageSize.height + 4)
   }
+}
 
-  private func addAttachmentTile(action: @escaping () -> Void) -> some View {
+private struct MacAddAttachmentTile: View {
+  let height: CGFloat
+  let isImporting: Bool
+  let isDisabled: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
     let tileShape = RoundedRectangle(cornerRadius: 11, style: .continuous)
-    return Button(action: action) {
+    Button(action: action) {
       VStack(spacing: 6) {
-        if isImportingAttachments {
+        if isImporting {
           ProgressView()
             .controlSize(.small)
         } else {
           Image(systemName: "plus")
             .font(.system(size: 18, weight: .semibold))
         }
-        Text(isImportingAttachments ? "Adding" : "Add")
+        Text(isImporting ? "Adding" : "Add")
           .font(.system(size: 11, weight: .semibold))
       }
-      .foregroundStyle(.secondary)
-      .frame(width: 72, height: presentation.imageSize.height)
-      .background(Color.primary.opacity(0.03), in: tileShape)
+      .foregroundStyle(isHovered && !isDisabled ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
+      .frame(width: 72, height: height)
+      .background(
+        (isHovered && !isDisabled ? MacDesignTokens.Colors.accentSoft.opacity(0.65) : Color.primary.opacity(0.03)),
+        in: tileShape
+      )
       .overlay(
         tileShape.stroke(
-          Color.primary.opacity(0.18),
+          isHovered && !isDisabled
+            ? MacDesignTokens.Colors.accent.opacity(0.55)
+            : Color.primary.opacity(0.18),
           style: StrokeStyle(lineWidth: 0.9, dash: [5, 4])
         )
       )
       .contentShape(tileShape)
     }
     .buttonStyle(.plain)
-    .disabled(isImportingAttachments)
-    .help(isImportingAttachments ? "Importing attachments…" : "Add another attachment")
-    .accessibilityLabel(isImportingAttachments ? "Importing attachment" : "Add another attachment")
+    .disabled(isDisabled)
+    .opacity(isDisabled && !isImporting ? MacDesignTokens.Control.disabledOpacity : 1)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help(isImporting ? "Importing attachments…" : "Add another attachment")
+    .accessibilityLabel(isImporting ? "Importing attachment" : "Add another attachment")
   }
 }
 
@@ -426,14 +487,14 @@ private struct MacAttachmentTile: View {
 
   private var hasContextMenu: Bool {
     if presentation == .composer {
-      return remove != nil
+      return onOpenAttachment != nil || remove != nil
     }
     return onOpenAttachment != nil || saveToLibrary != nil
   }
 
   var body: some View {
     let content = ZStack(alignment: .topTrailing) {
-      if presentation == .message, let onOpenAttachment {
+      if let onOpenAttachment {
         Button {
           onOpenAttachment(attachment)
         } label: {
@@ -458,6 +519,7 @@ private struct MacAttachmentTile: View {
         }
         .buttonStyle(.plain)
         .padding(5)
+        .help("Remove \(attachment.filename)")
         .accessibilityLabel("Remove \(attachment.filename)")
       }
     }
@@ -491,9 +553,16 @@ private struct MacAttachmentTile: View {
 
   @ViewBuilder
   private var tileContextMenu: some View {
-    if presentation == .composer, let remove {
-      Button("Remove", systemImage: "trash", role: .destructive) {
-        remove(attachment.id)
+    if presentation == .composer {
+      if let onOpenAttachment {
+        Button("Preview", systemImage: "eye") {
+          onOpenAttachment(attachment)
+        }
+      }
+      if let remove {
+        Button("Remove", systemImage: "trash", role: .destructive) {
+          remove(attachment.id)
+        }
       }
     } else if presentation == .message {
       if let onOpenAttachment {
@@ -683,6 +752,7 @@ private struct MacAttachmentTile: View {
 struct MacAttachmentPreviewSheet: View {
   let attachment: ChatAttachment
   let loadData: (String) async -> Data?
+  var preferLoadData: Bool = false
   var saveToLibrary: (() async -> String?)? = nil
 
   @Environment(\.dismiss) private var dismiss
@@ -860,7 +930,14 @@ struct MacAttachmentPreviewSheet: View {
     defer { isLoading = false }
 
     let data: Data?
-    if !attachment.data.isEmpty {
+    if preferLoadData {
+      let loaded = await loadData(attachment.id)
+      if let loaded, !loaded.isEmpty {
+        data = loaded
+      } else {
+        data = attachment.data.isEmpty ? nil : attachment.data
+      }
+    } else if !attachment.data.isEmpty {
       data = attachment.data
     } else {
       data = await loadData(attachment.id)

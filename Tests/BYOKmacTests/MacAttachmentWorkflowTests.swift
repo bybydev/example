@@ -1,6 +1,7 @@
 import AppKit
 import BYOKchatProviderCore
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import BYOKmac
@@ -174,6 +175,213 @@ struct MacAttachmentWorkflowTests {
         inputModalities: ["text", "image", "file"]
       )
     }
+  }
+
+  @Test("Pasteboard heuristic prefers attachments for files and pure images, but preserves rich text paste")
+  func pasteboardAttachHeuristic() {
+    #expect(
+      MacAttachmentImporter.shouldAttachOnPaste(
+        hasFileURLs: true,
+        hasImageData: false,
+        hasPlainText: true
+      )
+    )
+    #expect(
+      MacAttachmentImporter.shouldAttachOnPaste(
+        hasFileURLs: false,
+        hasImageData: true,
+        hasPlainText: false
+      )
+    )
+    #expect(
+      !MacAttachmentImporter.shouldAttachOnPaste(
+        hasFileURLs: false,
+        hasImageData: true,
+        hasPlainText: true
+      )
+    )
+    #expect(
+      !MacAttachmentImporter.shouldAttachOnPaste(
+        hasFileURLs: false,
+        hasImageData: false,
+        hasPlainText: true
+      )
+    )
+  }
+
+  @Test("Composer Return key policy respects IME marked text, newline modifiers, and send readiness")
+  func composerReturnKeyPolicy() {
+    #expect(
+      MacComposerSupport.returnKeyAction(
+        modifiers: [],
+        hasMarkedText: true,
+        canSend: true
+      ) == .passThroughToEditor
+    )
+    #expect(
+      MacComposerSupport.returnKeyAction(
+        modifiers: .shift,
+        hasMarkedText: false,
+        canSend: true
+      ) == .passThroughToEditor
+    )
+    #expect(
+      MacComposerSupport.returnKeyAction(
+        modifiers: .option,
+        hasMarkedText: false,
+        canSend: true
+      ) == .passThroughToEditor
+    )
+    #expect(
+      MacComposerSupport.returnKeyAction(
+        modifiers: [],
+        hasMarkedText: false,
+        canSend: true
+      ) == .send
+    )
+    #expect(
+      MacComposerSupport.returnKeyAction(
+        modifiers: .command,
+        hasMarkedText: false,
+        canSend: true
+      ) == .send
+    )
+    #expect(
+      MacComposerSupport.returnKeyAction(
+        modifiers: [],
+        hasMarkedText: false,
+        canSend: false
+      ) == .swallow
+    )
+  }
+
+  @Test("Composer attachment compatibility warning handles metadata-only text files, vision limits, and Anthropic limits")
+  func composerAttachmentCompatibilityWarning() {
+    let textOnlyEvidence: ModelCapabilityEvidence = {
+      var evidence = ModelCapabilityEvidence()
+      evidence.modalities(["text"], input: true)
+      return evidence
+    }()
+    let textOnlyModel = ProviderModel(
+      providerID: BuiltInProviders.anthropicID,
+      id: "text-only",
+      displayName: "Text Only",
+      inputModalities: ["text"],
+      capabilityEvidence: textOnlyEvidence
+    )
+    let textOnlyCapabilities = ModelCapabilityResolver.resolve(
+      kind: .anthropic,
+      modelID: "text-only",
+      model: textOnlyModel
+    )
+
+    // Metadata-only pending text file (empty data on UI object) is still allowed on text-only models.
+    let pendingTextFile = ChatAttachment(
+      kind: .file,
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      data: Data(),
+      declaredByteCount: 256
+    )
+    #expect(
+      MacComposerSupport.attachmentCompatibilityWarning(
+        attachments: [pendingTextFile],
+        providerKind: .anthropic,
+        capabilities: textOnlyCapabilities
+      ) == nil
+    )
+
+    // Image on text-only model surfaces an inline warning.
+    let pendingImage = ChatAttachment(
+      kind: .image,
+      filename: "screen.png",
+      mimeType: "image/png",
+      data: Data(),
+      declaredByteCount: 2_048
+    )
+    #expect(
+      MacComposerSupport.attachmentCompatibilityWarning(
+        attachments: [pendingImage],
+        providerKind: .anthropic,
+        capabilities: textOnlyCapabilities
+      ) != nil
+    )
+
+    let visionEvidence: ModelCapabilityEvidence = {
+      var evidence = ModelCapabilityEvidence()
+      evidence.modalities(["text", "image", "file"], input: true)
+      return evidence
+    }()
+    let visionModel = ProviderModel(
+      providerID: BuiltInProviders.anthropicID,
+      id: "claude-sonnet",
+      displayName: "Claude Sonnet",
+      inputModalities: ["text", "image", "file"],
+      capabilityEvidence: visionEvidence
+    )
+    let visionCapabilities = ModelCapabilityResolver.resolve(
+      kind: .anthropic,
+      modelID: "claude-sonnet",
+      model: visionModel
+    )
+
+    // Auto-transcodable HEIC image under 5 MB does not trigger a false warning.
+    let pendingHEIC = ChatAttachment(
+      kind: .image,
+      filename: "photo.heic",
+      mimeType: "image/heic",
+      data: Data(),
+      declaredByteCount: 1_024 * 1_024
+    )
+    #expect(
+      MacComposerSupport.attachmentCompatibilityWarning(
+        attachments: [pendingHEIC],
+        providerKind: .anthropic,
+        capabilities: visionCapabilities
+      ) == nil
+    )
+
+    // Image over 5 MB triggers Anthropic's 5 MB limit warning.
+    let largeAnthropicImage = ChatAttachment(
+      kind: .image,
+      filename: "huge.jpg",
+      mimeType: "image/jpeg",
+      data: Data(),
+      declaredByteCount: 6 * 1_024 * 1_024
+    )
+    #expect(
+      MacComposerSupport.attachmentCompatibilityWarning(
+        attachments: [largeAnthropicImage],
+        providerKind: .anthropic,
+        capabilities: visionCapabilities
+      )?.contains("5 MB") == true
+    )
+
+    // Non-PDF binary triggers Anthropic's format warning.
+    let archiveFile = ChatAttachment(
+      kind: .file,
+      filename: "bundle.zip",
+      mimeType: "application/zip",
+      data: Data(),
+      declaredByteCount: 4_096
+    )
+    #expect(
+      MacComposerSupport.attachmentCompatibilityWarning(
+        attachments: [archiveFile],
+        providerKind: .anthropic,
+        capabilities: visionCapabilities
+      )?.contains("PDFs") == true
+    )
+  }
+
+  @Test("Composer prompt merge trims whitespace and separates existing draft with a blank line")
+  func composerPromptMerge() {
+    #expect(MacComposerSupport.mergedPromptText(current: "", presetPrompt: "   ") == nil)
+    #expect(MacComposerSupport.mergedPromptText(current: "   ", presetPrompt: "Summarize") == "Summarize")
+    #expect(
+      MacComposerSupport.mergedPromptText(current: "Hello", presetPrompt: "Summarize")
+        == "Hello\n\nSummarize"
+    )
   }
 }
 

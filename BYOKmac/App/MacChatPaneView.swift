@@ -76,6 +76,8 @@ struct MacChatPane: View {
   let navigationTarget: MacTranscriptNavigationTarget?
   let composerFocusRequestID: Int
   let attachments: [ChatAttachment]
+  let isSending: Bool
+  let isImportingAttachments: Bool
   let sidebarVisible: Bool
   let toggleSidebar: () -> Void
   let chooseTarget: () -> Void
@@ -89,7 +91,7 @@ struct MacChatPane: View {
   let deleteConversation: () -> Void
   let startNewChat: () -> Void
   let focusComposer: () -> Void
-  let appendAttachments: ([ChatAttachment]) -> Void
+  let runAttachmentImport: (@escaping @MainActor () async -> [ChatAttachment]?) -> Void
   let removeAttachment: (String) -> Void
   let send: (String, [ChatAttachment]) -> Void
 
@@ -313,10 +315,12 @@ struct MacChatPane: View {
             hasConfigurationIssue: configurationIssue != nil,
             focusRequestID: composerFocusRequestID,
             attachments: attachments,
+            isSending: isSending,
+            isImportingAttachments: isImportingAttachments,
             chooseTarget: chooseTarget,
             manageProviders: manageProviders,
             configureTools: configureTools,
-            appendAttachments: appendAttachments,
+            runAttachmentImport: runAttachmentImport,
             removeAttachment: removeAttachment,
             send: send
           )
@@ -354,14 +358,12 @@ struct MacChatPane: View {
   }
 
   private func applyPromptPreset(_ preset: ProjectPromptPreset) {
-    let value = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty else { return }
     let current = chats.draft(for: conversationID)
-    if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      chats.setDraft(value, conversationID: conversationID)
-    } else {
-      chats.setDraft(current + "\n\n" + value, conversationID: conversationID)
-    }
+    guard let merged = MacComposerSupport.mergedPromptText(
+      current: current,
+      presetPrompt: preset.prompt
+    ) else { return }
+    chats.setDraft(merged, conversationID: conversationID)
     focusComposer()
   }
 }
@@ -2034,6 +2036,92 @@ private struct MacTranscriptSkeletonContent: View {
   }
 }
 
+nonisolated enum MacComposerSupport: Sendable {
+  enum ReturnKeyAction: Equatable, Sendable {
+    case send
+    case passThroughToEditor
+    case swallow
+  }
+
+  static func returnKeyAction(
+    modifiers: EventModifiers,
+    hasMarkedText: Bool,
+    canSend: Bool
+  ) -> ReturnKeyAction {
+    if hasMarkedText {
+      return .passThroughToEditor
+    }
+    if modifiers.contains(.shift) || modifiers.contains(.option) {
+      return .passThroughToEditor
+    }
+    if modifiers.contains(.control) {
+      return .passThroughToEditor
+    }
+    if modifiers.contains(.command) || modifiers.isEmpty {
+      return canSend ? .send : .swallow
+    }
+    return .passThroughToEditor
+  }
+
+  /// Checks whether any pending composer attachment is incompatible with the
+  /// currently selected provider/model. Uses `isTextLike` for metadata-only
+  /// pending files (whose bytes live on disk) and allows unsupported image
+  /// MIME types that will be auto-transcoded to JPEG on send.
+  static func attachmentCompatibilityWarning(
+    attachments: [ChatAttachment],
+    providerKind: ProviderKind,
+    capabilities: ResolvedModelCapabilities
+  ) -> String? {
+    guard !attachments.isEmpty else { return nil }
+
+    for attachment in attachments {
+      if attachment.byteCount > MacAttachmentImporter.maximumFileBytes {
+        return "\(attachment.filename) exceeds the 20 MB attachment limit."
+      }
+
+      let mime = attachment.mimeType.lowercased()
+      let capability: ModelCapability = if attachment.isImage {
+        .imageInput
+      } else if mime.hasPrefix("audio/") {
+        .audioInput
+      } else if attachment.isTextLike {
+        .textInput
+      } else {
+        .fileInput
+      }
+
+      if capabilities[capability] == .unsupported {
+        return "\(attachment.filename) is not supported by the selected model. Choose another model or remove it."
+      }
+
+      if providerKind == .anthropic {
+        if attachment.isImage, attachment.byteCount > 5 * 1_024 * 1_024 {
+          return "\(attachment.filename) exceeds Anthropic's 5 MB image limit."
+        }
+        if !attachment.isImage, !attachment.isTextLike, mime != "application/pdf" {
+          return "Anthropic supports text files, images, and PDFs. Remove \(attachment.filename) or switch models."
+        }
+      }
+    }
+
+    return nil
+  }
+
+  static func attachmentBudgetSummary(count: Int, totalBytes: Int) -> String {
+    let size = ByteCountFormatter.string(fromByteCount: Int64(max(0, totalBytes)), countStyle: .file)
+    return "\(count) / \(MacAttachmentImporter.maximumCount) · \(size)"
+  }
+
+  static func mergedPromptText(current: String, presetPrompt: String) -> String? {
+    let value = presetPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return nil }
+    if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return value
+    }
+    return current + "\n\n" + value
+  }
+}
+
 private struct MacComposerView: View {
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
@@ -2042,22 +2130,25 @@ private struct MacComposerView: View {
   let hasConfigurationIssue: Bool
   let focusRequestID: Int
   let attachments: [ChatAttachment]
+  let isSending: Bool
+  let isImportingAttachments: Bool
   let chooseTarget: () -> Void
   let manageProviders: () -> Void
   let configureTools: () -> Void
-  let appendAttachments: ([ChatAttachment]) -> Void
+  let runAttachmentImport: (@escaping @MainActor () async -> [ChatAttachment]?) -> Void
   let removeAttachment: (String) -> Void
   let send: (String, [ChatAttachment]) -> Void
 
   @Environment(MacWorkspaceModel.self) private var workspace
   @FocusState private var editorFocused: Bool
-  @State private var fileDropTargeted = false
+  @State private var urlDropTargeted = false
+  @State private var imageDropTargeted = false
   @State private var showingFileImporter = false
   @State private var showingLibraryPicker = false
-  @State private var importingAttachmentCount = 0
+  @State private var previewingAttachment: ChatAttachment?
 
-  private var isImportingAttachments: Bool {
-    importingAttachmentCount > 0
+  private var fileDropTargeted: Bool {
+    urlDropTargeted || imageDropTargeted
   }
 
   private var target: MacChatTarget? {
@@ -2077,6 +2168,32 @@ private struct MacComposerView: View {
     chats.isGenerating(conversationID)
   }
 
+  private var isAttachmentEditingDisabled: Bool {
+    isStreaming || isSending || target == nil
+  }
+
+  private var isAtAttachmentLimit: Bool {
+    attachments.count >= MacAttachmentImporter.maximumCount
+  }
+
+  private var remainingAttachmentSlots: Int {
+    max(0, MacAttachmentImporter.maximumCount - attachments.count)
+  }
+
+  private var totalAttachmentBytes: Int {
+    attachments.reduce(0) { $0 + $1.byteCount }
+  }
+
+  private var attachmentCompatibilityWarning: String? {
+    guard let target, let account = selectedAccount, !attachments.isEmpty else { return nil }
+    let capabilities = providers.capabilities(accountID: target.accountID, modelID: target.modelID)
+    return MacComposerSupport.attachmentCompatibilityWarning(
+      attachments: attachments,
+      providerKind: account.kind,
+      capabilities: capabilities
+    )
+  }
+
   private var draftBinding: Binding<String> {
     Binding(
       get: { chats.draft(for: conversationID) },
@@ -2089,7 +2206,9 @@ private struct MacComposerView: View {
       || !attachments.isEmpty)
       && target != nil
       && !hasConfigurationIssue
+      && attachmentCompatibilityWarning == nil
       && !isStreaming
+      && !isSending
       && !isImportingAttachments
   }
 
@@ -2120,17 +2239,53 @@ private struct MacComposerView: View {
     return mcp.activeToolCount(for: configuration)
   }
 
+  private var borderColor: Color {
+    if fileDropTargeted {
+      return MacDesignTokens.Colors.accent
+    }
+    if editorFocused {
+      return MacDesignTokens.Colors.accent.opacity(0.55)
+    }
+    return MacDesignTokens.Colors.separator.opacity(0.8)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
+      if let warning = attachmentCompatibilityWarning {
+        attachmentWarningBar(warning)
+      }
+
       if !attachments.isEmpty {
-        MacAttachmentStrip(
-          attachments: attachments,
-          presentation: .composer,
-          remove: removeAttachment,
-          addAttachment: { showingFileImporter = true },
-          isImportingAttachments: isImportingAttachments
-        )
-        .padding(.horizontal, 12)
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(spacing: 6) {
+            Text("Attachments")
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            Spacer(minLength: 8)
+            Text(
+              MacComposerSupport.attachmentBudgetSummary(
+                count: attachments.count,
+                totalBytes: totalAttachmentBytes
+              )
+            )
+            .font(.system(size: 11, weight: .medium).monospacedDigit())
+            .foregroundStyle(
+              isAtAttachmentLimit ? Color.orange : MacDesignTokens.Colors.textMuted
+            )
+          }
+          .padding(.horizontal, 14)
+
+          MacAttachmentStrip(
+            attachments: attachments,
+            presentation: .composer,
+            remove: removeAttachment,
+            addAttachment: { showingFileImporter = true },
+            isImportingAttachments: isImportingAttachments,
+            isEditingDisabled: isAttachmentEditingDisabled,
+            onOpenAttachment: { previewingAttachment = $0 }
+          )
+          .padding(.horizontal, 12)
+        }
         .padding(.top, 9)
         .padding(.bottom, 3)
       }
@@ -2151,12 +2306,16 @@ private struct MacComposerView: View {
     .clipShape(composerShape)
     .overlay {
       composerShape
-        .stroke(
-          fileDropTargeted ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.separator.opacity(0.8),
-          lineWidth: 0.75
-        )
+        .stroke(borderColor, lineWidth: fileDropTargeted ? 1.5 : (editorFocused ? 1 : 0.75))
+    }
+    .overlay {
+      if fileDropTargeted {
+        composerDropOverlay
+      }
     }
     .shadow(color: .black.opacity(0.10), radius: 14, y: 5)
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: editorFocused)
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: fileDropTargeted)
     .fileImporter(
       isPresented: $showingFileImporter,
       allowedContentTypes: [.item],
@@ -2174,29 +2333,41 @@ private struct MacComposerView: View {
       MacLibraryAttachmentPickerView(
         workspace: workspace,
         excludedIDs: Set(attachments.map(\.id)),
-        existingAttachmentByteCount: attachments.reduce(0) { $0 + $1.byteCount },
-        attach: appendAttachments
+        existingAttachmentByteCount: totalAttachmentBytes,
+        attach: { additions in
+          runAttachmentImport { additions }
+        }
+      )
+    }
+    .sheet(item: $previewingAttachment) { attachment in
+      MacAttachmentPreviewSheet(
+        attachment: attachment,
+        loadData: { id in
+          await chats.attachmentData(id)
+        },
+        preferLoadData: true
       )
     }
     .dropDestination(for: URL.self) { urls, _ in
-      guard !urls.isEmpty, !isStreaming else { return false }
+      guard !urls.isEmpty, !isAttachmentEditingDisabled else { return false }
       importURLs(urls)
       return true
     } isTargeted: { targeted in
-      fileDropTargeted = targeted
+      urlDropTargeted = targeted && !isAttachmentEditingDisabled
     }
     .dropDestination(for: MacDroppedImage.self) { images, _ in
-      guard !images.isEmpty, !isStreaming else { return false }
+      guard !images.isEmpty, !isAttachmentEditingDisabled else { return false }
       importImages(images)
       return true
     } isTargeted: { targeted in
-      fileDropTargeted = targeted
+      imageDropTargeted = targeted && !isAttachmentEditingDisabled
     }
     .onChange(of: focusRequestID) { _, _ in
       editorFocused = true
     }
     .onChange(of: conversationID) { _, _ in
-      fileDropTargeted = false
+      urlDropTargeted = false
+      imageDropTargeted = false
     }
   }
 
@@ -2204,29 +2375,107 @@ private struct MacComposerView: View {
     RoundedRectangle(cornerRadius: 18, style: .continuous)
   }
 
+  private var composerDropOverlay: some View {
+    ZStack {
+      composerShape
+        .fill(MacDesignTokens.Colors.accentSoft.opacity(0.85))
+      composerShape
+        .strokeBorder(
+          MacDesignTokens.Colors.accent,
+          style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+        )
+      Label(
+        isAtAttachmentLimit
+          ? "Attachment limit reached (\(MacAttachmentImporter.maximumCount)/\(MacAttachmentImporter.maximumCount))"
+          : "Drop files or images to attach",
+        systemImage: isAtAttachmentLimit ? "exclamationmark.circle" : "arrow.down.doc"
+      )
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(isAtAttachmentLimit ? Color.orange : MacDesignTokens.Colors.accent)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 8)
+      .background(MacDesignTokens.Colors.surface.opacity(0.92), in: Capsule())
+    }
+    .allowsHitTesting(false)
+  }
+
+  private func attachmentWarningBar(_ message: String) -> some View {
+    HStack(spacing: 8) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .font(.system(size: 11.5, weight: .semibold))
+        .foregroundStyle(.orange)
+        .accessibilityHidden(true)
+
+      Text(message)
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      Spacer(minLength: 6)
+
+      Button("Switch Model") {
+        editorFocused = false
+        chooseTarget()
+      }
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+      .disabled(isStreaming || isSending)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .background(Color.orange.opacity(0.10))
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(Color.orange.opacity(0.28))
+        .frame(height: 0.75)
+    }
+  }
+
   private var messageField: some View {
     TextField(
-      target == nil ? "Set up a provider to chat…" : "Message…",
+      target == nil
+        ? "Set up a provider to chat…"
+        : (isStreaming ? "Draft a follow-up message…" : "Message…"),
       text: draftBinding,
       axis: .vertical
     )
     .textFieldStyle(.plain)
     .font(.system(size: 15))
-    .lineLimit(1...5)
+    .lineLimit(1...8)
     .focused($editorFocused)
     .padding(.horizontal, 3)
     .padding(.vertical, 6)
-    .disabled(target == nil || isStreaming)
+    .disabled(target == nil)
     .accessibilityLabel("Message")
     .accessibilityHint(
       target == nil
         ? "Set up a provider before composing a message"
-        : "Return sends. Shift Return inserts a new line"
+        : "Return sends. Shift Return or Option Return inserts a new line"
     )
     .onKeyPress(keys: [.return], phases: .down) { press in
-      if press.modifiers.contains(.shift) { return .ignored }
-      guard canSend else { return .ignored }
-      submit()
+      let hasMarkedText = (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
+      switch MacComposerSupport.returnKeyAction(
+        modifiers: press.modifiers,
+        hasMarkedText: hasMarkedText,
+        canSend: canSend
+      ) {
+      case .send:
+        submit()
+        return .handled
+      case .passThroughToEditor:
+        return .ignored
+      case .swallow:
+        return .handled
+      }
+    }
+    .onKeyPress(characters: CharacterSet(charactersIn: "vV"), phases: .down) { press in
+      guard press.modifiers == .command,
+        !isAttachmentEditingDisabled,
+        !isImportingAttachments,
+        MacAttachmentImporter.pasteboardPrefersAttachmentOnPaste()
+      else {
+        return .ignored
+      }
+      importPasteboard()
       return .handled
     }
   }
@@ -2236,6 +2485,10 @@ private struct MacComposerView: View {
       attachmentMenu
       targetButton
 
+      if enabledToolCount > 0 {
+        toolsPillButton
+      }
+
       Spacer(minLength: 10)
       sendButton
     }
@@ -2244,17 +2497,30 @@ private struct MacComposerView: View {
 
   private var attachmentMenu: some View {
     Menu {
+      if isAtAttachmentLimit {
+        Label(
+          "Attachment limit reached (\(MacAttachmentImporter.maximumCount)/\(MacAttachmentImporter.maximumCount))",
+          systemImage: "exclamationmark.circle"
+        )
+        .disabled(true)
+        Divider()
+      }
+
       Button("Choose Files…", systemImage: "doc.badge.plus") {
         showingFileImporter = true
       }
+      .disabled(isAtAttachmentLimit)
+
       Button("Paste Image or File", systemImage: "doc.on.clipboard") {
         importPasteboard()
       }
+      .disabled(isAtAttachmentLimit)
 
       Divider()
       Button("From Library…", systemImage: "books.vertical") {
         showingLibraryPicker = true
       }
+      .disabled(isAtAttachmentLimit)
 
       if !projectFiles.isEmpty {
         Divider()
@@ -2271,7 +2537,7 @@ private struct MacComposerView: View {
                 Text(file.filename)
               }
             }
-            .disabled(isAttached)
+            .disabled(isAttached || isAtAttachmentLimit)
           }
         }
       }
@@ -2292,24 +2558,17 @@ private struct MacComposerView: View {
         action: configureTools
       )
     } label: {
-      Group {
-        if isImportingAttachments {
-          ProgressView()
-            .controlSize(.small)
-        } else {
-          Image(systemName: "plus")
-            .font(.system(size: 16, weight: .regular))
-        }
-      }
-      .frame(width: 34, height: 34)
-      .contentShape(Circle())
+      MacComposerPlusButtonLabel(
+        isImporting: isImportingAttachments,
+        isDisabled: isAttachmentEditingDisabled || isImportingAttachments
+      )
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     // Menu is width-greedy on macOS; without this it absorbs the flexible
     // space in bottomControls and pushes the model pill toward the send button.
     .fixedSize()
-    .disabled(isStreaming || target == nil || isImportingAttachments)
+    .disabled(isAttachmentEditingDisabled || isImportingAttachments)
     .accessibilityLabel(isImportingAttachments ? "Importing attachments" : "Add or configure")
     .help(
       isImportingAttachments
@@ -2319,59 +2578,45 @@ private struct MacComposerView: View {
   }
 
   private var targetButton: some View {
-    Button {
+    MacComposerTargetPillButton(
+      title: target == nil ? "Set Up Provider" : targetLabel,
+      showsChevron: target != nil,
+      isDisabled: isStreaming || isSending
+    ) {
       editorFocused = false
       if target == nil {
         manageProviders()
       } else {
         chooseTarget()
       }
-    } label: {
-      Text(target == nil ? "Set Up Provider" : targetLabel)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(.primary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.85)
-        .padding(.horizontal, 9)
-        .frame(height: 26)
-        .background(Color.primary.opacity(0.025), in: Capsule())
-        .overlay {
-          Capsule()
-            .stroke(MacDesignTokens.Colors.separator.opacity(0.95), lineWidth: 0.75)
-        }
-        .contentShape(Capsule())
     }
-    .buttonStyle(.plain)
-    .disabled(isStreaming)
-    .help(target == nil ? "Set up a provider" : "Change model")
+    .help(target == nil ? "Set up a provider" : "Change model or reasoning (\(targetDetails))")
     .accessibilityLabel("Change provider, model, and reasoning")
     .accessibilityValue(targetDetails)
   }
 
+  private var toolsPillButton: some View {
+    MacComposerToolsPillButton(
+      count: enabledToolCount,
+      isDisabled: isStreaming || isSending,
+      action: configureTools
+    )
+    .help("\(enabledToolCount) active MCP \(enabledToolCount == 1 ? "tool" : "tools") — click to configure")
+    .accessibilityLabel("Configure tools, \(enabledToolCount) active")
+  }
+
   private var sendButton: some View {
-    Button {
+    MacComposerSendButton(
+      isStreaming: isStreaming,
+      isSending: isSending,
+      canSend: canSend
+    ) {
       if isStreaming {
         Task { await chats.stop(conversationID) }
       } else {
         submit()
-        editorFocused = false
       }
-    } label: {
-      Image(systemName: isStreaming ? "stop.fill" : "arrow.up")
-        .font(.system(size: 13, weight: .bold))
-        .foregroundStyle(.white)
-        .frame(width: 34, height: 34)
-        .background(
-          MacDesignTokens.Colors.accent.opacity(isStreaming || canSend ? 0.95 : 0.34),
-          in: Circle()
-        )
     }
-    .buttonStyle(.plain)
-    .disabled(!isStreaming && !canSend)
-    .accessibilityLabel(isStreaming ? "Stop response" : "Send message")
-    .accessibilityHint(
-      isStreaming ? "Stops the current model response" : "Sends the current message and attachments"
-    )
   }
 
   private var modelLabel: String {
@@ -2409,77 +2654,264 @@ private struct MacComposerView: View {
     guard (!text.isEmpty || !attachments.isEmpty),
       target != nil,
       !hasConfigurationIssue,
+      attachmentCompatibilityWarning == nil,
       !isStreaming,
+      !isSending,
       !isImportingAttachments
     else { return }
     send(text, attachments)
   }
 
   private func applyPromptPreset(_ preset: ProjectPromptPreset) {
-    let value = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty else { return }
-    let current = draftBinding.wrappedValue
-    if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      draftBinding.wrappedValue = value
-    } else {
-      draftBinding.wrappedValue = current + "\n\n" + value
-    }
+    guard let merged = MacComposerSupport.mergedPromptText(
+      current: draftBinding.wrappedValue,
+      presetPrompt: preset.prompt
+    ) else { return }
+    draftBinding.wrappedValue = merged
     editorFocused = true
   }
 
   private func importURLs(_ urls: [URL]) {
-    guard !isStreaming else { return }
-    importingAttachmentCount += 1
-    Task { @MainActor in
-      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
+    guard !isAttachmentEditingDisabled else { return }
+    guard urls.count <= remainingAttachmentSlots else {
+      chats.errorMessage = "A message can include at most \(MacAttachmentImporter.maximumCount) attachments."
+      return
+    }
+    runAttachmentImport {
       do {
-        appendAttachments(try await MacAttachmentImporter.importURLs(urls))
+        return try await MacAttachmentImporter.importURLs(urls)
       } catch {
         MacAppAnalytics.reportError("attachment_import_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
+        return nil
       }
     }
   }
 
   private func importImages(_ images: [MacDroppedImage]) {
-    guard !isStreaming else { return }
-    importingAttachmentCount += 1
-    Task { @MainActor in
-      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
+    guard !isAttachmentEditingDisabled else { return }
+    guard images.count <= remainingAttachmentSlots else {
+      chats.errorMessage = "A message can include at most \(MacAttachmentImporter.maximumCount) attachments."
+      return
+    }
+    runAttachmentImport {
       do {
-        appendAttachments(try await MacAttachmentImporter.importDroppedImages(images))
+        return try await MacAttachmentImporter.importDroppedImages(images)
       } catch {
         MacAppAnalytics.reportError("attachment_import_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
+        return nil
       }
     }
   }
 
   private func importPasteboard() {
-    guard !isStreaming else { return }
-    importingAttachmentCount += 1
-    Task { @MainActor in
-      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
+    guard !isAttachmentEditingDisabled else { return }
+    guard !isAtAttachmentLimit else {
+      chats.errorMessage = "A message can include at most \(MacAttachmentImporter.maximumCount) attachments."
+      return
+    }
+    runAttachmentImport {
       do {
-        appendAttachments(try await MacAttachmentImporter.importPasteboard())
+        return try await MacAttachmentImporter.importPasteboard()
       } catch {
         MacAppAnalytics.reportError("attachment_import_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
+        return nil
       }
     }
   }
 
   private func attachProjectFile(_ file: ProjectFile) {
-    guard !isStreaming, !attachments.contains(where: { $0.id == file.id }) else { return }
-    importingAttachmentCount += 1
-    Task { @MainActor in
-      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
+    guard !isAttachmentEditingDisabled, !attachments.contains(where: { $0.id == file.id }) else { return }
+    guard !isAtAttachmentLimit else {
+      chats.errorMessage = "A message can include at most \(MacAttachmentImporter.maximumCount) attachments."
+      return
+    }
+    runAttachmentImport {
       if let attachment = await workspace.attachment(for: file) {
-        appendAttachments([attachment])
-      } else if let error = workspace.consumeErrorMessage() {
+        return [attachment]
+      }
+      if let error = workspace.consumeErrorMessage() {
         chats.errorMessage = error
       }
+      return nil
     }
+  }
+}
+
+private struct MacComposerPlusButtonLabel: View {
+  let isImporting: Bool
+  let isDisabled: Bool
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Group {
+      if isImporting {
+        ProgressView()
+          .controlSize(.small)
+      } else {
+        Image(systemName: "plus")
+          .font(.system(size: 16, weight: .regular))
+          .foregroundStyle(
+            isHovered && !isDisabled
+              ? MacDesignTokens.Colors.textPrimary
+              : MacDesignTokens.Colors.textMuted
+          )
+      }
+    }
+    .frame(width: 34, height: 34)
+    .background(
+      Color.primary.opacity(isHovered && !isDisabled ? MacDesignTokens.Control.hoverOpacity : 0),
+      in: Circle()
+    )
+    .contentShape(Circle())
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+  }
+}
+
+private struct MacComposerTargetPillButton: View {
+  let title: String
+  let showsChevron: Bool
+  let isDisabled: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 5) {
+        Text(title)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
+        if showsChevron {
+          Image(systemName: "chevron.up.chevron.down")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      }
+      .padding(.horizontal, 10)
+      .frame(height: 26)
+      .background(
+        Color.primary.opacity(isHovered && !isDisabled ? 0.065 : 0.025),
+        in: Capsule()
+      )
+      .overlay {
+        Capsule()
+          .stroke(
+            isHovered && !isDisabled
+              ? MacDesignTokens.Colors.accent.opacity(0.45)
+              : MacDesignTokens.Colors.separator.opacity(0.95),
+            lineWidth: 0.75
+          )
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(isDisabled)
+    .opacity(isDisabled ? MacDesignTokens.Control.disabledOpacity : 1)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+  }
+}
+
+private struct MacComposerToolsPillButton: View {
+  let count: Int
+  let isDisabled: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 4) {
+        Image(systemName: "wrench.and.screwdriver")
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+        Text("\(count)")
+          .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      }
+      .padding(.horizontal, 9)
+      .frame(height: 26)
+      .background(
+        MacDesignTokens.Colors.accentSoft.opacity(isHovered && !isDisabled ? 0.95 : 0.65),
+        in: Capsule()
+      )
+      .overlay {
+        Capsule()
+          .stroke(
+            MacDesignTokens.Colors.accent.opacity(isHovered && !isDisabled ? 0.55 : 0.30),
+            lineWidth: 0.75
+          )
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(isDisabled)
+    .opacity(isDisabled ? MacDesignTokens.Control.disabledOpacity : 1)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+  }
+}
+
+private struct MacComposerSendButton: View {
+  let isStreaming: Bool
+  let isSending: Bool
+  let canSend: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  private var isInteractive: Bool {
+    isStreaming || (canSend && !isSending)
+  }
+
+  private var fillOpacity: Double {
+    if isSending { return 0.72 }
+    guard isInteractive else { return 0.34 }
+    return isHovered ? 0.86 : 0.96
+  }
+
+  var body: some View {
+    Button(action: action) {
+      Group {
+        if isSending && !isStreaming {
+          ProgressView()
+            .controlSize(.small)
+            .tint(.white)
+        } else {
+          Image(systemName: isStreaming ? "stop.fill" : "arrow.up")
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
+        }
+      }
+      .frame(width: 34, height: 34)
+      .background(
+        MacDesignTokens.Colors.accent.opacity(fillOpacity),
+        in: Circle()
+      )
+      .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!isInteractive)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help(
+      isStreaming
+        ? "Stop response (⌘.)"
+        : (isSending ? "Sending…" : "Send message (Return)")
+    )
+    .accessibilityLabel(
+      isStreaming ? "Stop response" : (isSending ? "Sending message" : "Send message")
+    )
+    .accessibilityHint(
+      isStreaming ? "Stops the current model response" : "Sends the current message and attachments"
+    )
   }
 }
 
