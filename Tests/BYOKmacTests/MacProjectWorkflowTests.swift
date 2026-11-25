@@ -287,6 +287,205 @@ struct MacProjectWorkflowTests {
     #expect(sameExt.errorMessage == nil)
     #expect(sameExt.warningMessage == nil)
   }
+
+  @Test("Project defaults summary flags disabled accounts and unavailable models")
+  func projectDefaultsSummaryFlagsUnavailableStates() async throws {
+    let context = try await makeMacProjectTestContext()
+    defer { context.cleanup() }
+
+    let providerID = try #require(ProviderKind.deepSeek.defaultProviderID)
+    let activeModel = ProviderModel(providerID: providerID, id: "active-model", displayName: "Active")
+    let staleModel = ProviderModel(providerID: providerID, id: "stale-model", displayName: "Stale")
+    let account = try await context.services.accountManager.createAccount(
+      kind: .deepSeek,
+      label: "DeepSeek",
+      credential: "test-key",
+      defaultModelID: activeModel.id
+    )
+    try await context.services.providerWorkspace.mergeModels([activeModel, staleModel], for: account.id)
+    try await context.services.providerWorkspace.mergeModels([activeModel], for: account.id)
+
+    let providers = MacProviderModel(services: context.services)
+    try await providers.load()
+
+    let appDefault = MacProjectDefaultsSummary.evaluate(
+      project: ChatProject(name: "Default"),
+      providers: providers
+    )
+    #expect(!appDefault.hasIssue)
+    #expect(appDefault.cardSummary == "App defaults")
+
+    let healthy = MacProjectDefaultsSummary.evaluate(
+      project: ChatProject(name: "Healthy", accountID: account.id, modelID: activeModel.id),
+      providers: providers
+    )
+    #expect(!healthy.hasIssue)
+    #expect(healthy.cardSummary == "DeepSeek · Active")
+
+    let unavailableModel = MacProjectDefaultsSummary.evaluate(
+      project: ChatProject(name: "StaleModel", accountID: account.id, modelID: staleModel.id),
+      providers: providers
+    )
+    #expect(unavailableModel.hasIssue)
+    #expect(!unavailableModel.isAccountUnavailable)
+    #expect(unavailableModel.isModelUnavailable)
+
+    let missingAccount = MacProjectDefaultsSummary.evaluate(
+      project: ChatProject(name: "MissingAccount", accountID: ProviderAccountID(rawValue: "missing")),
+      providers: providers
+    )
+    #expect(missingAccount.hasIssue)
+    #expect(missingAccount.isAccountUnavailable)
+
+    var disabledAccount = account
+    disabledAccount.isEnabled = false
+    try await context.services.accountManager.updateAccount(disabledAccount)
+    try await providers.load()
+    let disabledStatus = MacProjectDefaultsSummary.evaluate(
+      project: ChatProject(name: "DisabledAccount", accountID: account.id, modelID: activeModel.id),
+      providers: providers
+    )
+    #expect(disabledStatus.hasIssue)
+    #expect(disabledStatus.isAccountUnavailable)
+    #expect(disabledStatus.accountLabel.contains("Disabled"))
+  }
+
+  @Test("Project chat date grouper buckets Today, Yesterday, Previous 7 Days, and older months")
+  func projectChatDateGrouperBucketsByDayBoundary() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+    let now = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 5, day: 15, hour: 14, minute: 0))
+    )
+    let todayDate = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 5, day: 15, hour: 8, minute: 0))
+    )
+    let yesterdayDate = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 5, day: 14, hour: 23, minute: 30))
+    )
+    let weekDate = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 5, day: 10, hour: 12, minute: 0))
+    )
+    let olderDate = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 3, day: 20, hour: 12, minute: 0))
+    )
+
+    func makeConversation(_ id: String, updatedAt: Date) -> ChatConversation {
+      ChatConversation(
+        id: ConversationID(rawValue: id),
+        title: id,
+        createdAt: updatedAt,
+        updatedAt: updatedAt,
+        providerID: "deepseek",
+        accountID: ProviderAccountID(rawValue: "acct"),
+        modelID: "m"
+      )
+    }
+
+    let sections = MacProjectChatDateGrouper.sections(
+      for: [
+        makeConversation("older", updatedAt: olderDate),
+        makeConversation("week", updatedAt: weekDate),
+        makeConversation("today", updatedAt: todayDate),
+        makeConversation("yesterday", updatedAt: yesterdayDate),
+      ],
+      now: now,
+      calendar: calendar
+    )
+
+    #expect(sections.count == 4)
+    #expect(sections[0].title == "Today")
+    #expect(sections[0].conversations.map(\.id) == ["today"])
+    #expect(sections[1].title == "Yesterday")
+    #expect(sections[1].conversations.map(\.id) == ["yesterday"])
+    #expect(sections[2].title == "Previous 7 Days")
+    #expect(sections[2].conversations.map(\.id) == ["week"])
+    #expect(sections[3].conversations.map(\.id) == ["older"])
+  }
+
+  @Test("Project dropped-image import preserves PNG and normalizes TIFF while enforcing limits")
+  func projectDroppedImageImportPreservesAndNormalizes() throws {
+    let rep = try #require(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: 4,
+        pixelsHigh: 4,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      )
+    )
+    let pngData = try #require(rep.representation(using: .png, properties: [:]))
+    let tiffData = try #require(rep.tiffRepresentation)
+
+    let imported = try MacProjectFileImportSupport.importDroppedImages(
+      [
+        MacDroppedImage(data: pngData),
+        MacDroppedImage(data: tiffData),
+      ],
+      existingCount: 0,
+      existingBytes: 0
+    )
+
+    #expect(imported.count == 2)
+    #expect(imported[0].mimeType == "image/png")
+    #expect(imported[0].filename.hasSuffix(".png"))
+    #expect(imported[1].mimeType == "image/jpeg")
+    #expect(imported[1].filename.hasSuffix(".jpg"))
+    #expect(imported[1].data.prefix(3) == Data([0xFF, 0xD8, 0xFF]))
+
+    #expect(throws: ProjectWorkspaceError.tooManyFiles) {
+      _ = try MacProjectFileImportSupport.importDroppedImages(
+        [MacDroppedImage(data: pngData)],
+        existingCount: ProjectWorkspaceStore.maxFileCount,
+        existingBytes: 0
+      )
+    }
+  }
+
+  @Test("Workspace batch chat assignment and Library lookup stay synchronized")
+  func workspaceBatchChatAssignmentAndLibraryLookup() async throws {
+    let context = try await makeMacProjectTestContext()
+    defer { context.cleanup() }
+
+    let workspace = MacWorkspaceModel(services: context.services)
+    await workspace.reload()
+
+    let file = ProjectFile(
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      data: Data("# Notes".utf8)
+    )
+    let projectID = try #require(
+      await workspace.createProject(
+        name: "Alpha",
+        symbolName: "folder.fill",
+        accentID: "blue",
+        accountID: nil,
+        modelID: nil,
+        instructions: "",
+        files: [file],
+        mcpConfiguration: MCPChatToolConfiguration(),
+        promptPresets: [],
+        toolPresets: []
+      )
+    )
+
+    let first: ConversationID = "conv-1"
+    let second: ConversationID = "conv-2"
+    #expect(await workspace.assignConversations([first, second], to: projectID))
+    #expect(workspace.projectID(for: first) == projectID)
+    #expect(workspace.projectID(for: second) == projectID)
+    #expect(workspace.statusMessage == "Added 2 chats to Alpha")
+
+    #expect(!workspace.isFileInLibrary(file.id))
+    #expect(await workspace.saveProjectFileToLibrary(file, projectID: projectID))
+    #expect(workspace.isFileInLibrary(file.id))
+  }
 }
 
 @MainActor

@@ -581,8 +581,11 @@ struct MacAllChatsView: View {
 
   private func assignProject(_ projectID: ProjectID?, to conversation: ChatConversation) {
     Task { @MainActor in
+      let wasRestricted = projectID.map { workspace.isProjectRestricted($0) } ?? false
       if await workspace.assignConversation(conversation.id, to: projectID) {
         await mcp.reloadFromStorage()
+      } else if let error = workspace.consumeErrorMessage(), !wasRestricted {
+        toastCenter?.error(error)
       }
     }
   }
@@ -592,6 +595,7 @@ struct MacAllChatsView: View {
     deleteTarget = nil
     Task { @MainActor in
       if await chats.deleteConversation(target.id) {
+        await workspace.reload()
         await mcp.reloadFromStorage()
         pinnedConversationIDs = MacSidebarPinStore.removing(target.id, from: pinnedConversationIDs)
         toastCenter?.showStatus("Conversation deleted.")

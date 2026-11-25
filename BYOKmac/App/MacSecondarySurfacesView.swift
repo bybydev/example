@@ -205,8 +205,11 @@ struct MacSecondarySurfacesView: View {
             utilitySheets.dismiss()
           },
           startNewChat: { projectID, prompt in
-            model.requestNewChat(projectID: projectID, initialDraft: prompt)
+            guard model.requestNewChat(projectID: projectID, initialDraft: prompt) else {
+              return false
+            }
             utilitySheets.dismiss()
+            return true
           }
         )
       } else {

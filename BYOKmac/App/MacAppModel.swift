@@ -304,21 +304,24 @@ final class MacAppModel {
     NSWorkspace.shared.activateFileViewerSelecting([lastRecoveryBackupURL])
   }
 
-  func requestNewChat(projectID: ProjectID? = nil, initialDraft: String? = nil) {
-    guard isReady else { return }
+  @discardableResult
+  func requestNewChat(projectID: ProjectID? = nil, initialDraft: String? = nil) -> Bool {
+    guard isReady else { return false }
 
     if let projectID, workspace?.isProjectRestricted(projectID) == true {
-      chats?.errorMessage = MacProAccess.restoredResourceBlockedMessage("project")
+      if MacProAccess.isCheckingEntitlement {
+        workspace?.errorMessage = MacProAccess.restoredResourceBlockedMessage("project")
+      }
       MacProAccess.requestUpgrade(.projects)
-      return
+      return false
     }
 
     if let projectID, let project = workspace?.project(projectID), project.accountID != nil {
       guard let target = projectTarget(projectID) else {
-        chats?.errorMessage = project.modelID == nil
+        workspace?.errorMessage = project.modelID == nil
           ? "This project's provider account is unavailable. Edit the project defaults first."
           : "This project's provider account or default model is unavailable. Edit the project defaults first."
-        return
+        return false
       }
       chats?.queueNewChat(projectID: projectID, initialDraft: initialDraft, target: target)
     } else {
@@ -329,6 +332,7 @@ final class MacAppModel {
       )
     }
     newChatRequestID &+= 1
+    return true
   }
 
   func requestConversationSearch() {

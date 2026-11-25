@@ -1082,7 +1082,9 @@ struct MacChatToolsView: View {
 
 struct MacProjectToolsConfigurationView: View {
   @Bindable var mcp: MacMCPModel
-  @Binding var configuration: MCPChatToolConfiguration
+  let configuration: MCPChatToolConfiguration
+  var isDisabled: Bool = false
+  let onConfigurationChange: (MCPChatToolConfiguration) -> Void
   @State private var showingAddServer = false
 
   var body: some View {
@@ -1090,21 +1092,33 @@ struct MacProjectToolsConfigurationView: View {
       mcp: mcp,
       configuration: configuration,
       context: .project,
+      isReadOnly: isDisabled,
       addServer: {
         guard MacProAccess.requireMCPServerCapacity(currentCount: mcp.servers.count) else { return }
         showingAddServer = true
       },
       setServerEnabled: { serverID, enabled in
-        configuration.enabledServerIDs.removeAll { $0 == serverID }
-        if enabled { configuration.enabledServerIDs.append(serverID) }
-        configuration.enabledServerIDs.sort { $0.rawValue < $1.rawValue }
+        if enabled, mcp.isServerRestricted(serverID) {
+          if MacProAccess.isCheckingEntitlement {
+            mcp.errorMessage = MacProAccess.restoredResourceBlockedMessage("MCP server")
+          }
+          MacProAccess.requestUpgrade(.mcpServers)
+          return
+        }
+        var updated = configuration
+        updated.enabledServerIDs.removeAll { $0 == serverID }
+        if enabled { updated.enabledServerIDs.append(serverID) }
+        updated.enabledServerIDs.sort { $0.rawValue < $1.rawValue }
+        onConfigurationChange(updated)
       },
       setPolicy: { name, policy in
+        var updated = configuration
         if policy == .ask {
-          configuration.toolPolicies.removeValue(forKey: name)
+          updated.toolPolicies.removeValue(forKey: name)
         } else {
-          configuration.toolPolicies[name] = policy
+          updated.toolPolicies[name] = policy
         }
+        onConfigurationChange(updated)
       }
     )
     .sheet(isPresented: $showingAddServer) {
@@ -1119,12 +1133,13 @@ private struct MacMCPServerConfigurationList: View {
   let context: MacMCPConfigurationContext
   var isGenerating: Bool = false
   var modelSupportsTools: Bool = true
+  var isReadOnly: Bool = false
   var addServer: (() -> Void)? = nil
   let setServerEnabled: (MCPServerID, Bool) -> Void
   let setPolicy: (String, ChatToolPermissionPolicy) -> Void
 
   private var isMutationDisabled: Bool {
-    isGenerating || (mcp.isBusy && isChatContext)
+    isGenerating || isReadOnly || (mcp.isBusy && isChatContext)
   }
 
   var body: some View {
@@ -1178,7 +1193,7 @@ private struct MacMCPServerConfigurationList: View {
               addServer()
             }
             .buttonStyle(MacActionButtonStyle(.primary))
-            .disabled(mcp.isBusy)
+            .disabled(mcp.isBusy || isReadOnly)
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1197,6 +1212,7 @@ private struct MacMCPServerConfigurationList: View {
 
   private func serverConfigurationCard(_ server: MCPRemoteServer) -> some View {
     let enabled = configuration.isServerEnabled(server.id)
+    let isRestricted = mcp.isServerRestricted(server.id)
     let missingCredential = server.authentication.kind != .none && !mcp.hasCredential(server.id)
     let tools = mcp.tools(for: server.id)
     let snapshot = mcp.snapshot(for: server.id)
@@ -1204,7 +1220,14 @@ private struct MacMCPServerConfigurationList: View {
     return VStack(alignment: .leading, spacing: 0) {
       DisclosureGroup {
         VStack(alignment: .leading, spacing: 8) {
-          if !server.isEnabled {
+          if isRestricted {
+            Label(
+              "This restored MCP server requires BYOK Pro to use.",
+              systemImage: "crown.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+          } else if !server.isEnabled {
             Label(
               "Enable this server globally in MCP Servers before using its tools here.",
               systemImage: "pause.circle"
@@ -1237,7 +1260,7 @@ private struct MacMCPServerConfigurationList: View {
                 Task { _ = await mcp.refresh(server.id) }
               }
               .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(mcp.isBusy)
+              .disabled(mcp.isBusy || isReadOnly)
             }
           } else {
             ForEach(tools) { binding in
@@ -1250,15 +1273,31 @@ private struct MacMCPServerConfigurationList: View {
         HStack(spacing: 10) {
           Circle()
             .fill(
-              !server.isEnabled
-                ? MacDesignTokens.Colors.textMuted.opacity(0.5)
-                : (missingCredential ? Color.orange : MacDesignTokens.Colors.accent)
+              isRestricted
+                ? Color.orange
+                : (!server.isEnabled
+                  ? MacDesignTokens.Colors.textMuted.opacity(0.5)
+                  : (missingCredential ? Color.orange : MacDesignTokens.Colors.accent))
             )
             .frame(width: 8, height: 8)
           VStack(alignment: .leading, spacing: 2) {
-            Text(server.name)
-              .font(.system(size: 13.5, weight: .medium))
-            if !server.isEnabled {
+            HStack(spacing: 6) {
+              Text(server.name)
+                .font(.system(size: 13.5, weight: .medium))
+              if isRestricted {
+                Label("Pro", systemImage: "crown.fill")
+                  .font(.caption2.weight(.semibold))
+                  .foregroundStyle(.orange)
+                  .padding(.horizontal, 6)
+                  .padding(.vertical, 1.5)
+                  .background(Color.orange.opacity(0.14), in: Capsule())
+              }
+            }
+            if isRestricted {
+              Text("Requires BYOK Pro")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            } else if !server.isEnabled {
               Text("Globally disabled")
                 .font(.caption)
                 .foregroundStyle(MacDesignTokens.Colors.textMuted)
@@ -1273,7 +1312,7 @@ private struct MacMCPServerConfigurationList: View {
             }
           }
           Spacer()
-          if server.isEnabled && !missingCredential {
+          if server.isEnabled && !missingCredential && !isRestricted {
             Button {
               Task { _ = await mcp.refresh(server.id) }
             } label: {
@@ -1281,7 +1320,7 @@ private struct MacMCPServerConfigurationList: View {
                 .font(.system(size: 12, weight: .semibold))
             }
             .buttonStyle(MacIconButtonStyle())
-            .disabled(mcp.isBusy)
+            .disabled(mcp.isBusy || isReadOnly)
             .help("Refresh tools for \(server.name)")
             .accessibilityLabel("Refresh tools for \(server.name)")
           }
@@ -1294,7 +1333,12 @@ private struct MacMCPServerConfigurationList: View {
           )
           .toggleStyle(.switch)
           .controlSize(.small)
-          .disabled(((!server.isEnabled || missingCredential) && !enabled) || mcp.isBusy || isGenerating)
+          .disabled(
+            ((!server.isEnabled || missingCredential || isRestricted) && !enabled)
+              || mcp.isBusy
+              || isGenerating
+              || isReadOnly
+          )
         }
         .padding(.vertical, 4)
       }

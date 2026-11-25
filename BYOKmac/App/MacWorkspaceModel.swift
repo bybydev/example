@@ -66,6 +66,10 @@ final class MacWorkspaceModel {
     )
   }
 
+  func accessibleProjects() -> [ChatProject] {
+    projects.filter { !isProjectRestricted($0.id) }
+  }
+
   func projectFiles(projectID: ProjectID?) -> [ProjectFile] {
     guard let projectID, !isProjectRestricted(projectID) else { return [] }
     return project(projectID)?.projectFiles ?? []
@@ -77,6 +81,23 @@ final class MacWorkspaceModel {
       !isProjectRestricted(projectID)
     else { return [] }
     return project(projectID)?.projectFiles ?? []
+  }
+
+  func promptPresets(projectID: ProjectID?) -> [ProjectPromptPreset] {
+    guard let projectID, !isProjectRestricted(projectID) else { return [] }
+    return project(projectID)?.projectPromptPresets ?? []
+  }
+
+  func promptPresets(conversationID: ConversationID?) -> [ProjectPromptPreset] {
+    guard let conversationID,
+      let projectID = projectID(for: conversationID),
+      !isProjectRestricted(projectID)
+    else { return [] }
+    return project(projectID)?.projectPromptPresets ?? []
+  }
+
+  func isFileInLibrary(_ fileID: String) -> Bool {
+    libraryEntries.contains { $0.id.rawValue == fileID }
   }
 
   func fileData(_ id: String) async -> Data? {
@@ -225,14 +246,17 @@ final class MacWorkspaceModel {
   func addProjectFiles(_ files: [ProjectFile], to projectID: ProjectID) async -> Bool {
     guard !files.isEmpty else { return true }
     guard requireProjectAccess(projectID) else { return false }
-    return await performResult("Project updated", referencesChanged: true) {
+    let label = files.count == 1
+      ? "Added 1 source"
+      : "Added \(files.count) sources"
+    return await performResult(label, referencesChanged: true) {
       _ = try await projectsStore.addProjectFiles(files, to: projectID)
     }
   }
 
   func removeProjectFile(_ fileID: String, from projectID: ProjectID) async -> Bool {
     guard requireProjectAccess(projectID) else { return false }
-    return await performResult("Project updated", referencesChanged: true) {
+    return await performResult("Removed source", referencesChanged: true) {
       _ = try await projectsStore.removeProjectFile(fileID, from: projectID)
     }
   }
@@ -242,14 +266,14 @@ final class MacWorkspaceModel {
     projectID: ProjectID
   ) async -> Bool {
     guard requireProjectAccess(projectID) else { return false }
-    return await performResult("Project updated") {
+    return await performResult("Prompt saved") {
       _ = try await projectsStore.upsertProjectPromptPreset(preset, projectID: projectID)
     }
   }
 
   func deleteProjectPromptPreset(_ presetID: String, projectID: ProjectID) async -> Bool {
     guard requireProjectAccess(projectID) else { return false }
-    return await performResult("Project updated") {
+    return await performResult("Prompt deleted") {
       _ = try await projectsStore.deleteProjectPromptPreset(presetID, projectID: projectID)
     }
   }
@@ -257,10 +281,11 @@ final class MacWorkspaceModel {
   func replaceProjectToolSettings(
     id: ProjectID,
     mcpConfiguration: MCPChatToolConfiguration?,
-    toolPresets: [ProjectToolPreset]
+    toolPresets: [ProjectToolPreset],
+    successMessage: String? = "Tool defaults saved"
   ) async -> Bool {
     guard requireProjectAccess(id) else { return false }
-    return await performResult("Project updated") {
+    return await performResult(successMessage) {
       _ = try await projectsStore.replaceProjectToolSettings(
         id: id,
         mcpConfiguration: mcpConfiguration,
@@ -277,8 +302,30 @@ final class MacWorkspaceModel {
 
   func assignConversation(_ conversationID: ConversationID, to projectID: ProjectID?) async -> Bool {
     if let projectID, !requireProjectAccess(projectID) { return false }
-    return await performResult(nil) {
+    let targetName = project(projectID)?.name
+    let label: String? = if let targetName {
+      "Added chat to \(targetName)"
+    } else if projectID == nil {
+      "Removed chat from project"
+    } else {
+      nil
+    }
+    return await performResult(label) {
       try await projectsStore.assignConversation(conversationID, to: projectID)
+    }
+  }
+
+  func assignConversations(_ conversationIDs: [ConversationID], to projectID: ProjectID) async -> Bool {
+    guard !conversationIDs.isEmpty else { return true }
+    guard requireProjectAccess(projectID) else { return false }
+    let targetName = project(projectID)?.name ?? "project"
+    let label = conversationIDs.count == 1
+      ? "Added 1 chat to \(targetName)"
+      : "Added \(conversationIDs.count) chats to \(targetName)"
+    return await performResult(label) {
+      for conversationID in conversationIDs {
+        try await projectsStore.assignConversation(conversationID, to: projectID)
+      }
     }
   }
 

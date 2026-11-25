@@ -1,6 +1,7 @@
 import AppKit
 import BYOKchatProviderCore
 import Foundation
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -156,7 +157,99 @@ enum MacProjectFileImportSupport {
     return additions
   }
 
+  /// Validates and prepares dropped in-memory images (e.g., dragged from a browser
+  /// or app) for a project's reference files, respecting count and byte limits.
+  static func importDroppedImages(
+    _ images: [MacDroppedImage],
+    existingCount: Int,
+    existingBytes: Int
+  ) throws -> [ProjectFile] {
+    guard images.count <= ProjectWorkspaceStore.maxFileCount - existingCount else {
+      throw ProjectWorkspaceError.tooManyFiles
+    }
+    let maximumFileBytes = ProjectWorkspaceStore.maxFileBytes
+    let maximumTotalBytes = ProjectWorkspaceStore.maxTotalFileBytes
+    guard existingBytes <= maximumTotalBytes else {
+      throw ProjectWorkspaceError.filesTooLarge
+    }
+
+    var additions: [ProjectFile] = []
+    var actualBytes = existingBytes
+    for (index, dropped) in images.enumerated() {
+      guard !dropped.data.isEmpty else {
+        throw ProjectWorkspaceError.emptyFile("Dropped Image \(index + 1)")
+      }
+      let detectedType: UTType? = if let source = CGImageSourceCreateWithData(dropped.data as CFData, nil),
+        let typeIdentifier = CGImageSourceGetType(source) as String?
+      {
+        UTType(typeIdentifier)
+      } else {
+        nil
+      }
+      let preservesOriginal = (detectedType == .png || detectedType == .jpeg || detectedType == .gif)
+        && dropped.data.count <= maximumFileBytes
+      let filename: String
+      let resolvedMIME: String
+      let data: Data
+      if preservesOriginal, let detectedType {
+        let ext = switch detectedType {
+        case .png: "png"
+        case .gif: "gif"
+        default: "jpg"
+        }
+        filename = "Dropped Image \(index + 1).\(ext)"
+        resolvedMIME = detectedType.preferredMIMEType ?? "image/jpeg"
+        data = dropped.data
+      } else {
+        guard let jpeg = normalizedJPEG(from: dropped.data) else {
+          throw ProviderError.invalidRequest(
+            "Dropped Image \(index + 1) could not be converted to a supported format."
+          )
+        }
+        filename = "Dropped Image \(index + 1).jpg"
+        resolvedMIME = "image/jpeg"
+        data = jpeg
+      }
+      guard !data.isEmpty else {
+        throw ProjectWorkspaceError.emptyFile(filename)
+      }
+      guard data.count <= maximumFileBytes else {
+        throw ProjectWorkspaceError.fileTooLarge(filename)
+      }
+      guard data.count <= maximumTotalBytes - actualBytes else {
+        throw ProjectWorkspaceError.filesTooLarge
+      }
+      actualBytes += data.count
+      additions.append(
+        ProjectFile(
+          filename: filename,
+          mimeType: resolvedMIME,
+          data: data
+        )
+      )
+    }
+    return additions
+  }
+
   static func normalizedJPEG(from data: Data) -> Data? {
+    // Prefer ImageIO with thumbnail transform so EXIF orientation is baked in
+    // reliably when normalizing HEIC/TIFF/WebP images to JPEG.
+    if let source = CGImageSourceCreateWithData(data as CFData, nil) {
+      let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: 8192,
+      ]
+      if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+        if let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]),
+          !jpeg.isEmpty
+        {
+          return jpeg
+        }
+      }
+    }
     if let image = NSImage(data: data),
       let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
     {

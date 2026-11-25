@@ -109,7 +109,13 @@ struct MacShellView: View {
           chatSettingsConversationID = paneConversationID
           showingChatSettings = true
         },
-        openProjects: { utilitySheets.present(.projects) },
+        openProjects: { projectID in
+          if let projectID {
+            utilitySheets.presentProject(projectID)
+          } else {
+            utilitySheets.present(.projects)
+          }
+        },
         openAnalytics: { utilitySheets.presentAnalytics(conversationID: paneConversationID) },
         renameConversation: {
           if let conversation = chats.conversation(paneConversationID) ?? chats.summary(paneConversationID) {
@@ -160,6 +166,7 @@ struct MacShellView: View {
             ) {
               if sourceConversationID == nil {
                 await transferFreshAttachments(to: id, chats: chats)
+                await model.workspace?.reload()
               }
               if navigation.canFollowSend(from: sourceConversationID) {
                 navigation.requestedID = id
@@ -363,6 +370,7 @@ struct MacShellView: View {
     deleteTarget = nil
     Task { @MainActor in
       if await chats.deleteConversation(target.id) {
+        await model.workspace?.reload()
         await mcp.reloadFromStorage()
         await clearPendingAttachments(
           conversationID: target.id,
@@ -1168,8 +1176,11 @@ private struct MacSidebarView: View {
       action: { selection = conversation.id },
       assignProject: { projectID in
         Task { @MainActor in
+          let wasRestricted = projectID.map { workspace.isProjectRestricted($0) } ?? false
           if await workspace.assignConversation(conversation.id, to: projectID) {
             await mcp.reloadFromStorage()
+          } else if let error = workspace.consumeErrorMessage(), !wasRestricted {
+            chats.errorMessage = error
           }
         }
       },
