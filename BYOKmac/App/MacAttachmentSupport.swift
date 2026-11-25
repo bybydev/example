@@ -228,6 +228,43 @@ enum MacAttachmentImporter {
       data: jpeg
     )
   }
+
+  /// Transcodes any image attachment whose MIME type is not accepted by
+  /// `providerKind` (e.g., HEIC/TIFF for OpenAI/Anthropic/xAI, or WebP/GIF for
+  /// xAI) into a fresh JPEG `ChatAttachment` off `@MainActor`. Supported images
+  /// and non-image files are returned untouched. Each transcoded copy gets a
+  /// fresh `id` so the original stored blob in Library or Projects is never
+  /// overwritten or collided with.
+  static func transcodeUnsupportedImages(
+    _ attachments: [ChatAttachment],
+    for providerKind: ProviderKind
+  ) async throws -> [ChatAttachment] {
+    let needsTranscoding = attachments.contains { attachment in
+      attachment.isImage
+        && !ModelRequestPolicy.supportsImageMIME(attachment.mimeType, for: providerKind)
+    }
+    guard needsTranscoding else { return attachments }
+
+    return try await Task.detached(priority: .userInitiated) {
+      var result: [ChatAttachment] = []
+      result.reserveCapacity(attachments.count)
+      for attachment in attachments {
+        if attachment.isImage,
+          !ModelRequestPolicy.supportsImageMIME(attachment.mimeType, for: providerKind)
+        {
+          let stem = (attachment.filename as NSString).deletingPathExtension
+          let transcoded = try normalizedImageAttachment(
+            data: attachment.data,
+            suggestedName: stem.isEmpty ? "image" : stem
+          )
+          result.append(transcoded)
+        } else {
+          result.append(attachment)
+        }
+      }
+      return result
+    }.value
+  }
 }
 
 enum MacAttachmentPresentation {

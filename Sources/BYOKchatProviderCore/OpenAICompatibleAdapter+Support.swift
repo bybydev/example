@@ -73,11 +73,8 @@ extension OpenAICompatibleAdapter {
       throw ProviderError.invalidRequest("Attachments in one message cannot exceed 40 MB total.")
     }
 
-    let supportedImageMIMEs: Set<String> = [
-      "image/png", "image/jpeg", "image/webp", "image/gif",
-    ]
     if let unsupportedImage = attachments.first(where: {
-      $0.isImage && !supportedImageMIMEs.contains($0.mimeType.lowercased())
+      $0.isImage && !ModelRequestPolicy.supportsImageMIME($0.mimeType, for: .openAICompatible)
     }) {
       throw ProviderError.invalidRequest(
         "Unsupported image type for \(unsupportedImage.filename). Use PNG, JPEG, WebP, or GIF."

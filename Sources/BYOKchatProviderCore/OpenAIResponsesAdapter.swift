@@ -286,11 +286,8 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
     guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
       throw ProviderError.invalidRequest("Attachments in one message cannot exceed 40 MB total.")
     }
-    let supportedImageMIMEs: Set<String> = [
-      "image/png", "image/jpeg", "image/webp", "image/gif",
-    ]
     if let unsupported = attachments.first(where: {
-      $0.isImage && !supportedImageMIMEs.contains($0.mimeType.lowercased())
+      $0.isImage && !ModelRequestPolicy.supportsImageMIME($0.mimeType, for: .openai)
     }) {
       throw ProviderError.invalidRequest(
         "Unsupported image type for \(unsupported.filename). Use PNG, JPEG, WebP, or GIF."

@@ -76,8 +76,8 @@ enum MacProjectFileImportSupport {
 
   /// Reads and validates security-scoped files off `@MainActor`, rejecting
   /// directories/non-regular files, empty files, and >40 MB totals upfront,
-  /// and normalizing unsupported image formats (such as HEIC, HEIF, WebP, or
-  /// TIFF) to JPEG via AppKit.
+  /// preserving PNG, JPEG, GIF, and WebP while normalizing unsupported image
+  /// formats (such as HEIC, HEIF, or TIFF) to JPEG.
   static func importFiles(
     from urls: [URL],
     existingCount: Int,
@@ -186,7 +186,7 @@ enum MacProjectFileImportSupport {
       } else {
         nil
       }
-      let preservesOriginal = (detectedType == .png || detectedType == .jpeg || detectedType == .gif)
+      let preservesOriginal = (detectedType == .png || detectedType == .jpeg || detectedType == .gif || detectedType == .webP)
         && dropped.data.count <= maximumFileBytes
       let filename: String
       let resolvedMIME: String
@@ -195,6 +195,7 @@ enum MacProjectFileImportSupport {
         let ext = switch detectedType {
         case .png: "png"
         case .gif: "gif"
+        case .webP: "webp"
         default: "jpg"
         }
         filename = "Dropped Image \(index + 1).\(ext)"
@@ -276,7 +277,7 @@ enum MacProjectFileImportSupport {
     maxBytes: Int
   ) throws -> (filename: String, mimeType: String, data: Data) {
     if type.conforms(to: .image) {
-      let preservesOriginal = (type == .png || type == .jpeg || type == .gif)
+      let preservesOriginal = (type == .png || type == .jpeg || type == .gif || type == .webP)
         && rawData.count <= maxBytes
       if preservesOriginal {
         return (

@@ -150,19 +150,31 @@ struct MacShellView: View {
         send: { text, attachments in
           let sourceConversationID = paneConversationID
           Task { @MainActor in
-            if let target = chats.target(for: sourceConversationID) {
+            var preparedAttachments = attachments
+            if let target = chats.target(for: sourceConversationID), !attachments.isEmpty {
               do {
-                try providers.validateAttachments(attachments, for: target)
+                preparedAttachments = try await providers.prepareAttachments(
+                  attachments,
+                  for: target
+                )
               } catch {
                 chats.errorMessage = error.localizedDescription
                 return
+              }
+
+              if preparedAttachments.map(\.id) != attachments.map(\.id) {
+                await replacePendingAttachments(
+                  preparedAttachments,
+                  conversationID: sourceConversationID,
+                  chats: chats
+                )
               }
             }
 
             if let id = await chats.send(
               conversationID: sourceConversationID,
               text: text,
-              attachments: attachments
+              attachments: preparedAttachments
             ) {
               if sourceConversationID == nil {
                 await transferFreshAttachments(to: id, chats: chats)
@@ -497,22 +509,48 @@ struct MacShellView: View {
 
     Task { @MainActor in
       do {
+        var prepared = additions
         if let target = chats.target(for: conversationID) {
-          try providers.validateAttachments(additions, for: target)
+          prepared = try await providers.prepareAttachments(additions, for: target)
         }
 
         if let store = model.pendingAttachmentStore {
-          pendingAttachmentsByKey[key] = try await store.append(additions, to: key)
+          pendingAttachmentsByKey[key] = try await store.append(prepared, to: key)
         } else {
           pendingAttachmentsByKey[key] = try MacAttachmentImporter.validateCombined(
             existing: pendingAttachmentsByKey[key] ?? [],
-            additions: additions
+            additions: prepared
           )
         }
       } catch {
         MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
       }
+    }
+  }
+
+  private func replacePendingAttachments(
+    _ replacements: [ChatAttachment],
+    conversationID: ConversationID?,
+    chats: MacChatSessionModel
+  ) async {
+    let key = attachmentKey(conversationID)
+    do {
+      if let store = model.pendingAttachmentStore {
+        try await store.clear(key)
+        if replacements.isEmpty {
+          pendingAttachmentsByKey.removeValue(forKey: key)
+        } else {
+          pendingAttachmentsByKey[key] = try await store.append(replacements, to: key)
+        }
+      } else if replacements.isEmpty {
+        pendingAttachmentsByKey.removeValue(forKey: key)
+      } else {
+        pendingAttachmentsByKey[key] = replacements
+      }
+    } catch {
+      MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
+      chats.errorMessage = "Attachments were prepared, but pending-state update failed: \(error.localizedDescription)"
     }
   }
 

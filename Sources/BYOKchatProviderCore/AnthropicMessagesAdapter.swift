@@ -423,11 +423,12 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
       throw ProviderError.invalidRequest("Attachments in one message cannot exceed 40 MB total.")
     }
-    let imageMIMEs: Set<String> = ["image/jpeg", "image/png", "image/gif", "image/webp"]
     if let bad = attachments.first(where: { $0.isImage && $0.byteCount > 5 * 1_024 * 1_024 }) {
       throw ProviderError.invalidRequest("\(bad.filename) exceeds Anthropic's 5 MB image limit.")
     }
-    if let bad = attachments.first(where: { $0.isImage && !imageMIMEs.contains($0.mimeType.lowercased()) }) {
+    if let bad = attachments.first(where: {
+      $0.isImage && !ModelRequestPolicy.supportsImageMIME($0.mimeType, for: .anthropic)
+    }) {
       throw ProviderError.invalidRequest("Unsupported Anthropic image type for \(bad.filename).")
     }
     if let bad = attachments.first(where: {

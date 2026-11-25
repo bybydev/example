@@ -1,3 +1,4 @@
+import AppKit
 import BYOKchatProviderCore
 import Foundation
 import Testing
@@ -380,6 +381,105 @@ struct MacLibraryWorkflowTests {
 
     #expect(workspace.consumeErrorMessage() == "Temporary failure")
     #expect(workspace.errorMessage == nil)
+  }
+
+  @Test("ModelRequestPolicy reports per-provider supported image MIME types consistently")
+  func modelRequestPolicyImageMIMETypes() {
+    #expect(ModelRequestPolicy.supportsImageMIME("image/png", for: .openai))
+    #expect(ModelRequestPolicy.supportsImageMIME("image/webp", for: .openai))
+    #expect(ModelRequestPolicy.supportsImageMIME("image/gif", for: .anthropic))
+    #expect(!ModelRequestPolicy.supportsImageMIME("image/heic", for: .openai))
+    #expect(!ModelRequestPolicy.supportsImageMIME("image/tiff", for: .anthropic))
+
+    #expect(ModelRequestPolicy.supportsImageMIME("image/png", for: .xAI))
+    #expect(ModelRequestPolicy.supportsImageMIME("image/jpeg", for: .xAI))
+    #expect(!ModelRequestPolicy.supportsImageMIME("image/webp", for: .xAI))
+    #expect(!ModelRequestPolicy.supportsImageMIME("image/gif", for: .xAI))
+
+    #expect(ModelRequestPolicy.supportsImageMIME("image/heic", for: .gemini))
+    #expect(ModelRequestPolicy.supportsImageMIME("image/tiff", for: .gemini))
+    #expect(!ModelRequestPolicy.supportsImageMIME("application/pdf", for: .gemini))
+  }
+
+  @Test("Attachment importer auto-transcodes unsupported image formats with fresh IDs")
+  func transcodeUnsupportedImagesForProvider() async throws {
+    let rep = try #require(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: 4,
+        pixelsHigh: 4,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      )
+    )
+    let tiffData = try #require(rep.tiffRepresentation)
+    let pngData = try #require(rep.representation(using: .png, properties: [:]))
+    let gifData = try #require(rep.representation(using: .gif, properties: [:]))
+
+    let tiffAttachment = ChatAttachment(
+      id: "library-tiff-id",
+      kind: .image,
+      filename: "scan.tiff",
+      mimeType: "image/tiff",
+      data: tiffData
+    )
+    let pngAttachment = ChatAttachment(
+      id: "library-png-id",
+      kind: .image,
+      filename: "diagram.png",
+      mimeType: "image/png",
+      data: pngData
+    )
+    let gifAttachment = ChatAttachment(
+      id: "library-gif-id",
+      kind: .image,
+      filename: "anim.gif",
+      mimeType: "image/gif",
+      data: gifData
+    )
+    let pdfAttachment = ChatAttachment(
+      id: "library-pdf-id",
+      kind: .file,
+      filename: "spec.pdf",
+      mimeType: "application/pdf",
+      data: Data("%PDF-1.4".utf8)
+    )
+
+    // Gemini accepts TIFF/PNG/GIF untouched.
+    let geminiResult = try await MacAttachmentImporter.transcodeUnsupportedImages(
+      [tiffAttachment, pngAttachment, pdfAttachment],
+      for: .gemini
+    )
+    #expect(geminiResult.map(\.id) == ["library-tiff-id", "library-png-id", "library-pdf-id"])
+    #expect(geminiResult[0].mimeType == "image/tiff")
+
+    // OpenAI transcodes TIFF -> JPEG with a fresh ID, keeping PNG and PDF untouched.
+    let openaiResult = try await MacAttachmentImporter.transcodeUnsupportedImages(
+      [tiffAttachment, pngAttachment, pdfAttachment],
+      for: .openai
+    )
+    #expect(openaiResult[0].id != tiffAttachment.id)
+    #expect(openaiResult[0].mimeType == "image/jpeg")
+    #expect(openaiResult[0].filename == "scan.jpg")
+    #expect(openaiResult[0].data.prefix(3) == Data([0xFF, 0xD8, 0xFF]))
+    #expect(openaiResult[1].id == pngAttachment.id)
+    #expect(openaiResult[1].mimeType == "image/png")
+    #expect(openaiResult[2].id == pdfAttachment.id)
+
+    // xAI transcodes GIF -> JPEG with a fresh ID, keeping PNG untouched.
+    let xaiResult = try await MacAttachmentImporter.transcodeUnsupportedImages(
+      [gifAttachment, pngAttachment],
+      for: .xAI
+    )
+    #expect(xaiResult[0].id != gifAttachment.id)
+    #expect(xaiResult[0].mimeType == "image/jpeg")
+    #expect(xaiResult[0].filename == "anim.jpg")
+    #expect(xaiResult[1].id == pngAttachment.id)
   }
 }
 

@@ -383,9 +383,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       throw ProviderError.invalidRequest("Attachments in one message cannot exceed 40 MB total.")
     }
 
-    let supportedImageMIMEs: Set<String> = ["image/png", "image/jpeg", "image/jpg"]
     if let unsupported = attachments.first(where: {
-      $0.isImage && !supportedImageMIMEs.contains($0.mimeType.lowercased())
+      $0.isImage && !ModelRequestPolicy.supportsImageMIME($0.mimeType, for: .xAI)
     }) {
       throw ProviderError.invalidRequest(
         "Unsupported xAI image type for \(unsupported.filename). Use PNG or JPEG."

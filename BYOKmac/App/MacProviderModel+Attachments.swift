@@ -28,5 +28,36 @@ extension MacProviderModel {
     try ModelRequestPolicy.validateAttachments(attachments, kind: account.kind,
       capabilities: capabilities(accountID: target.accountID, modelID: target.modelID))
   }
+
+  /// Auto-transcodes image attachments whose MIME type is unsupported by
+  /// `target`'s provider (when the model supports image input), then validates
+  /// the prepared attachments against provider and model limits.
+  func prepareAttachments(
+    _ attachments: [ChatAttachment],
+    for target: MacChatTarget
+  ) async throws -> [ChatAttachment] {
+    guard !attachments.isEmpty else { return attachments }
+    guard let account = account(target.accountID) else {
+      throw ProviderError.accountNotFound(target.accountID)
+    }
+
+    let resolvedCapabilities = capabilities(accountID: target.accountID, modelID: target.modelID)
+    let prepared: [ChatAttachment]
+    if resolvedCapabilities[.imageInput] != .unsupported {
+      prepared = try await MacAttachmentImporter.transcodeUnsupportedImages(
+        attachments,
+        for: account.kind
+      )
+    } else {
+      prepared = attachments
+    }
+
+    try ModelRequestPolicy.validateAttachments(
+      prepared,
+      kind: account.kind,
+      capabilities: resolvedCapabilities
+    )
+    return prepared
+  }
 }
 

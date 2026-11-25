@@ -206,6 +206,22 @@ struct MacProjectWorkflowTests {
     #expect(imported[0].filename == "scan.jpg")
     #expect(imported[0].mimeType == "image/jpeg")
     #expect(imported[0].data.prefix(3) == Data([0xFF, 0xD8, 0xFF]))
+
+    // Minimal valid 1x1 lossless WebP stays preserved without JPEG re-encoding.
+    let webpBase64 = "UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA="
+    let webpData = try #require(Data(base64Encoded: webpBase64))
+    let webpURL = tempDir.appendingPathComponent("sprite.webp", isDirectory: false)
+    try webpData.write(to: webpURL)
+
+    let importedWebP = try MacProjectFileImportSupport.importFiles(
+      from: [webpURL],
+      existingCount: 0,
+      existingBytes: 0
+    )
+    #expect(importedWebP.count == 1)
+    #expect(importedWebP[0].filename == "sprite.webp")
+    #expect(importedWebP[0].mimeType == "image/webp")
+    #expect(importedWebP[0].data == webpData)
   }
 
   @Test("Library picker capacity notes and preflight validate count, per-file, and total limits")

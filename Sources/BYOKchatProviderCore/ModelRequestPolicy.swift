@@ -2,6 +2,32 @@ import Foundation
 
 /// Request-only projection. Stored attachments, tool rounds, and MCP configuration are never edited.
 public enum ModelRequestPolicy {
+  /// Image MIME types accepted by `kind`, or `nil` when any `image/*` MIME type
+  /// is accepted (such as Gemini).
+  public static func supportedImageMIMETypes(for kind: ProviderKind) -> Set<String>? {
+    switch kind {
+    case .gemini:
+      nil
+    case .xAI:
+      ["image/jpeg", "image/jpg", "image/png"]
+    default:
+      ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    }
+  }
+
+  /// Returns whether `mimeType` is accepted for image input by `kind`.
+  public static func supportsImageMIME(_ mimeType: String, for kind: ProviderKind) -> Bool {
+    let normalized = mimeType
+      .split(separator: ";", maxSplits: 1)
+      .first?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased() ?? ""
+    guard let allowed = supportedImageMIMETypes(for: kind) else {
+      return normalized.hasPrefix("image/")
+    }
+    return allowed.contains(normalized)
+  }
+
   public static func attachmentError(
     _ attachment: ChatAttachment, kind: ProviderKind, capabilities: ResolvedModelCapabilities
   ) -> String? {
@@ -15,12 +41,8 @@ public enum ModelRequestPolicy {
     if capabilities[capability] == .unsupported {
       return "\(attachment.filename) is not supported by the selected model. Choose another model or remove the attachment."
     }
-    if attachment.isImage, kind != .gemini {
-      let formats = kind == .xAI ? ["image/jpeg", "image/jpg", "image/png"]
-        : ["image/jpeg", "image/png", "image/gif", "image/webp"]
-      if !formats.contains(mime) {
-        return "Unsupported image type for \(attachment.filename). Convert it to PNG or JPEG."
-      }
+    if attachment.isImage, !supportsImageMIME(mime, for: kind) {
+      return "Unsupported image type for \(attachment.filename). Convert it to PNG or JPEG."
     }
     if kind == .anthropic {
       if attachment.isImage, attachment.byteCount > 5 * 1_024 * 1_024 {
