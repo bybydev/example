@@ -996,6 +996,59 @@ struct MacSidebarGroupingTests {
         == "Matched message snippet"
     )
   }
+
+  @Test("Sidebar conversation buckets separate pinned and recent with cap and overflow metadata")
+  func sidebarConversationBucketsCapRecentAndTrackOverflow() {
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    let conversations = (0..<25).map { index in
+      makeConversation(
+        id: String(format: "conv-%02d", index),
+        title: "Chat \(index)",
+        updatedAt: base.addingTimeInterval(TimeInterval(index * 60))
+      )
+    }
+
+    let pinnedRaw = MacSidebarPinStore.serialize(["conv-01", "conv-05"])
+    let buckets = MacSidebarConversationBuckets.make(
+      from: conversations,
+      pinnedRaw: pinnedRaw
+    )
+
+    #expect(MacSidebarConversationBuckets.recentDisplayLimit == 20)
+    #expect(buckets.pinned.map(\.id) == ["conv-05", "conv-01"])
+    #expect(buckets.recent.count == 20)
+    #expect(buckets.recent.first?.id == "conv-24")
+    #expect(buckets.recent.last?.id == "conv-04")
+    #expect(buckets.totalHistoryCount == 25)
+    #expect(buckets.hiddenRecentCount == 3)
+    #expect(buckets.hasMoreRecent)
+
+    let uncapped = MacSidebarConversationBuckets.make(
+      from: Array(conversations.prefix(10)),
+      pinnedRaw: pinnedRaw
+    )
+    #expect(uncapped.pinned.map(\.id) == ["conv-05", "conv-01"])
+    #expect(uncapped.recent.count == 8)
+    #expect(uncapped.hiddenRecentCount == 0)
+    #expect(!uncapped.hasMoreRecent)
+  }
+
+  @Test("Sidebar pin store toggles and removes pinned IDs deterministically")
+  func sidebarPinStoreToggleAndRemove() {
+    var raw = ""
+    raw = MacSidebarPinStore.toggled("conv-b", in: raw)
+    raw = MacSidebarPinStore.toggled("conv-a", in: raw)
+    #expect(raw == "conv-a\nconv-b")
+
+    raw = MacSidebarPinStore.toggled("conv-a", in: raw)
+    #expect(raw == "conv-b")
+
+    let unchanged = MacSidebarPinStore.removing("conv-missing", from: raw)
+    #expect(unchanged == "conv-b")
+
+    raw = MacSidebarPinStore.removing("conv-b", from: raw)
+    #expect(raw.isEmpty)
+  }
 }
 
 @Suite("macOS user message collapsing and link detection")

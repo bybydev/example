@@ -174,7 +174,7 @@ struct MacChatPane: View {
         )
         .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth)
         .padding(.horizontal, MacDesignTokens.Spacing.large)
-        .padding(.bottom, 8)
+        .padding(.vertical, 8)
       }
 
       ZStack(alignment: .bottom) {
@@ -351,7 +351,12 @@ private struct MacChatHeader: View {
     }
     .padding(.horizontal, MacDesignTokens.Spacing.compact)
     .frame(height: MacDesignTokens.Layout.titlebarHeight)
-    .background(MacDesignTokens.Colors.canvas)
+    .background(MacDesignTokens.Colors.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MacDesignTokens.Colors.separator.opacity(0.75))
+        .frame(height: 1)
+    }
   }
 
   private func projectBadgeButton(_ project: ChatProject) -> some View {
@@ -375,7 +380,7 @@ private struct MacChatHeader: View {
       .padding(.leading, 5)
       .padding(.trailing, 9)
       .frame(height: MacDesignTokens.Control.compactButtonHeight)
-      .background(MacDesignTokens.Colors.surface, in: Capsule())
+      .background(MacDesignTokens.Colors.canvas, in: Capsule())
       .overlay {
         Capsule()
           .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 0.7)

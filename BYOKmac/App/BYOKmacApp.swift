@@ -163,7 +163,6 @@ struct BYOKmacApp: App {
           proGateCenter: proGateCenter
         )
     }
-    .windowStyle(.hiddenTitleBar)
   }
 }
 

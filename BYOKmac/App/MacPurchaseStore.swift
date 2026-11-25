@@ -9,14 +9,12 @@ enum MacWindowID {
   static let proPaywall = "byokchat.pro-paywall"
 }
 
-enum MacSettingsTab: String, CaseIterable, Sendable {
+enum MacSettingsTab: String, CaseIterable, Hashable, Sendable {
   case general
-  case plan
-  case theme
-  case connections
-  case tools
   case data
-  case diagnostics
+  case theme
+  case plan
+  case about
 }
 
 /// Routes requests from anywhere in the app to a specific Settings tab, using
@@ -35,6 +33,11 @@ final class MacSettingsRouter {
   func request(_ tab: MacSettingsTab) {
     requestedTab = tab
     requestID &+= 1
+  }
+
+  func consumeRequestedTab() -> MacSettingsTab? {
+    defer { requestedTab = nil }
+    return requestedTab
   }
 }
 

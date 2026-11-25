@@ -13,6 +13,22 @@ enum MacSidebarPinStore {
     ids.sorted().joined(separator: "\n")
   }
 
+  static func toggled(_ id: ConversationID, in raw: String) -> String {
+    var ids = parse(raw)
+    if ids.contains(id.rawValue) {
+      ids.remove(id.rawValue)
+    } else {
+      ids.insert(id.rawValue)
+    }
+    return serialize(ids)
+  }
+
+  static func removing(_ id: ConversationID, from raw: String) -> String {
+    var ids = parse(raw)
+    guard ids.remove(id.rawValue) != nil else { return raw }
+    return serialize(ids)
+  }
+
   static func prune(keeping validIDs: Set<ConversationID>, in defaults: UserDefaults = .standard) {
     guard let raw = defaults.string(forKey: storageKey), !raw.isEmpty else { return }
     let validRawIDs = Set(validIDs.map(\.rawValue))

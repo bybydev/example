@@ -63,15 +63,9 @@ struct MacMCPServerListView: View {
         Text("MCP Servers")
           .font(.headline)
         Spacer()
-        Button {
+        MacSheetCloseButton(accessibilityLabel: "Close MCP Servers") {
           dismiss()
-        } label: {
-          Image(systemName: "xmark")
-            .frame(width: 28, height: 28)
         }
-        .buttonStyle(.plain)
-        .help("Close")
-        .accessibilityLabel("Close MCP Servers")
       }
       .padding(.horizontal, 16)
       .frame(height: 52)
@@ -222,6 +216,29 @@ struct MacSecondarySurfacesView: View {
         )
       } else {
         unavailable("Analytics", systemImage: "chart.bar.xaxis")
+      }
+
+    case .allChats:
+      if let providers = model.providers {
+        MacAllChatsView(
+          providers: providers,
+          chats: chats,
+          workspace: workspace,
+          mcp: mcp,
+          openChat: { conversationID, messageID in
+            MacLibraryNavigation.openConversation(
+              conversationID,
+              messageID: messageID
+            )
+            utilitySheets.dismiss()
+          },
+          startNewChat: {
+            model.requestNewChat()
+            utilitySheets.dismiss()
+          }
+        )
+      } else {
+        unavailable("All Chats", systemImage: "bubble.left.and.bubble.right")
       }
     }
   }

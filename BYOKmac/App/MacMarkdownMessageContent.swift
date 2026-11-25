@@ -1934,6 +1934,7 @@ private struct MacFullScreenCodeView: View {
         ShareLink(item: content) {
           Image(systemName: "square.and.arrow.up")
         }
+        .buttonStyle(MacIconButtonStyle())
         .help("Share code")
         Button("Copy", systemImage: "doc.on.doc") {
           NSPasteboard.general.clearContents()
@@ -1942,10 +1943,11 @@ private struct MacFullScreenCodeView: View {
           }
         }
         .labelStyle(.iconOnly)
+        .buttonStyle(MacIconButtonStyle())
+        .help("Copy code")
         Button("Done") { dismiss() }
           .keyboardShortcut(.cancelAction)
       }
-      .buttonStyle(.plain)
       .padding(14)
       Divider()
       ScrollView([.horizontal, .vertical]) {

@@ -35,6 +35,7 @@ final class MacUtilitySheetCoordinator {
     case .projects: dimension = .projects
     case .mcpServers: dimension = .mcp
     case .analytics: dimension = .analytics
+    case .allChats: return
     }
     MacAppAnalytics.track(.featureOpened, dimension: dimension)
   }
@@ -46,6 +47,7 @@ enum MacUtilitySheetDestination: String, Identifiable {
   case projects
   case mcpServers
   case analytics
+  case allChats
 
   var id: String { rawValue }
 
@@ -56,6 +58,7 @@ enum MacUtilitySheetDestination: String, Identifiable {
     case .projects: "Projects"
     case .mcpServers: "MCP Servers"
     case .analytics: "Analytics"
+    case .allChats: "All Chats"
     }
   }
 
@@ -66,6 +69,7 @@ enum MacUtilitySheetDestination: String, Identifiable {
     case .projects: "folder"
     case .mcpServers: "shippingbox"
     case .analytics: "chart.bar.xaxis"
+    case .allChats: "bubble.left.and.bubble.right"
     }
   }
 
@@ -76,6 +80,7 @@ enum MacUtilitySheetDestination: String, Identifiable {
     case .projects: "Projects group chats, source files, instructions, and tool defaults."
     case .mcpServers: "Server connections are managed here; tool permissions stay with chats and projects."
     case .analytics: "Analytics stays local to the app unless a configured service reports usage."
+    case .allChats: "Browse, search, pin, organize, and manage every conversation."
     }
   }
 
@@ -107,16 +112,9 @@ struct MacUtilitySheetContainer<Content: View>: View {
         Text(destination.title)
           .font(.headline)
         Spacer()
-        Button {
+        MacSheetCloseButton(accessibilityLabel: "Close \(destination.title)") {
           dismiss()
-        } label: {
-          Image(systemName: "xmark")
-            .frame(width: 28, height: 28)
         }
-        .buttonStyle(.plain)
-        .keyboardShortcut(.cancelAction)
-        .help("Close")
-        .accessibilityLabel("Close \(destination.title)")
       }
       .padding(.horizontal, 16)
       .frame(height: 52)

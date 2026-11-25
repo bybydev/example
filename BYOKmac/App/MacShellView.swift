@@ -359,6 +359,9 @@ struct MacShellView: View {
           conversationID: target.id,
           chats: chats
         )
+        model.preferences.prunePinnedConversations(
+          keeping: Set(chats.conversationSummaries.map(\.id))
+        )
         navigation.removeDeletedConversations(validIDs: chats.conversationSummaries.map(\.id))
       }
     }
@@ -852,7 +855,46 @@ enum MacSidebarSearchSupport {
   }
 }
 
-private struct MacSidebarProjectIconView: View {
+struct MacSidebarConversationBuckets: Equatable, Sendable {
+  static let recentDisplayLimit = 20
+
+  let pinned: [ChatConversation]
+  let recent: [ChatConversation]
+  let totalHistoryCount: Int
+  let hiddenRecentCount: Int
+
+  var hasMoreRecent: Bool { hiddenRecentCount > 0 }
+
+  static func make(
+    from history: [ChatConversation],
+    pinnedRaw: String,
+    recentLimit: Int = recentDisplayLimit
+  ) -> MacSidebarConversationBuckets {
+    let pinnedIDs = MacSidebarPinStore.parse(pinnedRaw)
+    let sortedByRecency: (ChatConversation, ChatConversation) -> Bool = { lhs, rhs in
+      if lhs.updatedAt != rhs.updatedAt {
+        return lhs.updatedAt > rhs.updatedAt
+      }
+      return lhs.id.rawValue < rhs.id.rawValue
+    }
+    let pinned = history
+      .filter { pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+    let allRecent = history
+      .filter { !pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+    let limit = max(0, recentLimit)
+    let displayedRecent = Array(allRecent.prefix(limit))
+    return MacSidebarConversationBuckets(
+      pinned: pinned,
+      recent: displayedRecent,
+      totalHistoryCount: history.count,
+      hiddenRecentCount: max(0, allRecent.count - displayedRecent.count)
+    )
+  }
+}
+
+struct MacSidebarProjectIconView: View {
   let project: ChatProject
   var size: CGFloat = 17
 
@@ -873,6 +915,50 @@ private struct MacSidebarProjectIconView: View {
   }
 }
 
+struct MacConversationMenuItems: View {
+  let pinned: Bool
+  let currentProject: ChatProject?
+  let projects: [ChatProject]
+  let assignProject: (ProjectID?) -> Void
+  let togglePinned: () -> Void
+  let rename: () -> Void
+  let delete: () -> Void
+
+  private var otherProjects: [ChatProject] {
+    projects.filter { $0.id != currentProject?.id }
+  }
+
+  var body: some View {
+    Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin", action: togglePinned)
+    Button("Rename", systemImage: "pencil", action: rename)
+
+    if currentProject != nil || !projects.isEmpty {
+      Divider()
+      if let currentProject {
+        Button("Remove from \(currentProject.name)", systemImage: "folder.badge.minus") {
+          assignProject(nil)
+        }
+        if !otherProjects.isEmpty {
+          Menu("Move to Project…", systemImage: "folder.badge.plus") {
+            ForEach(otherProjects) { project in
+              Button(project.name) { assignProject(project.id) }
+            }
+          }
+        }
+      } else if !projects.isEmpty {
+        Menu("Add to Project…", systemImage: "folder.badge.plus") {
+          ForEach(projects) { project in
+            Button(project.name) { assignProject(project.id) }
+          }
+        }
+      }
+    }
+
+    Divider()
+    Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+  }
+}
+
 private struct MacSidebarView: View {
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
@@ -886,8 +972,9 @@ private struct MacSidebarView: View {
 
   @Environment(MacWorkspaceModel.self) private var workspace
   @Environment(MacMCPModel.self) private var mcp
+  @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
   @Environment(PurchaseManager.self) private var purchaseManager
-  @AppStorage("byokchat.sidebar.pinnedConversationIDs") private var pinnedConversationIDs = ""
+  @AppStorage(MacSidebarPinStore.storageKey) private var pinnedConversationIDs = ""
   @FocusState private var searchFocused: Bool
 
   private var isSearching: Bool {
@@ -912,25 +999,10 @@ private struct MacSidebarView: View {
     )
   }
 
-  private var pinnedIDSet: Set<String> {
-    Set(
-      pinnedConversationIDs
-        .split(separator: "\n")
-        .map(String.init)
-    )
-  }
-
-  private var conversationSections: [MacChatListSection] {
-    MacChatListGrouping.sections(
+  private var sidebarBuckets: MacSidebarConversationBuckets {
+    MacSidebarConversationBuckets.make(
       from: chats.conversationSummaries,
-      pinnedIDs: pinnedIDSet
-    )
-  }
-
-  private var accountsByID: [ProviderAccountID: ProviderAccount] {
-    Dictionary(
-      providers.accounts.map { ($0.id, $0) },
-      uniquingKeysWith: { first, _ in first }
+      pinnedRaw: pinnedConversationIDs
     )
   }
 
@@ -949,13 +1021,12 @@ private struct MacSidebarView: View {
       .frame(height: MacDesignTokens.Layout.titlebarHeight)
 
       VStack(alignment: .leading, spacing: MacDesignTokens.Spacing.compact) {
-        HStack(spacing: MacDesignTokens.Spacing.small) {
-          Image(systemName: "bubble.left.and.bubble.right.fill")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(MacDesignTokens.Colors.accent)
-          Text("BYOKchat")
-            .font(.headline)
-        }
+        Image("BYOKWordmark")
+          .resizable()
+          .interpolation(.high)
+          .scaledToFit()
+          .frame(height: 22)
+          .accessibilityLabel("BYOKchat")
 
         Button(action: newChat) {
           Label("New Chat", systemImage: "square.and.pencil")
@@ -1023,19 +1094,35 @@ private struct MacSidebarView: View {
   }
 
   private var conversationList: some View {
-    let sections = conversationSections
-    let accounts = accountsByID
+    let buckets = sidebarBuckets
     return Group {
-      if chats.conversationSummaries.isEmpty {
+      if buckets.totalHistoryCount == 0 {
         sidebarEmptyState(icon: "bubble.left", text: "No conversations yet")
       } else {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
-              sidebarSectionTitle(section.title, topPadding: index == 0 ? 2 : 12)
-              ForEach(section.conversations) { conversation in
-                conversationRow(conversation, account: accounts[conversation.accountID])
+            if !buckets.pinned.isEmpty {
+              sidebarSectionTitle("Pinned", topPadding: 2)
+              ForEach(buckets.pinned) { conversation in
+                conversationRow(conversation, pinned: true)
               }
+            }
+
+            if !buckets.recent.isEmpty {
+              sidebarSectionTitle(
+                "Recent",
+                topPadding: buckets.pinned.isEmpty ? 2 : 12
+              )
+              ForEach(buckets.recent) { conversation in
+                conversationRow(conversation, pinned: false)
+              }
+            }
+
+            if buckets.hasMoreRecent {
+              MacSidebarAllChatsButton(totalCount: buckets.totalHistoryCount) {
+                utilitySheets.present(.allChats)
+              }
+              .padding(.top, 6)
             }
           }
           .padding(.horizontal, MacDesignTokens.Spacing.small)
@@ -1056,19 +1143,14 @@ private struct MacSidebarView: View {
 
   private func conversationRow(
     _ conversation: ChatConversation,
-    account: ProviderAccount?
+    pinned: Bool
   ) -> some View {
-    let pinned = pinnedIDSet.contains(conversation.id.rawValue)
     let currentProject = workspace.project(for: conversation.id)
-    let hasDraft = !chats.draft(for: conversation.id)
-      .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     return MacConversationRow(
       conversation: conversation,
-      account: account,
       selected: selection == conversation.id,
       pinned: pinned,
       isGenerating: chats.isGenerating(conversation.id),
-      hasDraft: hasDraft,
       currentProject: currentProject,
       projects: workspace.projects,
       action: { selection = conversation.id },
@@ -1081,10 +1163,7 @@ private struct MacSidebarView: View {
       },
       togglePinned: { togglePinned(conversation.id) },
       rename: { rename(conversation) },
-      delete: {
-        removePinned(conversation.id)
-        delete(conversation)
-      }
+      delete: { delete(conversation) }
     )
   }
 
@@ -1258,38 +1337,75 @@ private struct MacSidebarView: View {
   }
 
   private func togglePinned(_ id: ConversationID) {
-    var values = pinnedIDSet
-    if values.contains(id.rawValue) {
-      values.remove(id.rawValue)
-    } else {
-      values.insert(id.rawValue)
-    }
-    pinnedConversationIDs = values.sorted().joined(separator: "\n")
-  }
-
-  private func removePinned(_ id: ConversationID) {
-    var values = pinnedIDSet
-    guard values.remove(id.rawValue) != nil else { return }
-    pinnedConversationIDs = values.sorted().joined(separator: "\n")
+    pinnedConversationIDs = MacSidebarPinStore.toggled(id, in: pinnedConversationIDs)
   }
 
   private func prunePinnedConversations() {
     let validIDs = Set(chats.conversationSummaries.map { $0.id.rawValue })
-    let pruned = pinnedIDSet.intersection(validIDs)
-    let serialized = pruned.sorted().joined(separator: "\n")
+    let pruned = MacSidebarPinStore.parse(pinnedConversationIDs).intersection(validIDs)
+    let serialized = MacSidebarPinStore.serialize(pruned)
     if serialized != pinnedConversationIDs {
       pinnedConversationIDs = serialized
     }
   }
 }
 
+private struct MacSidebarAllChatsButton: View {
+  let totalCount: Int
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(alignment: .center, spacing: 8) {
+        Image(systemName: "bubble.left.and.bubble.right")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(
+            isHovered ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
+          )
+          .frame(width: 17, height: 17)
+
+        Text("All Chats")
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(
+            isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
+          .lineLimit(1)
+
+        Spacer(minLength: 6)
+
+        Text("\(totalCount)")
+          .font(.system(size: 11.5, weight: .medium).monospacedDigit())
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+
+        Image(systemName: "chevron.right")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.75))
+      }
+      .padding(.horizontal, MacDesignTokens.Spacing.small)
+      .frame(minHeight: 32)
+      .background(
+        isHovered ? MacDesignTokens.Colors.selection.opacity(0.45) : .clear,
+        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
+    .accessibilityLabel("All Chats, \(totalCount) conversation\(totalCount == 1 ? "" : "s")")
+  }
+}
+
 private struct MacConversationRow: View {
   let conversation: ChatConversation
-  let account: ProviderAccount?
   let selected: Bool
   let pinned: Bool
   let isGenerating: Bool
-  let hasDraft: Bool
   let currentProject: ChatProject?
   let projects: [ChatProject]
   let action: () -> Void
@@ -1298,106 +1414,99 @@ private struct MacConversationRow: View {
   let rename: () -> Void
   let delete: () -> Void
 
-  private var otherProjects: [ChatProject] {
-    projects.filter { $0.id != currentProject?.id }
+  @State private var isHovered = false
+  @State private var isEllipsisHovered = false
+
+  private var displayTitle: String {
+    conversation.title.isEmpty ? "New Chat" : conversation.title
+  }
+
+  private var rowBackground: Color {
+    if selected { return MacDesignTokens.Colors.selection }
+    if isHovered { return MacDesignTokens.Colors.selection.opacity(0.45) }
+    return .clear
   }
 
   var body: some View {
     Button(action: action) {
-      VStack(alignment: .leading, spacing: MacDesignTokens.Spacing.xSmall) {
-        HStack(alignment: .center, spacing: 6) {
-          if let currentProject {
-            MacSidebarProjectIconView(project: currentProject, size: 17)
-          }
-
-          Text(conversation.title.isEmpty ? "New Chat" : conversation.title)
-            .font(.system(size: 13, weight: selected ? .semibold : .medium))
-            .lineLimit(1)
-            .foregroundStyle(.primary)
-
-          Spacer(minLength: 4)
-
-          if isGenerating {
-            ProgressView()
-              .controlSize(.mini)
-              .accessibilityLabel("Generating")
-          }
-
-          Text(conversation.updatedAt.formatted(date: .omitted, time: .shortened))
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
+      HStack(alignment: .center, spacing: 7) {
+        if let currentProject {
+          MacSidebarProjectIconView(project: currentProject, size: 17)
         }
 
-        if let preview = conversation.lastMessagePreview,
-          !preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-          Text(preview)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        } else {
-          Text("\(conversation.messageCount) messages")
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-        }
+        Text(displayTitle)
+          .font(.system(size: 13, weight: selected ? .semibold : .regular))
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
 
-        HStack(spacing: 4) {
-          Text(account?.label ?? conversation.providerID.rawValue)
-          Text("·")
-          Text(conversation.modelID.rawValue)
-          if hasDraft {
-            Text("· Draft")
-              .foregroundStyle(MacDesignTokens.Colors.accent)
-          }
+        Spacer(minLength: 4)
+
+        if isGenerating {
+          ProgressView()
+            .controlSize(.mini)
+            .accessibilityLabel("Generating")
         }
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
-        .lineLimit(1)
       }
-      .padding(.horizontal, MacDesignTokens.Spacing.small)
-      .padding(.vertical, 7)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(
-        selected ? MacDesignTokens.Colors.selection : .clear,
-        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small)
-      )
+      .padding(.leading, MacDesignTokens.Spacing.small)
+      .padding(.trailing, isHovered ? 30 : MacDesignTokens.Spacing.small)
+      .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .contextMenu {
-      projectActions
-      if currentProject != nil || !projects.isEmpty {
-        Divider()
+    .overlay(alignment: .trailing) {
+      Menu {
+        menuItems
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(
+            isEllipsisHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
+          .frame(width: 24, height: 24)
+          .background(
+            Color.primary.opacity(isEllipsisHovered ? MacDesignTokens.Control.sheetCloseHoverOpacity : 0),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          )
+          .contentShape(Rectangle())
       }
-      Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin", action: togglePinned)
-      Button("Rename", systemImage: "pencil", action: rename)
-      Divider()
-      Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .onHover { isEllipsisHovered = $0 }
+      .padding(.trailing, 4)
+      .opacity(isHovered ? 1 : 0)
+      .allowsHitTesting(isHovered)
+      .help("Chat options")
+      .accessibilityLabel("Options for \(displayTitle)")
     }
-    .accessibilityLabel(conversation.title.isEmpty ? "New Chat" : conversation.title)
+    .background(
+      rowBackground,
+      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+    )
+    .contentShape(Rectangle())
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
+    .contextMenu {
+      menuItems
+    }
+    .accessibilityLabel(displayTitle)
     .accessibilityValue(pinned ? "Pinned" : "")
   }
 
-  @ViewBuilder
-  private var projectActions: some View {
-    if let currentProject {
-      Button("Remove from \(currentProject.name)", systemImage: "folder.badge.minus") {
-        assignProject(nil)
-      }
-      if !otherProjects.isEmpty {
-        Menu("Move to Project…", systemImage: "folder.badge.plus") {
-          ForEach(otherProjects) { project in
-            Button(project.name) { assignProject(project.id) }
-          }
-        }
-      }
-    } else if !projects.isEmpty {
-      Menu("Add to Project…", systemImage: "folder.badge.plus") {
-        ForEach(projects) { project in
-          Button(project.name) { assignProject(project.id) }
-        }
-      }
-    }
+  private var menuItems: some View {
+    MacConversationMenuItems(
+      pinned: pinned,
+      currentProject: currentProject,
+      projects: projects,
+      assignProject: assignProject,
+      togglePinned: togglePinned,
+      rename: rename,
+      delete: delete
+    )
   }
 }
 
@@ -1451,7 +1560,7 @@ private struct MacSearchResultRow: View {
   }
 }
 
-private struct MacRenameConversationSheet: View {
+struct MacRenameConversationSheet: View {
   let conversation: ChatConversation
   let save: (String) async -> Bool
 

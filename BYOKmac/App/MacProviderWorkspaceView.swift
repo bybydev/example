@@ -103,16 +103,9 @@ struct MacProviderManagementView: View {
           Text("AI Providers")
             .font(.headline)
           Spacer()
-          Button {
+          MacSheetCloseButton(accessibilityLabel: "Close AI Providers") {
             dismiss()
-          } label: {
-            Image(systemName: "xmark")
-              .frame(width: 28, height: 28)
           }
-          .buttonStyle(.plain)
-          .keyboardShortcut(.cancelAction)
-          .help("Close")
-          .accessibilityLabel("Close AI Providers")
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -1037,11 +1030,9 @@ struct MacProviderKindPickerSheet: View {
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
         Spacer()
-        Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
-          .buttonStyle(.plain)
-          .keyboardShortcut(.cancelAction)
-          .help("Close")
-          .accessibilityLabel("Close Provider Picker")
+        MacSheetCloseButton(accessibilityLabel: "Close Provider Picker") {
+          dismiss()
+        }
       }
       .padding(.horizontal, 18)
       .padding(.top, 18)
@@ -1166,11 +1157,9 @@ struct MacSupportedProvidersCatalogView: View {
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
         Spacer()
-        Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
-          .buttonStyle(.plain)
-          .keyboardShortcut(.cancelAction)
-          .help("Close")
-          .accessibilityLabel("Close Supported Providers")
+        MacSheetCloseButton(accessibilityLabel: "Close Supported Providers") {
+          dismiss()
+        }
       }
       .padding(.horizontal, 18)
       .padding(.top, 18)

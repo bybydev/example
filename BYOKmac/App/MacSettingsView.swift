@@ -1,3 +1,4 @@
+import AppKit
 import BYOKchatProviderCore
 import MacAppFoundation
 import SwiftUI
@@ -11,19 +12,47 @@ struct MacSettingsView: View {
   @State private var selection: MacSettingsTab = .general
 
   var body: some View {
-    HStack(spacing: 0) {
-      sidebar
-        .frame(width: 218)
+    TabView(selection: $selection) {
+      Tab("General", systemImage: "gearshape", value: MacSettingsTab.general) {
+        MacGeneralSettingsView(
+          preferences: model.preferences,
+          chats: model.chats
+        )
+      }
 
-      Rectangle()
-        .fill(MacDesignTokens.Colors.separator.opacity(0.85))
-        .frame(width: 1)
+      Tab("Data", systemImage: "externaldrive", value: MacSettingsTab.data) {
+        MacDataSettingsView(model: model)
+      }
 
-      detail
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(MacDesignTokens.Colors.canvas)
+      Tab("Theme", systemImage: "paintpalette", value: MacSettingsTab.theme) {
+        MacAppThemeSettingsPane(
+          themeStore: model.themeStore,
+          purchaseManager: purchaseManager,
+          variant: .compact,
+          onUpgrade: {
+            MacProAccess.requestUpgrade(.themes)
+          }
+        )
+      }
+
+      Tab("Plan", systemImage: "creditcard", value: MacSettingsTab.plan) {
+        ZStack {
+          MacDesignTokens.Colors.canvas
+          ProPlanPane(
+            purchaseManager: purchaseManager,
+            configuration: MacPurchaseStore.planConfiguration,
+            onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
+          )
+          .padding(20)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+      }
+
+      Tab("About", systemImage: "info.circle", value: MacSettingsTab.about) {
+        MacAboutSettingsView()
+      }
     }
-    .frame(minWidth: 900, idealWidth: 940, minHeight: 620, idealHeight: 660)
+    .frame(minWidth: 640, idealWidth: 680, minHeight: 520, idealHeight: 560)
     .background(MacDesignTokens.Colors.canvas)
     .groupBoxStyle(MacSettingsGroupBoxStyle())
     .onAppear {
@@ -36,252 +65,10 @@ struct MacSettingsView: View {
     .macProUpsellPresenter()
   }
 
-  private var sidebar: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 10) {
-        Image(systemName: "gearshape.fill")
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(MacDesignTokens.Colors.accent)
-          .frame(width: 28, height: 28)
-          .background(
-            MacDesignTokens.Colors.accentSoft,
-            in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
-          )
-
-        Text("Settings")
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-      }
-      .padding(.horizontal, 14)
-      .padding(.top, 16)
-      .padding(.bottom, 14)
-
-      ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          settingsSidebarSection("Application", tabs: [.general, .theme])
-          settingsSidebarSection("Account", tabs: [.plan, .connections])
-          settingsSidebarSection("Features", tabs: [.tools])
-          settingsSidebarSection("Advanced", tabs: [.data, .diagnostics])
-        }
-        .padding(.horizontal, 9)
-        .padding(.bottom, 14)
-      }
-      .scrollIndicators(.hidden)
-
-      Spacer(minLength: 0)
-    }
-    .background(MacDesignTokens.Colors.surface)
-  }
-
-  private func settingsSidebarSection(_ sectionTitle: String, tabs: [MacSettingsTab]) -> some View {
-    VStack(alignment: .leading, spacing: 5) {
-      Text(sectionTitle.uppercased())
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.82))
-        .tracking(0.55)
-        .padding(.horizontal, 9)
-        .padding(.bottom, 1)
-
-      ForEach(tabs, id: \.self) { tab in
-        MacSettingsSidebarRow(
-          title: title(for: tab),
-          systemImage: systemImage(for: tab),
-          isSelected: selection == tab
-        ) {
-          selection = tab
-        }
-      }
-    }
-  }
-
-  private var detail: some View {
-    VStack(spacing: 0) {
-      MacSettingsDetailHeader(
-        title: title(for: selection),
-        subtitle: subtitle(for: selection),
-        systemImage: systemImage(for: selection)
-      )
-
-      Rectangle()
-        .fill(MacDesignTokens.Colors.separator.opacity(0.72))
-        .frame(height: 1)
-
-      detailContent
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-  }
-
-  @ViewBuilder
-  private var detailContent: some View {
-    switch selection {
-    case .general:
-      MacGeneralSettingsView(
-        preferences: model.preferences,
-        chats: model.chats
-      )
-    case .plan:
-      ZStack {
-        MacDesignTokens.Colors.canvas
-        ProPlanPane(
-          purchaseManager: purchaseManager,
-          configuration: MacPurchaseStore.planConfiguration,
-          onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
-        )
-        .padding(20)
-        .frame(maxWidth: 760, maxHeight: .infinity)
-      }
-    case .theme:
-      MacAppThemeSettingsPane(
-        themeStore: model.themeStore,
-        purchaseManager: purchaseManager,
-        variant: .compact,
-        onUpgrade: {
-          MacProAccess.requestUpgrade(.themes)
-        }
-      )
-    case .connections:
-      MacConnectionSettingsView(model: model)
-    case .tools:
-      MacToolsSettingsView(model: model)
-    case .data:
-      MacDataSettingsView(model: model)
-    case .diagnostics:
-      MacDiagnosticsSettingsView(model: model)
-    }
-  }
-
-  private func title(for tab: MacSettingsTab) -> String {
-    switch tab {
-    case .general: "General"
-    case .plan: "Plan"
-    case .theme: "Theme"
-    case .connections: "Connections"
-    case .tools: "Tools"
-    case .data: "Data"
-    case .diagnostics: "Diagnostics"
-    }
-  }
-
-  private func subtitle(for tab: MacSettingsTab) -> String {
-    switch tab {
-    case .general:
-      "Chat defaults, privacy, and app information."
-    case .plan:
-      "Manage BYOK Pro access, purchases, and subscription status."
-    case .theme:
-      "Choose the color theme used throughout BYOKchat."
-    case .connections:
-      "Configure the provider accounts used to run chats."
-    case .tools:
-      "Manage MCP servers and the tools available to conversations."
-    case .data:
-      "Back up, restore, inspect, or reset local application data."
-    case .diagnostics:
-      "Inspect local telemetry health, storage, and diagnostic events."
-    }
-  }
-
-  private func systemImage(for tab: MacSettingsTab) -> String {
-    switch tab {
-    case .general: "gearshape"
-    case .plan: "creditcard"
-    case .theme: "paintpalette"
-    case .connections: "bolt.horizontal.circle"
-    case .tools: "wrench.and.screwdriver"
-    case .data: "externaldrive"
-    case .diagnostics: "waveform.path.ecg"
-    }
-  }
-
   private func consumeRouterRequest() {
-    if let tab = settingsRouter.requestedTab {
+    if let tab = settingsRouter.consumeRequestedTab() {
       selection = tab
     }
-  }
-}
-
-private struct MacSettingsSidebarRow: View {
-  let title: String
-  let systemImage: String
-  let isSelected: Bool
-  let action: () -> Void
-
-  @State private var isHovering = false
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 9) {
-        Image(systemName: systemImage)
-          .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
-          .foregroundStyle(
-            isSelected ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
-          )
-          .frame(width: 18)
-
-        Text(title)
-          .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-
-        Spacer(minLength: 0)
-      }
-      .padding(.horizontal, 9)
-      .frame(height: 32)
-      .contentShape(Rectangle())
-      .background(
-        rowBackground,
-        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
-      )
-      .overlay {
-        if isSelected {
-          RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
-            .stroke(MacDesignTokens.Colors.accent.opacity(0.18), lineWidth: 1)
-        }
-      }
-    }
-    .buttonStyle(.plain)
-    .onHover { isHovering = $0 }
-    .accessibilityLabel(title)
-    .accessibilityValue(isSelected ? "Selected" : "")
-  }
-
-  private var rowBackground: Color {
-    if isSelected { return MacDesignTokens.Colors.selection }
-    if isHovering { return MacDesignTokens.Colors.selection.opacity(0.48) }
-    return .clear
-  }
-}
-
-private struct MacSettingsDetailHeader: View {
-  let title: String
-  let subtitle: String
-  let systemImage: String
-
-  var body: some View {
-    HStack(spacing: 12) {
-      Image(systemName: systemImage)
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(MacDesignTokens.Colors.accent)
-        .frame(width: 34, height: 34)
-        .background(
-          MacDesignTokens.Colors.accentSoft,
-          in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
-        )
-
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title)
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-        Text(subtitle)
-          .font(.system(size: 11.5))
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          .lineLimit(1)
-      }
-
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, 22)
-    .frame(height: 72)
-    .background(MacDesignTokens.Colors.canvas)
   }
 }
 
@@ -326,12 +113,6 @@ private struct MacGeneralSettingsView: View {
 
   private var trimmedPrompt: String {
     MacPreferencesModel.normalizedSystemPrompt(promptDraft)
-  }
-
-  private var appVersionSummary: String {
-    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
-    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
-    return "\(version) (\(build))"
   }
 
   var body: some View {
@@ -405,46 +186,9 @@ private struct MacGeneralSettingsView: View {
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         }
-
-        GroupBox("About & Legal") {
-          VStack(alignment: .leading, spacing: 10) {
-            aboutLinkRow(
-              title: "Website",
-              systemImage: "globe",
-              destination: MacPurchaseStore.websiteURL
-            )
-            aboutLinkRow(
-              title: "Contact Us",
-              systemImage: "envelope",
-              destination: MacPurchaseStore.contactURL
-            )
-            aboutLinkRow(
-              title: "Privacy Policy",
-              systemImage: "hand.raised",
-              destination: MacPurchaseStore.privacyURL
-            )
-            aboutLinkRow(
-              title: "Terms of Use",
-              systemImage: "doc.text",
-              destination: MacPurchaseStore.termsURL
-            )
-
-            Rectangle()
-              .fill(MacDesignTokens.Colors.separator.opacity(0.72))
-              .frame(height: 1)
-
-            LabeledContent {
-              Text(appVersionSummary)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            } label: {
-              Label("App Version", systemImage: "info.circle")
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-        }
       }
-      .padding(22)
-      .frame(maxWidth: 760, alignment: .leading)
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .background(MacDesignTokens.Colors.canvas)
     .confirmationDialog(
@@ -483,21 +227,6 @@ private struct MacGeneralSettingsView: View {
     }
   }
 
-  private func aboutLinkRow(title: String, systemImage: String, destination: URL) -> some View {
-    Link(destination: destination) {
-      HStack(spacing: 8) {
-        Label(title, systemImage: systemImage)
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-        Spacer(minLength: 0)
-        Image(systemName: "arrow.up.right")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      }
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-  }
-
   private func commitPromptIfNeeded() {
     let normalized = trimmedPrompt
     let previous = MacPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt)
@@ -508,122 +237,6 @@ private struct MacGeneralSettingsView: View {
     if previous != normalized {
       Task {
         await chats?.syncDefaultSystemPrompt(from: previous, to: normalized)
-      }
-    }
-  }
-}
-
-private struct MacConnectionSettingsView: View {
-  let model: MacAppModel
-  @State private var showingConnections = false
-
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        if let providers = model.providers {
-          GroupBox("Provider Connections") {
-            HStack(alignment: .center, spacing: 18) {
-              VStack(alignment: .leading, spacing: 5) {
-                Text("\(providers.accounts.count) configured connection\(providers.accounts.count == 1 ? "" : "s")")
-                  .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                Text("Provider credentials stay in Keychain and are used only when you send a request.")
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              }
-              Spacer(minLength: 20)
-              Button("Manage Connections…") {
-                showingConnections = true
-              }
-            }
-          }
-        } else {
-          ContentUnavailableView(
-            "Connections Unavailable",
-            systemImage: "bolt.slash",
-            description: Text("Finish app startup before editing provider connections.")
-          )
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-        }
-      }
-      .padding(22)
-      .frame(maxWidth: 760, alignment: .leading)
-    }
-    .background(MacDesignTokens.Colors.canvas)
-    .sheet(isPresented: $showingConnections) {
-      if let providers = model.providers {
-        MacProviderManagementView(model: providers)
-          .macProUpsellPresenter()
-      }
-    }
-  }
-}
-
-private struct MacToolsSettingsView: View {
-  let model: MacAppModel
-  @State private var showingServers = false
-
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        if let mcp = model.mcp {
-          GroupBox("MCP Servers") {
-            VStack(alignment: .leading, spacing: 12) {
-              HStack(alignment: .center, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
-                  Text("\(mcp.servers.count) configured server\(mcp.servers.count == 1 ? "" : "s")")
-                    .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                  Text("Tools are enabled per chat or inherited from Projects.")
-                    .font(.caption)
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                }
-                Spacer(minLength: 20)
-                Button("Manage MCP Servers…") {
-                  showingServers = true
-                }
-              }
-
-              if !mcp.servers.isEmpty {
-                Rectangle()
-                  .fill(MacDesignTokens.Colors.separator.opacity(0.72))
-                  .frame(height: 1)
-
-                VStack(spacing: 9) {
-                  ForEach(mcp.servers.prefix(6)) { server in
-                    HStack(spacing: 9) {
-                      Image(systemName: server.isEnabled ? "shippingbox.fill" : "shippingbox")
-                        .foregroundStyle(
-                          server.isEnabled ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
-                        )
-                        .frame(width: 18)
-                      Text(server.name)
-                        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                      Spacer()
-                      Text("\(mcp.snapshot(for: server.id)?.tools.count ?? 0) tools")
-                        .font(.caption)
-                        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                    }
-                  }
-                }
-              }
-            }
-          }
-        } else {
-          ContentUnavailableView(
-            "Tools Unavailable",
-            systemImage: "wrench.and.screwdriver",
-            description: Text("Finish app startup before configuring MCP servers.")
-          )
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-        }
-      }
-      .padding(22)
-      .frame(maxWidth: 760, alignment: .leading)
-    }
-    .background(MacDesignTokens.Colors.canvas)
-    .sheet(isPresented: $showingServers) {
-      if let mcp = model.mcp {
-        MacMCPServerListView(mcp: mcp)
-          .macProUpsellPresenter()
       }
     }
   }
@@ -648,21 +261,109 @@ private struct MacDataSettingsView: View {
   }
 }
 
-private struct MacDiagnosticsSettingsView: View {
-  let model: MacAppModel
+private struct MacAboutSettingsView: View {
+  private var appVersionSummary: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+    return "Version \(version) (\(build))"
+  }
 
   var body: some View {
-    if let diagnostics = model.diagnostics {
-      MacDiagnosticsView(diagnostics: diagnostics)
-    } else {
-      ContentUnavailableView(
-        "Diagnostics Unavailable",
-        systemImage: "waveform.path.ecg.rectangle",
-        description: Text("Finish app startup before inspecting local diagnostics.")
-      )
-      .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(MacDesignTokens.Colors.canvas)
+    ScrollView {
+      VStack(spacing: 20) {
+        VStack(spacing: 10) {
+          let appIcon: NSImage? = NSApplication.shared.applicationIconImage
+          if let appIcon {
+            Image(nsImage: appIcon)
+              .resizable()
+              .interpolation(.high)
+              .frame(width: 68, height: 68)
+              .accessibilityHidden(true)
+          }
+
+          VStack(spacing: 4) {
+            Text("BYOKchat")
+              .font(.title2.weight(.semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+
+            Text(appVersionSummary)
+              .font(.callout)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+
+          Text("Private, native AI chat powered by your own cloud and local model connections.")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 420)
+        }
+        .padding(.top, 8)
+
+        GroupBox("Links & Legal") {
+          VStack(spacing: 4) {
+            MacAboutLinkRow(
+              title: "Website",
+              systemImage: "globe",
+              destination: MacPurchaseStore.websiteURL
+            )
+            MacAboutLinkRow(
+              title: "Contact Us",
+              systemImage: "envelope",
+              destination: MacPurchaseStore.contactURL
+            )
+            MacAboutLinkRow(
+              title: "Privacy Policy",
+              systemImage: "hand.raised",
+              destination: MacPurchaseStore.privacyURL
+            )
+            MacAboutLinkRow(
+              title: "Terms of Use",
+              systemImage: "doc.text",
+              destination: MacPurchaseStore.termsURL
+            )
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .padding(20)
+      .frame(maxWidth: .infinity)
     }
+    .background(MacDesignTokens.Colors.canvas)
+  }
+}
+
+private struct MacAboutLinkRow: View {
+  let title: String
+  let systemImage: String
+  let destination: URL
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Link(destination: destination) {
+      HStack(spacing: 8) {
+        Label(title, systemImage: systemImage)
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        Spacer(minLength: 0)
+        Image(systemName: "arrow.up.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(
+            isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 7)
+      .background(
+        Color.primary.opacity(isHovered ? MacDesignTokens.Control.hoverOpacity : 0),
+        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
   }
 }

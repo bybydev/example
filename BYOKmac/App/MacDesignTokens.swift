@@ -37,10 +37,13 @@ enum MacDesignTokens {
 
   enum Control {
     static let iconButtonSize: CGFloat = 28
+    static let sheetCloseButtonSize: CGFloat = 30
     static let compactButtonHeight: CGFloat = 24
     static let compactHorizontalPadding: CGFloat = 10
     static let hoverOpacity: CGFloat = 0.055
     static let pressedOpacity: CGFloat = 0.09
+    static let sheetCloseHoverOpacity: CGFloat = 0.10
+    static let sheetClosePressedOpacity: CGFloat = 0.16
     static let disabledOpacity: CGFloat = 0.5
     static let interactionDuration: Double = 0.12
   }
@@ -110,6 +113,93 @@ private struct MacIconButtonStyleBody<Label: View>: View {
   private var backgroundOpacity: CGFloat {
     if isPressed { return MacDesignTokens.Control.pressedOpacity }
     if isHovered { return MacDesignTokens.Control.hoverOpacity }
+    return 0
+  }
+}
+
+struct MacSheetCloseButton: View {
+  let accessibilityLabel: String
+  let action: () -> Void
+
+  init(
+    accessibilityLabel: String = "Close",
+    action: @escaping () -> Void
+  ) {
+    self.accessibilityLabel = accessibilityLabel
+    self.action = action
+  }
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "xmark")
+        .font(.system(size: 12, weight: .semibold))
+    }
+    .buttonStyle(MacSheetCloseButtonStyle())
+    .keyboardShortcut(.cancelAction)
+    .help("Close")
+    .accessibilityLabel(accessibilityLabel)
+  }
+}
+
+struct MacSheetCloseButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    MacSheetCloseButtonStyleBody(
+      label: configuration.label,
+      isPressed: configuration.isPressed
+    )
+  }
+}
+
+private struct MacSheetCloseButtonStyleBody<Label: View>: View {
+  let label: Label
+  let isPressed: Bool
+
+  @Environment(\.isEnabled) private var isEnabled
+  @State private var isHovered = false
+
+  var body: some View {
+    label
+      .foregroundStyle(
+        isHovered || isPressed
+          ? MacDesignTokens.Colors.textPrimary
+          : MacDesignTokens.Colors.textMuted
+      )
+      .frame(
+        width: MacDesignTokens.Control.sheetCloseButtonSize,
+        height: MacDesignTokens.Control.sheetCloseButtonSize
+      )
+      .background(
+        Color.primary.opacity(backgroundOpacity),
+        in: Circle()
+      )
+      .overlay {
+        Circle()
+          .stroke(Color.primary.opacity(borderOpacity), lineWidth: 0.75)
+      }
+      .scaleEffect(isPressed ? 0.94 : 1)
+      .contentShape(Rectangle())
+      .opacity(isEnabled ? 1 : MacDesignTokens.Control.disabledOpacity)
+      .focusEffectDisabled(false)
+      .onHover { isHovered = $0 }
+      .animation(
+        .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+        value: isHovered
+      )
+      .animation(
+        .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+        value: isPressed
+      )
+  }
+
+  private var backgroundOpacity: CGFloat {
+    if isPressed { return MacDesignTokens.Control.sheetClosePressedOpacity }
+    if isHovered { return MacDesignTokens.Control.sheetCloseHoverOpacity }
+    return 0
+  }
+
+  private var borderOpacity: CGFloat {
+    if isPressed { return 0.16 }
+    if isHovered { return 0.11 }
     return 0
   }
 }
