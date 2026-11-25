@@ -147,6 +147,12 @@ final class MacAppModel {
 
   private let coreServicesFactory: MacCoreServicesFactory
   private var catalogRefreshTask: Task<Void, Never>?
+  private var postStartupMaintenanceTask: Task<Void, Never>?
+
+  private struct StagedStartupError: Error {
+    let stage: MacStartupStage
+    let underlying: any Error
+  }
 
   init(
     storageEnvironment: BYOKStorageEnvironment = MacStorageEnvironment.current,
@@ -217,22 +223,30 @@ final class MacAppModel {
       environment: storageEnvironment,
       blobs: services.fileBlobStore
     )
-    await pendingStore.load()
-    pendingAttachmentStore = pendingStore
-
     let providerModel = MacProviderModel(services: services)
-    try await providerModel.load()
+    let projectWorkspace = services.projectWorkspace
+    let mcpRuntime = services.mcpRuntime
+    let conversationStore = services.conversationStore
+    let libraryStore = services.libraryStore
+
+    async let pendingLoad: Void = pendingStore.load()
+    async let providersLoad: Void = providerModel.load()
+    async let projectsLoad: Void = projectWorkspace.load()
+    async let mcpRuntimeLoad: Void = mcpRuntime.load()
+    async let chatsLoad: Void = conversationStore.load()
+    async let libraryLoad: Void = libraryStore.load()
+
+    await pendingLoad
+    try await providersLoad
+    try await projectsLoad
+    try await mcpRuntimeLoad
+    try await chatsLoad
+    try await libraryLoad
+
+    pendingAttachmentStore = pendingStore
     providers = providerModel
 
-    try await services.projectWorkspace.load()
-
-    mcp?.stopInteractionObservers()
-    let mcpModel = MacMCPModel(services: services)
-    try await mcpModel.load()
-    mcp = mcpModel
-
-    try await services.conversationStore.load()
-    let conversations = Self.sortedConversations(await services.conversationStore.conversationSummaries())
+    let conversations = Self.sortedConversations(await conversationStore.conversationSummaries())
     chats = MacChatSessionModel(
       services: services,
       providers: providerModel,
@@ -240,9 +254,16 @@ final class MacAppModel {
       initialSummaries: conversations
     )
 
-    try await services.libraryStore.load()
+    try await projectWorkspace.reconcileConversationIDs(Set(conversations.map(\.id)))
+
+    mcp?.stopInteractionObservers()
     let workspaceModel = MacWorkspaceModel(services: services)
-    await workspaceModel.reload()
+    let mcpModel = MacMCPModel(services: services)
+    async let workspaceReload: Void = workspaceModel.reload()
+    async let mcpLoad: Void = mcpModel.load(skipRuntimeLoad: true)
+    await workspaceReload
+    try await mcpLoad
+
     workspaceModel.onFileReferencesChanged = { [weak self] in
       guard let self, let services = self.coreServices else { return }
       Task { @MainActor in
@@ -253,10 +274,8 @@ final class MacAppModel {
       await workspaceModel?.reload()
     }
     workspace = workspaceModel
+    mcp = mcpModel
 
-    try await services.projectWorkspace.reconcileConversationIDs(Set(conversations.map(\.id)))
-    await workspaceModel.reload()
-    await mcpModel.reloadFromStorage()
     try await sweepOrphanFiles(services: services)
     await diagnostics?.load()
 
@@ -338,47 +357,64 @@ final class MacAppModel {
     do {
       clearRuntimeModels()
       startupState = .loading(currentStage)
-      try await BYOKStorageBootstrap.prepare(environment: storageEnvironment)
-      lastRecoveryBackupURL = await MacStorageRecovery.latestRecoveryBackup(
-        environment: storageEnvironment
-      )
+
+      // Overlap storage migration check with off-main-thread decoding of the
+      // bundled model catalog so composing services never stalls the UI thread.
+      let environment = storageEnvironment
+      async let prepareStorage: Void = BYOKStorageBootstrap.prepare(environment: environment)
+      async let warmCatalog: Void = Task.detached(priority: .userInitiated) {
+        _ = ModelCatalogRegistry.bundled
+        _ = BuiltInProviders.all
+      }.value
+      try await prepareStorage
+      await warmCatalog
 
       currentStage = .composingServices
       startupState = .loading(currentStage)
       let services = try coreServicesFactory(storageEnvironment)
       coreServices = services
 
-      currentStage = .preparingFiles
+      currentStage = .loadingChats
       startupState = .loading(currentStage)
-      try await services.fileBlobStore.rebuildIndexIfMissing()
-      try await services.fileBlobStore.fillUnknownMetadata()
+
       let pendingStore = MacPendingAttachmentStore(
         environment: storageEnvironment,
         blobs: services.fileBlobStore
       )
-      await pendingStore.load()
-      pendingAttachmentStore = pendingStore
-
-      currentStage = .loadingProviders
-      startupState = .loading(currentStage)
       let providerModel = MacProviderModel(services: services)
-      try await providerModel.load()
+      let projectWorkspace = services.projectWorkspace
+      let mcpRuntime = services.mcpRuntime
+      let conversationStore = services.conversationStore
+      let libraryStore = services.libraryStore
+
+      async let pendingLoad: Void = pendingStore.load()
+      async let providersLoad: Void = Self.runStage(.loadingProviders) {
+        try await providerModel.load()
+      }
+      async let projectsLoad: Void = Self.runStage(.loadingProjects) {
+        try await projectWorkspace.load()
+      }
+      async let mcpRuntimeLoad: Void = Self.runStage(.loadingTools) {
+        try await mcpRuntime.load()
+      }
+      async let chatsLoad: Void = Self.runStage(.loadingChats) {
+        try await conversationStore.load()
+      }
+      async let libraryLoad: Void = Self.runStage(.loadingLibrary) {
+        try await libraryStore.load()
+      }
+
+      await pendingLoad
+      try await providersLoad
+      try await projectsLoad
+      try await mcpRuntimeLoad
+      try await chatsLoad
+      try await libraryLoad
+
+      pendingAttachmentStore = pendingStore
       providers = providerModel
 
-      currentStage = .loadingProjects
-      startupState = .loading(currentStage)
-      try await services.projectWorkspace.load()
-
-      currentStage = .loadingTools
-      startupState = .loading(currentStage)
-      let mcpModel = MacMCPModel(services: services)
-      try await mcpModel.load()
-      mcp = mcpModel
-
-      currentStage = .loadingChats
-      startupState = .loading(currentStage)
-      try await services.conversationStore.load()
-      let conversations = Self.sortedConversations(await services.conversationStore.conversationSummaries())
+      let conversations = Self.sortedConversations(await conversationStore.conversationSummaries())
       chats = MacChatSessionModel(
         services: services,
         providers: providerModel,
@@ -386,11 +422,19 @@ final class MacAppModel {
         initialSummaries: conversations
       )
 
-      currentStage = .loadingLibrary
+      currentStage = .reconciling
       startupState = .loading(currentStage)
-      try await services.libraryStore.load()
+      try await projectWorkspace.reconcileConversationIDs(Set(conversations.map(\.id)))
+
       let workspaceModel = MacWorkspaceModel(services: services)
-      await workspaceModel.reload()
+      let mcpModel = MacMCPModel(services: services)
+      async let workspaceReload: Void = workspaceModel.reload()
+      async let mcpLoad: Void = Self.runStage(.loadingTools) {
+        try await mcpModel.load(skipRuntimeLoad: true)
+      }
+      await workspaceReload
+      try await mcpLoad
+
       workspaceModel.onFileReferencesChanged = { [weak self] in
         guard let self, let services = self.coreServices else { return }
         Task { @MainActor in
@@ -401,35 +445,85 @@ final class MacAppModel {
         await workspaceModel?.reload()
       }
       workspace = workspaceModel
-
-      currentStage = .reconciling
-      startupState = .loading(currentStage)
-      try await services.projectWorkspace.reconcileConversationIDs(Set(conversations.map(\.id)))
-      await workspaceModel.reload()
-      await mcpModel.reloadFromStorage()
-      try await sweepOrphanFiles(services: services)
-
-      currentStage = .maintenance
-      startupState = .loading(currentStage)
-      await services.telemetryRecorder.performMaintenance()
+      mcp = mcpModel
 
       dataManagement = MacDataManagementModel(app: self, services: services)
-      let diagnosticsModel = MacDiagnosticsModel(recorder: services.telemetryRecorder)
-      await diagnosticsModel.load()
-      diagnostics = diagnosticsModel
+      diagnostics = MacDiagnosticsModel(recorder: services.telemetryRecorder)
 
       startupState = .ready
-      scheduleBackgroundCatalogRefresh(for: providerModel)
+      schedulePostStartupMaintenance(services: services, providerModel: providerModel)
+    } catch let staged as StagedStartupError {
+      MacAppAnalytics.reportError(staged.stage.analyticsErrorCode, component: "startup")
+      if lastRecoveryBackupURL == nil {
+        lastRecoveryBackupURL = await MacStorageRecovery.latestRecoveryBackup(
+          environment: storageEnvironment
+        )
+      }
+      clearRuntimeModels()
+      startupState = .failed(MacStartupFailure(stage: staged.stage, error: staged.underlying))
     } catch {
       MacAppAnalytics.reportError(currentStage.analyticsErrorCode, component: "startup")
+      if lastRecoveryBackupURL == nil {
+        lastRecoveryBackupURL = await MacStorageRecovery.latestRecoveryBackup(
+          environment: storageEnvironment
+        )
+      }
       clearRuntimeModels()
       startupState = .failed(MacStartupFailure(stage: currentStage, error: error))
     }
   }
 
+  private nonisolated static func runStage(
+    _ stage: MacStartupStage,
+    operation: @Sendable () async throws -> Void
+  ) async throws {
+    do {
+      try await operation()
+    } catch {
+      throw StagedStartupError(stage: stage, underlying: error)
+    }
+  }
+
+  /// Runs non-critical disk, SQLite maintenance, orphan blob sweeps, and remote
+  /// catalog refreshes at utility priority after the main window is interactive.
+  private func schedulePostStartupMaintenance(
+    services: BYOKCoreServices,
+    providerModel: MacProviderModel
+  ) {
+    postStartupMaintenanceTask?.cancel()
+    let environment = storageEnvironment
+    let fileBlobStore = services.fileBlobStore
+    let telemetryRecorder = services.telemetryRecorder
+    postStartupMaintenanceTask = Task(priority: .utility) { @MainActor [weak self, weak providerModel] in
+      try? await Task.sleep(for: .milliseconds(500))
+      guard let self, !Task.isCancelled else { return }
+
+      if self.lastRecoveryBackupURL == nil {
+        self.lastRecoveryBackupURL = await MacStorageRecovery.latestRecoveryBackup(
+          environment: environment
+        )
+      }
+      guard !Task.isCancelled else { return }
+
+      try? await fileBlobStore.rebuildIndexIfMissing()
+      guard !Task.isCancelled else { return }
+      try? await fileBlobStore.fillUnknownMetadata()
+      guard !Task.isCancelled else { return }
+      if let currentServices = self.coreServices {
+        try? await self.sweepOrphanFiles(services: currentServices)
+      }
+      guard !Task.isCancelled else { return }
+
+      await telemetryRecorder.performMaintenance()
+      guard !Task.isCancelled, let providerModel else { return }
+
+      self.scheduleBackgroundCatalogRefresh(for: providerModel)
+    }
+  }
+
   private func scheduleBackgroundCatalogRefresh(for providerModel: MacProviderModel) {
     catalogRefreshTask?.cancel()
-    catalogRefreshTask = Task { @MainActor [weak self, weak providerModel] in
+    catalogRefreshTask = Task(priority: .utility) { @MainActor [weak self, weak providerModel] in
       guard let providerModel else { return }
       await providerModel.refreshModelCatalogIfNeeded()
       guard !Task.isCancelled else { return }
@@ -440,6 +534,8 @@ final class MacAppModel {
   }
 
   private func clearRuntimeModels() {
+    postStartupMaintenanceTask?.cancel()
+    postStartupMaintenanceTask = nil
     catalogRefreshTask?.cancel()
     catalogRefreshTask = nil
     mcp?.stopInteractionObservers()

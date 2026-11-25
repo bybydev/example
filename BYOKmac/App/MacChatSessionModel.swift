@@ -110,6 +110,7 @@ final class MacChatSessionModel {
   private static let searchDebounce: Duration = .milliseconds(160)
 
   private(set) var conversationSummaries: [ChatConversation]
+  private var summariesByID: [ConversationID: ChatConversation]
   private(set) var hydratedConversations: [ConversationID: ChatConversation] = [:]
   private(set) var livePresentations: [ChatMessageID: MacLiveMessagePresentation] = [:]
   private(set) var activeConversationIDs: Set<ConversationID> = []
@@ -165,7 +166,12 @@ final class MacChatSessionModel {
     self.providers = providers
     self.preferences = preferences
     self.restrictions = restrictions
-    conversationSummaries = Self.sorted(initialSummaries)
+    let sortedSummaries = Self.sorted(initialSummaries)
+    conversationSummaries = sortedSummaries
+    summariesByID = Dictionary(
+      sortedSummaries.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
     newChatTarget = Self.accessiblePreferredTarget(
       providers: providers,
       restrictions: restrictions
@@ -233,9 +239,7 @@ final class MacChatSessionModel {
       return .missingCredential(label: account.label)
     }
     guard
-      let model = providers.models(for: account.id, includeHidden: true).first(where: {
-        $0.model.id == conversation.modelID
-      })
+      let model = providers.modelRecord(for: account.id, modelID: conversation.modelID)
     else {
       return .modelMissing(modelID: conversation.modelID)
     }
@@ -298,7 +302,7 @@ final class MacChatSessionModel {
 
   func summary(_ id: ConversationID?) -> ChatConversation? {
     guard let id else { return nil }
-    return conversationSummaries.first { $0.id == id }
+    return summariesByID[id]
   }
 
   func conversation(_ id: ConversationID?) -> ChatConversation? {
@@ -1498,6 +1502,10 @@ final class MacChatSessionModel {
     let summaries = Self.sorted(await store.conversationSummaries())
     guard summaries != conversationSummaries else { return }
     conversationSummaries = summaries
+    summariesByID = Dictionary(
+      summaries.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
     onSummariesChanged?(summaries)
     if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       updateSearch(searchQuery)

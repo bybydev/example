@@ -174,7 +174,8 @@ actor MacAnswerContentParseCache {
       of: (String, MacPreparedAnswer).self,
       returning: [(String, MacPreparedAnswer)].self
     ) { group in
-      let maxConcurrency = 4
+      // Keep at least one core free for the main thread on low-core Macs.
+      let maxConcurrency = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount - 1))
       var nextIndex = 0
 
       func enqueueNext() {

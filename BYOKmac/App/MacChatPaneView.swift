@@ -1439,8 +1439,7 @@ private struct MacTranscriptView: View {
     let accountName = providers.account(target.accountID)?.label
       ?? conversation?.providerID.rawValue
       ?? "Provider"
-    let modelName = providers.models(for: target.accountID, includeHidden: true)
-      .first(where: { $0.model.id == target.modelID })?.model.displayName
+    let modelName = providers.modelRecord(for: target.accountID, modelID: target.modelID)?.model.displayName
       ?? target.modelID.rawValue
     return "Using \(accountName) · \(modelName)"
   }
@@ -1780,8 +1779,7 @@ private struct MacTranscriptView: View {
         providers.provider(for: account.providerID)?.displayName ?? account.providerID.rawValue
       )
       if let modelID = message.modelID {
-        let modelName = providers.models(for: account.id, includeHidden: true)
-          .first(where: { $0.model.id == modelID })?.model.displayName
+        let modelName = providers.modelRecord(for: account.id, modelID: modelID)?.model.displayName
         parts.append(modelName ?? modelID.rawValue)
       }
     } else {
@@ -1990,8 +1988,7 @@ private struct MacComposerView: View {
 
   private var selectedModel: ProviderModel? {
     guard let target else { return nil }
-    return providers.models(for: target.accountID, includeHidden: true)
-      .first { $0.model.id == target.modelID }?.model
+    return providers.modelRecord(for: target.accountID, modelID: target.modelID)?.model
   }
 
   private var isStreaming: Bool {

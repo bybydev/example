@@ -24,6 +24,8 @@ final class MacProviderModel {
   private(set) var definitions: [ProviderDefinition] = []
   private(set) var accounts: [ProviderAccount] = []
   private(set) var modelsByAccount: [ProviderAccountID: [AccountModelRecord]] = [:]
+  private var visibleModelsByAccount: [ProviderAccountID: [AccountModelRecord]] = [:]
+  private var modelRecordsByAccountAndID: [ProviderAccountID: [ModelID: AccountModelRecord]] = [:]
   private(set) var lastModelRefreshByAccount: [ProviderAccountID: Date] = [:]
   private(set) var modelCatalogStatus: ModelCatalogStatus?
   private(set) var modelCatalogRevision: Int = ModelCatalogRegistry.current?.revision ?? 0
@@ -177,13 +179,13 @@ final class MacProviderModel {
   }
 
   func models(for accountID: ProviderAccountID, includeHidden: Bool = false) -> [AccountModelRecord] {
-    let records = modelsByAccount[accountID] ?? []
-    let visible = includeHidden ? records : records.filter { !$0.isHidden }
-    return visible.sorted { lhs, rhs in
-      if lhs.isFavorite != rhs.isFavorite { return lhs.isFavorite }
-      if lhs.isAvailable != rhs.isAvailable { return lhs.isAvailable }
-      return lhs.model.displayName.localizedCaseInsensitiveCompare(rhs.model.displayName) == .orderedAscending
-    }
+    includeHidden
+      ? (modelsByAccount[accountID] ?? [])
+      : (visibleModelsByAccount[accountID] ?? [])
+  }
+
+  func modelRecord(for accountID: ProviderAccountID, modelID: ModelID) -> AccountModelRecord? {
+    modelRecordsByAccountAndID[accountID]?[modelID]
   }
 
   func usableModelID(for accountID: ProviderAccountID) -> ModelID? {
@@ -192,7 +194,7 @@ final class MacProviderModel {
   }
 
   func capabilities(accountID: ProviderAccountID, modelID: ModelID) -> ResolvedModelCapabilities {
-    let record = models(for: accountID, includeHidden: true).first { $0.model.id == modelID }
+    let record = modelRecord(for: accountID, modelID: modelID)
     return ModelCapabilityResolver.resolve(
       kind: account(accountID)?.kind ?? .openAICompatible,
       modelID: modelID,
@@ -237,7 +239,7 @@ final class MacProviderModel {
     if account.definition.requiresCredential {
       guard credentialAccountIDs.contains(account.id) else { return false }
     }
-    return models(for: account.id).contains { $0.isAvailable }
+    return (visibleModelsByAccount[account.id] ?? []).contains { $0.isAvailable }
   }
 
   func hasCredential(_ accountID: ProviderAccountID) -> Bool {
@@ -637,7 +639,7 @@ final class MacProviderModel {
       throw ProviderError.invalidModel
     }
     let normalizedID = ModelID(rawValue: trimmed)
-    let existing = models(for: accountID, includeHidden: true).first { $0.model.id == normalizedID }
+    let existing = modelRecord(for: accountID, modelID: normalizedID)
     if existing?.isAvailable == true && existing?.isHidden == false { return }
     let account = try await workspace.account(id: accountID)
     if existing?.isAvailable != true {
@@ -833,8 +835,25 @@ final class MacProviderModel {
   }
 
   private func reloadSnapshot() async throws {
-    let registeredDefinitions = await registry.allDefinitions()
-    let loadedAccounts = await workspace.allAccounts()
+    let registry = self.registry
+    let workspace = self.workspace
+    let modelCatalog = self.modelCatalog
+    let accountManager = self.accountManager
+
+    async let registeredDefinitionsTask = registry.allDefinitions()
+    async let workspaceSnapshotTask = workspace.snapshot()
+    async let catalogStatusTask = modelCatalog.status()
+
+    let registeredDefinitions = await registeredDefinitionsTask
+    let workspaceSnapshot = await workspaceSnapshotTask
+    let catalogStatus = await catalogStatusTask
+
+    let loadedAccounts = workspaceSnapshot.accounts.sorted { lhs, rhs in
+      if lhs.providerID == rhs.providerID {
+        return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+      }
+      return lhs.providerID.rawValue < rhs.providerID.rawValue
+    }
 
     var definitionsByID = Dictionary(uniqueKeysWithValues: registeredDefinitions.map { ($0.id, $0) })
     for account in loadedAccounts
@@ -845,28 +864,63 @@ final class MacProviderModel {
       $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
     }
 
+    let rawGrouped = Dictionary(grouping: workspaceSnapshot.modelRecords, by: \.accountID)
     var records: [ProviderAccountID: [AccountModelRecord]] = [:]
+    var visibleRecords: [ProviderAccountID: [AccountModelRecord]] = [:]
+    var recordsByID: [ProviderAccountID: [ModelID: AccountModelRecord]] = [:]
     var refreshDates: [ProviderAccountID: Date] = [:]
-    var credentials: Set<ProviderAccountID> = []
+    records.reserveCapacity(loadedAccounts.count)
+    visibleRecords.reserveCapacity(loadedAccounts.count)
+    recordsByID.reserveCapacity(loadedAccounts.count)
+
+    let modelSort: (AccountModelRecord, AccountModelRecord) -> Bool = { lhs, rhs in
+      if lhs.isFavorite != rhs.isFavorite { return lhs.isFavorite }
+      if lhs.isAvailable != rhs.isAvailable { return lhs.isAvailable }
+      return lhs.model.displayName.localizedCaseInsensitiveCompare(rhs.model.displayName) == .orderedAscending
+    }
+
+    var authAccountIDs: [ProviderAccountID] = []
+    authAccountIDs.reserveCapacity(loadedAccounts.count)
+
     for account in loadedAccounts {
-      records[account.id] = await workspace.modelRecords(for: account.id, includeHidden: true)
-      if let refreshedAt = await workspace.lastModelRefreshAt(for: account.id) {
+      let sortedAll = (rawGrouped[account.id] ?? []).sorted(by: modelSort)
+      records[account.id] = sortedAll
+      visibleRecords[account.id] = sortedAll.filter { !$0.isHidden }
+      recordsByID[account.id] = Dictionary(
+        sortedAll.map { ($0.model.id, $0) },
+        uniquingKeysWith: { first, _ in first }
+      )
+      if let refreshedAt = workspaceSnapshot.lastSuccessfulModelRefreshAt?[account.id.rawValue] {
         refreshDates[account.id] = refreshedAt
       }
       switch account.definition.authentication {
       case .none:
         break
       case .bearer, .header:
-        if try await accountManager.hasCredential(accountID: account.id) {
-          credentials.insert(account.id)
-        }
+        authAccountIDs.append(account.id)
       }
     }
 
+    let credentials: Set<ProviderAccountID> = try await withThrowingTaskGroup(
+      of: ProviderAccountID?.self
+    ) { group in
+      for accountID in authAccountIDs {
+        group.addTask {
+          try await accountManager.hasCredential(accountID: accountID) ? accountID : nil
+        }
+      }
+      var result: Set<ProviderAccountID> = []
+      for try await accountID in group {
+        if let accountID { result.insert(accountID) }
+      }
+      return result
+    }
+
     modelsByAccount = records
+    visibleModelsByAccount = visibleRecords
+    modelRecordsByAccountAndID = recordsByID
     lastModelRefreshByAccount = refreshDates
     credentialAccountIDs = credentials
-    let catalogStatus = await modelCatalog.status()
     modelCatalogStatus = catalogStatus
     modelCatalogRevision = catalogStatus.revision
 
@@ -875,10 +929,10 @@ final class MacProviderModel {
       if account.definition.requiresCredential {
         guard credentials.contains(account.id) else { return false }
       }
-      return (records[account.id] ?? []).contains { $0.isAvailable && !$0.isHidden }
+      return (visibleRecords[account.id] ?? []).contains { $0.isAvailable }
     }
 
-    let storedDefaultID = await workspace.defaultAccountID()
+    let storedDefaultID = workspaceSnapshot.defaultAccountID
     if let storedDefaultID,
       let storedDefault = loadedAccounts.first(where: { $0.id == storedDefaultID }),
       ready(storedDefault)
@@ -892,12 +946,7 @@ final class MacProviderModel {
 
     let presentedAccounts = loadedAccounts.map { account -> ProviderAccount in
       var presented = account
-      let visibleAvailable = (records[account.id] ?? [])
-        .filter { $0.isAvailable && !$0.isHidden }
-        .sorted { lhs, rhs in
-          if lhs.isFavorite != rhs.isFavorite { return lhs.isFavorite }
-          return lhs.model.displayName.localizedCaseInsensitiveCompare(rhs.model.displayName) == .orderedAscending
-        }
+      let visibleAvailable = (visibleRecords[account.id] ?? []).filter(\.isAvailable)
       if let defaultModelID = account.defaultModelID,
         visibleAvailable.contains(where: { $0.model.id == defaultModelID })
       {

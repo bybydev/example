@@ -7,6 +7,9 @@ import Observation
 final class MacMCPModel {
   private(set) var servers: [MCPRemoteServer] = []
   private(set) var snapshotsByServer: [MCPServerID: MCPServerSnapshot] = [:]
+  private var toolsByServer: [MCPServerID: [MCPToolBinding]] = [:]
+  private var toolDisplayNamesByExposedName: [String: String] = [:]
+  private var serverIDByExposedToolName: [String: MCPServerID] = [:]
   private(set) var credentialServerIDs: Set<MCPServerID> = []
   private(set) var chatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
   private(set) var inheritedChatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
@@ -67,9 +70,11 @@ final class MacMCPModel {
     self.entitlementAccessOverride = entitlementAccessOverride
   }
 
-  func load() async throws {
+  func load(skipRuntimeLoad: Bool = false) async throws {
     startInteractionObserversIfNeeded()
-    try await runtime.load()
+    if !skipRuntimeLoad {
+      try await runtime.load()
+    }
     try await reloadSnapshot()
   }
 
@@ -230,29 +235,11 @@ final class MacMCPModel {
   }
 
   func tools(for serverID: MCPServerID) -> [MCPToolBinding] {
-    guard let snapshot = snapshotsByServer[serverID] else { return [] }
-    return snapshot.tools.map { tool in
-      MCPToolBinding(
-        serverID: serverID,
-        remoteTool: tool,
-        exposedName: MCPToolNamespace.exposedName(serverID: serverID, remoteName: tool.remoteName)
-      )
-    }
-    .sorted {
-      let lhs = $0.remoteTool.title ?? $0.remoteTool.remoteName
-      let rhs = $1.remoteTool.title ?? $1.remoteTool.remoteName
-      return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
-    }
+    toolsByServer[serverID] ?? []
   }
 
   func toolDisplayName(_ exposedToolName: String) -> String {
-    for server in servers {
-      if let binding = tools(for: server.id).first(where: { $0.exposedName == exposedToolName }) {
-        let toolName = binding.remoteTool.title ?? binding.remoteTool.remoteName
-        return "\(server.name) · \(toolName)"
-      }
-    }
-    return exposedToolName
+    toolDisplayNamesByExposedName[exposedToolName] ?? exposedToolName
   }
 
   func pendingApprovals(for conversationID: ConversationID) -> [MCPToolApprovalRequest] {
@@ -539,12 +526,7 @@ final class MacMCPModel {
   }
 
   private func serverID(forExposedToolName exposedToolName: String) -> MCPServerID? {
-    for server in servers {
-      if tools(for: server.id).contains(where: { $0.exposedName == exposedToolName }) {
-        return server.id
-      }
-    }
-    return nil
+    serverIDByExposedToolName[exposedToolName]
   }
 
   private func commitServerConfiguration(
@@ -617,18 +599,67 @@ final class MacMCPModel {
   }
 
   private func reloadSnapshot() async throws {
-    servers = await runtime.servers()
-    let snapshots = await runtime.snapshots()
-    snapshotsByServer = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.serverID, $0) })
+    let runtime = self.runtime
+    let workspace = self.workspace
+    let projectWorkspace = self.projectWorkspace
 
-    let workspaceSnapshot = await workspace.snapshot()
+    async let serversTask = runtime.servers()
+    async let snapshotsTask = runtime.snapshots()
+    async let workspaceSnapshotTask = workspace.snapshot()
+    async let projectSnapshotTask = projectWorkspace.snapshot()
+
+    let loadedServers = await serversTask
+    let snapshots = await snapshotsTask
+    let workspaceSnapshot = await workspaceSnapshotTask
+    let projectSnapshot = await projectSnapshotTask
+
+    servers = loadedServers
+    let snapshotMap = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.serverID, $0) })
+    snapshotsByServer = snapshotMap
+
+    var builtToolsByServer: [MCPServerID: [MCPToolBinding]] = [:]
+    var builtDisplayNames: [String: String] = [:]
+    var builtServerIDsByTool: [String: MCPServerID] = [:]
+    builtToolsByServer.reserveCapacity(snapshotMap.count)
+
+    for (serverID, snapshot) in snapshotMap {
+      let bindings = snapshot.tools.map { tool in
+        MCPToolBinding(
+          serverID: serverID,
+          remoteTool: tool,
+          exposedName: MCPToolNamespace.exposedName(serverID: serverID, remoteName: tool.remoteName)
+        )
+      }
+      .sorted {
+        let lhs = $0.remoteTool.title ?? $0.remoteTool.remoteName
+        let rhs = $1.remoteTool.title ?? $1.remoteTool.remoteName
+        return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+      }
+      builtToolsByServer[serverID] = bindings
+    }
+
+    for server in loadedServers {
+      for binding in builtToolsByServer[server.id] ?? [] {
+        if builtDisplayNames[binding.exposedName] == nil {
+          let toolName = binding.remoteTool.title ?? binding.remoteTool.remoteName
+          builtDisplayNames[binding.exposedName] = "\(server.name) · \(toolName)"
+        }
+        if builtServerIDsByTool[binding.exposedName] == nil {
+          builtServerIDsByTool[binding.exposedName] = server.id
+        }
+      }
+    }
+
+    toolsByServer = builtToolsByServer
+    toolDisplayNamesByExposedName = builtDisplayNames
+    serverIDByExposedToolName = builtServerIDsByTool
+
     chatConfigurations = Dictionary(
       uniqueKeysWithValues: (workspaceSnapshot.chatConfigurations ?? [:]).map {
         (ConversationID(rawValue: $0.key), $0.value)
       }
     )
 
-    let projectSnapshot = await projectWorkspace.snapshot()
     let projectsByID = Dictionary(uniqueKeysWithValues: projectSnapshot.projects.map { ($0.id.rawValue, $0) })
     projectMCPConfigurations = Dictionary(
       uniqueKeysWithValues: projectSnapshot.projects.compactMap { project in
@@ -643,11 +674,18 @@ final class MacMCPModel {
       }
     )
 
-    var credentials: Set<MCPServerID> = []
-    for server in servers {
-      if (try? await runtime.hasCredential(serverID: server.id)) == true {
-        credentials.insert(server.id)
+    let credentials: Set<MCPServerID> = await withTaskGroup(of: MCPServerID?.self) { group in
+      for server in loadedServers {
+        let serverID = server.id
+        group.addTask {
+          (try? await runtime.hasCredential(serverID: serverID)) == true ? serverID : nil
+        }
       }
+      var result: Set<MCPServerID> = []
+      for await serverID in group {
+        if let serverID { result.insert(serverID) }
+      }
+      return result
     }
     credentialServerIDs = credentials
   }
