@@ -282,14 +282,17 @@ struct MacTargetPickerView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 8) {
         Text("Provider & Model")
           .font(.title3.weight(.semibold))
         Spacer()
         Button("Manage Providers…") { showingProviders = true }
+          .buttonStyle(MacActionButtonStyle(.secondary))
         Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .disabled(isSaving)
         Button("Done") { save() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(!canCommit)
       }
@@ -418,9 +421,8 @@ struct MacTargetPickerView: View {
           openManualModelPrompt()
         } label: {
           Label("Add Model ID", systemImage: "plus")
-            .font(.caption.weight(.medium))
         }
-        .controlSize(.small)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .help("Enter a custom model ID manually")
 
         if supportsModelDiscovery, let accountID {
@@ -432,10 +434,9 @@ struct MacTargetPickerView: View {
                 .controlSize(.small)
             } else {
               Label("Refresh", systemImage: "arrow.clockwise")
-                .font(.caption.weight(.medium))
             }
           }
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(refreshAccountID == accountID || selectedAccountNeedsCredential || selectedAccountIsRestricted)
           .help("Refresh available models from provider")
         }
@@ -466,7 +467,7 @@ struct MacTargetPickerView: View {
             )
             Spacer(minLength: 4)
             Button("Manage…") { showingProviders = true }
-              .controlSize(.small)
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           }
         }
         if selectedAccountHasNoAvailableModels {
@@ -525,6 +526,7 @@ struct MacTargetPickerView: View {
         )
       } actions: {
         Button("Enter Model ID…", systemImage: "plus") { openManualModelPrompt() }
+          .buttonStyle(MacActionButtonStyle(.primary))
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
@@ -577,7 +579,7 @@ struct MacTargetPickerView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MacIconButtonStyle())
         .help("Remove custom model")
         .accessibilityLabel("Remove \(record.model.displayName)")
       }
@@ -639,7 +641,7 @@ struct MacTargetPickerView: View {
           Image(systemName: "xmark.circle.fill")
             .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MacIconButtonStyle())
         .help("Clear entered model ID")
       }
       .padding(.vertical, 2)
@@ -660,7 +662,7 @@ struct MacTargetPickerView: View {
           Image(systemName: "xmark.circle.fill")
             .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MacIconButtonStyle())
         .help("Clear unavailable model")
       }
       .padding(.vertical, 2)
@@ -768,14 +770,16 @@ struct MacTargetPickerView: View {
       Text("Select a model that is not yet listed by your provider. It will be saved when you click Done.")
         .font(.caption)
         .foregroundStyle(.secondary)
-      HStack {
+      HStack(spacing: 8) {
         Spacer()
         Button("Cancel") {
           manualModelDraft = ""
           showingManualModelSheet = false
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .keyboardShortcut(.cancelAction)
         Button("Use Model") { commitManualPrompt() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(manualModelDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
@@ -1448,9 +1452,11 @@ struct MacConnectionEditorView: View {
         }
         Spacer()
         Button("Cancel") { requestDismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
           .disabled(isSaving)
         Button(isCreate ? "Connect" : "Save") { save() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(!canSave || isSaving)
       }
@@ -1486,16 +1492,13 @@ struct MacConnectionEditorView: View {
                   }
                   .padding(.horizontal, 10)
                   .padding(.vertical, 8)
-                  .background(
-                    MacDesignTokens.Colors.canvas.opacity(0.65),
-                    in: RoundedRectangle(cornerRadius: 8)
-                  )
-                  .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                      .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
-                  }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(
+                  MacCardButtonStyle(
+                    cornerRadius: 8,
+                    surfaceColor: MacDesignTokens.Colors.canvas.opacity(0.65)
+                  )
+                )
                 .accessibilityLabel("Provider")
                 .accessibilityValue(selectedKind.macPickerTitle)
               } else {
@@ -1553,6 +1556,7 @@ struct MacConnectionEditorView: View {
                     Button("Keep Saved Key") {
                       clearCredential = false
                     }
+                    .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
                   }
                 } else {
                   SecureField(credentialPlaceholder, text: $credential)
@@ -1563,12 +1567,14 @@ struct MacConnectionEditorView: View {
                         .foregroundStyle(MacDesignTokens.Colors.textMuted)
                       Spacer()
                       Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
+                        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
                         .disabled(isRevealing)
                       if !requiresCredential {
                         Button("Remove Key", role: .destructive) {
                           clearCredential = true
                           credential = ""
                         }
+                        .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
                       }
                     }
                   } else {
@@ -1755,6 +1761,7 @@ struct MacConnectionEditorView: View {
           } label: {
             Label("Test Connection", systemImage: "bolt.horizontal.circle")
           }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(!canRunDiscoveryOrTest)
 
           if draftDefinition.modelsPath != nil {
@@ -1769,6 +1776,7 @@ struct MacConnectionEditorView: View {
                 }
               }
             }
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(!canRunDiscoveryOrTest)
           }
 
@@ -1808,6 +1816,7 @@ struct MacConnectionEditorView: View {
             Button("Choose Model… (\(modelRecords.count))") {
               showingModelPicker = true
             }
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           }
         }
 
@@ -1815,6 +1824,7 @@ struct MacConnectionEditorView: View {
           TextField("Or enter a model ID", text: $manualModelID)
             .onSubmit { selectManualModel() }
           Button("Use Model ID") { selectManualModel() }
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
 
@@ -1841,7 +1851,7 @@ struct MacConnectionEditorView: View {
                     .font(.caption)
                     .foregroundStyle(MacDesignTokens.Colors.textMuted)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MacIconButtonStyle())
                 .help("Remove custom model")
                 .accessibilityLabel("Remove \(record.model.id.rawValue)")
               }
@@ -2334,6 +2344,7 @@ private struct MacConnectionModelPickerSheet: View {
         }
         Spacer()
         Button("Close") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
       }
       .padding(16)
@@ -2441,7 +2452,7 @@ private struct MacConnectionModelPickerSheet: View {
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MacIconButtonStyle())
         .help("Remove custom model")
         .accessibilityLabel("Remove \(record.model.displayName)")
       }

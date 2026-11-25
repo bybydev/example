@@ -192,7 +192,7 @@ struct MacProviderManagementView: View {
         Text("Connect an AI provider to choose models and start chatting.")
       } actions: {
         Button("Add AI Provider", systemImage: "plus") { beginAddProvider() }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(MacActionButtonStyle(.primary))
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
@@ -202,6 +202,7 @@ struct MacProviderManagementView: View {
             .frame(maxWidth: 360)
           Spacer()
           Button("Add AI Provider", systemImage: "plus") { beginAddProvider() }
+            .buttonStyle(MacActionButtonStyle(.primary))
         }
         .padding(.horizontal, 16)
         .frame(height: 54)
@@ -305,14 +306,12 @@ struct MacProviderManagementView: View {
         Button("Supported Providers") {
           showingSupportedProviders = true
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
 
         Button("Upgrade") {
           MacProAccess.requestUpgrade(.providerAccounts)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.small)
+        .buttonStyle(MacActionButtonStyle(.primary, size: .small))
       }
     }
     .padding(13)
@@ -345,9 +344,10 @@ struct MacProviderManagementView: View {
         Menu {
           providerCardMenuItems(for: account, state: state, isDefault: isDefault)
         } label: {
-          Image(systemName: "ellipsis").frame(width: 28, height: 28)
+          MacIconMenuLabel(systemImage: "ellipsis")
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
       }
 
@@ -385,12 +385,12 @@ struct MacProviderManagementView: View {
       HStack {
         if state == .ready {
           Button(isTesting ? "Testing…" : "Test") { testConnection(account) }
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(isTesting || model.isBusy)
         }
         Spacer()
         Button(state == .ready ? "Manage" : "Configure") { selectedAccountID = account.id }
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(state == .ready ? .secondary : .primary, size: .small))
       }
     }
     .padding(14)
@@ -509,9 +509,11 @@ private struct MacProviderWorkspaceDetailView: View {
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 12) {
-        Button(action: back) { Label("AI Providers", systemImage: "chevron.left") }
-          .buttonStyle(.plain)
-          .foregroundStyle(MacDesignTokens.Colors.accent)
+        Button(action: back) {
+          Label("AI Providers", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
         Divider().frame(height: 24)
         MacProviderIcon(account: account, size: 40, isReady: state == .ready)
         VStack(alignment: .leading, spacing: 3) {
@@ -531,8 +533,10 @@ private struct MacProviderWorkspaceDetailView: View {
         Button(isTesting ? "Testing…" : "Test Connection", systemImage: "bolt.horizontal.circle") {
           testConnection()
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .disabled(isTesting || state != .ready || model.isBusy)
         Button("Edit", systemImage: "pencil", action: edit)
+          .buttonStyle(MacActionButtonStyle(.secondary))
         Menu {
           if model.defaultAccountID != account.id && state == .ready {
             Button("Make Default", systemImage: "checkmark.circle") {
@@ -557,9 +561,10 @@ private struct MacProviderWorkspaceDetailView: View {
           Divider()
           Button("Delete Connection…", systemImage: "trash", role: .destructive, action: requestDelete)
         } label: {
-          Image(systemName: "ellipsis").frame(width: 28, height: 28)
+          MacIconMenuLabel(systemImage: "ellipsis")
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
       }
       .padding(.horizontal, 18)
@@ -568,10 +573,46 @@ private struct MacProviderWorkspaceDetailView: View {
 
       Divider()
 
-      Picker("Section", selection: $tab) {
-        ForEach(MacProviderDetailTab.allCases) { value in Text(value.rawValue).tag(value) }
+      HStack(spacing: 4) {
+        ForEach(MacProviderDetailTab.allCases) { value in
+          let isSelected = tab == value
+          Button {
+            withAnimation(.easeOut(duration: MacDesignTokens.Control.interactionDuration)) {
+              tab = value
+            }
+          } label: {
+            Text(value.rawValue)
+              .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+              .foregroundStyle(
+                isSelected ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+              )
+              .frame(maxWidth: .infinity)
+              .frame(height: 28)
+              .background(
+                isSelected ? MacDesignTokens.Colors.surface : Color.clear,
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+              )
+              .overlay {
+                if isSelected {
+                  RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(MacDesignTokens.Colors.separator.opacity(0.8), lineWidth: 0.75)
+                }
+              }
+              .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          }
+          .buttonStyle(.plain)
+          .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        }
       }
-      .pickerStyle(.segmented)
+      .padding(3)
+      .background(
+        Color.primary.opacity(0.05),
+        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.55), lineWidth: 0.5)
+      }
       .padding(.horizontal, 18)
       .padding(.vertical, 12)
 
@@ -649,14 +690,16 @@ private struct MacProviderOverviewView: View {
           VStack(alignment: .leading, spacing: 9) {
             MacProviderValueRow(title: "Default Connection", value: model.defaultAccountID == account.id ? "Yes" : "No")
             MacProviderValueRow(title: "Default Model", value: defaultModelLabel)
-            HStack {
+            HStack(spacing: 8) {
               Spacer()
               if model.defaultAccountID != account.id,
                 macProviderPresentationState(model: model, account: account) == .ready
               {
                 Button("Make Default") { Task { _ = await model.setDefaultAccount(account.id) } }
+                  .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
               }
               Button("View Models", action: showModels)
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             }
           }
         }
@@ -673,7 +716,11 @@ private struct MacProviderOverviewView: View {
                   .formatted(date: .abbreviated, time: .shortened) ?? "Not refreshed yet"
               )
             }
-            HStack { Spacer(); Button("View Models", action: showModels) }
+            HStack {
+              Spacer()
+              Button("View Models", action: showModels)
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            }
           }
         }
 
@@ -685,7 +732,11 @@ private struct MacProviderOverviewView: View {
               title: "Custom Headers",
               value: account.additionalHeaders.isEmpty ? "None" : "\(account.additionalHeaders.count) configured"
             )
-            HStack { Spacer(); Button("View Connection", action: showConnection) }
+            HStack {
+              Spacer()
+              Button("View Connection", action: showConnection)
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            }
           }
         }
       }
@@ -755,9 +806,11 @@ private struct MacProviderModelsWorkspaceView: View {
           Button("Refresh", systemImage: "arrow.clockwise") {
             Task { _ = await model.refreshModels(accountID: account.id) }
           }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .disabled(model.isBusy)
         }
         Button("Add Model", systemImage: "plus") { showingAddModel = true }
+          .buttonStyle(MacActionButtonStyle(.primary))
       }
       .padding(.horizontal, 16)
       .frame(height: 54)
@@ -796,9 +849,8 @@ private struct MacProviderModelsWorkspaceView: View {
         Task { await model.setFavorite(!record.isFavorite, modelID: record.model.id, accountID: account.id) }
       } label: {
         Image(systemName: record.isFavorite ? "star.fill" : "star")
-          .frame(width: 24, height: 24)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(MacIconButtonStyle())
       .foregroundStyle(record.isFavorite ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
 
       VStack(alignment: .leading, spacing: 4) {
@@ -829,7 +881,7 @@ private struct MacProviderModelsWorkspaceView: View {
         Button("Make Default") {
           Task { _ = await model.setDefaultModel(record.model.id, accountID: account.id) }
         }
-        .controlSize(.small)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       }
 
       if record.isManual {
@@ -837,9 +889,8 @@ private struct MacProviderModelsWorkspaceView: View {
           Task { _ = await model.removeManualModel(record.model.id, accountID: account.id) }
         } label: {
           Image(systemName: "trash")
-            .frame(width: 26, height: 26)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MacIconButtonStyle())
         .foregroundStyle(MacDesignTokens.Colors.textMuted)
         .help("Remove custom model")
         .accessibilityLabel("Remove \(record.model.displayName)")
@@ -849,9 +900,8 @@ private struct MacProviderModelsWorkspaceView: View {
         Task { await model.setHidden(!record.isHidden, modelID: record.model.id, accountID: account.id) }
       } label: {
         Image(systemName: record.isHidden ? "eye.slash.fill" : "eye")
-          .frame(width: 26, height: 26)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(MacIconButtonStyle())
       .foregroundStyle(MacDesignTokens.Colors.textMuted)
       .help(record.isHidden ? "Show model" : "Hide model")
     }
@@ -894,7 +944,11 @@ private struct MacProviderConnectionWorkspaceView: View {
                 .font(.caption)
                 .foregroundStyle(MacDesignTokens.Colors.textMuted)
             }
-            HStack { Spacer(); Button("Edit", action: edit) }
+            HStack {
+              Spacer()
+              Button("Edit", action: edit)
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            }
           }
         }
 
@@ -905,7 +959,11 @@ private struct MacProviderConnectionWorkspaceView: View {
             Text("Stored credentials remain in Keychain and are never shown on this summary screen.")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            HStack { Spacer(); Button("Edit", action: edit) }
+            HStack {
+              Spacer()
+              Button("Edit", action: edit)
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            }
           }
         }
 
@@ -918,7 +976,11 @@ private struct MacProviderConnectionWorkspaceView: View {
                 MacProviderValueRow(title: key, value: "Configured")
               }
             }
-            HStack { Spacer(); Button("Edit", action: edit) }
+            HStack {
+              Spacer()
+              Button("Edit", action: edit)
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            }
           }
         }
 
@@ -927,7 +989,11 @@ private struct MacProviderConnectionWorkspaceView: View {
             VStack(alignment: .leading, spacing: 9) {
               MacProviderValueRow(title: "App Title", value: account.metadata["appTitle"] ?? "Not set")
               MacProviderValueRow(title: "HTTP Referer", value: account.metadata["httpReferer"] ?? "Not set")
-              HStack { Spacer(); Button("Edit", action: edit) }
+              HStack {
+                Spacer()
+                Button("Edit", action: edit)
+                  .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+              }
             }
           }
         }
@@ -946,6 +1012,7 @@ private struct MacProviderConnectionWorkspaceView: View {
             }
             Spacer()
             Button(isTesting ? "Testing…" : "Test Connection") { testConnection() }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(isTesting || macProviderPresentationState(model: model, account: account) != .ready)
           }
         }
@@ -958,6 +1025,7 @@ private struct MacProviderConnectionWorkspaceView: View {
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
           Button("Delete Connection…", role: .destructive, action: requestDelete)
+            .buttonStyle(MacActionButtonStyle(.destructive))
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1104,18 +1172,8 @@ struct MacProviderKindPickerSheet: View {
       }
       .padding(12)
       .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-      .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-      .overlay {
-        RoundedRectangle(cornerRadius: 10)
-          .stroke(
-            isSelected
-              ? MacDesignTokens.Colors.accent.opacity(0.6)
-              : MacDesignTokens.Colors.separator.opacity(0.75),
-            lineWidth: isSelected ? 1 : 0.5
-          )
-      }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(MacCardButtonStyle(cornerRadius: 10, isSelected: isSelected))
   }
 
   private func choose(_ kind: ProviderKind) {
@@ -1241,13 +1299,8 @@ struct MacSupportedProvidersCatalogView: View {
       }
       .padding(12)
       .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-      .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-      .overlay {
-        RoundedRectangle(cornerRadius: 10)
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
-      }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(MacCardButtonStyle(cornerRadius: 10))
   }
 }
 
@@ -1263,13 +1316,16 @@ private struct MacProviderAddModelSheet: View {
       Text("Add a model ID manually when discovery does not list it.")
         .font(.caption)
         .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      HStack {
+      HStack(spacing: 8) {
         Spacer()
-        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+        Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+          .keyboardShortcut(.cancelAction)
         Button("Add") {
           add(modelID.trimmingCharacters(in: .whitespacesAndNewlines))
           dismiss()
         }
+        .buttonStyle(MacActionButtonStyle(.primary))
         .keyboardShortcut(.defaultAction)
         .disabled(modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }

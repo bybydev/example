@@ -118,7 +118,7 @@ struct MacAdditionalHeadersSection: View {
         } label: {
           Label("Add Header", systemImage: "plus.circle.fill")
         }
-        .controlSize(.small)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
 
         Spacer()
 
@@ -346,13 +346,15 @@ private struct MacAdditionalHeaderEditorSheet: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 8) {
         Text(isEditing ? "Edit Header" : "Add Header")
           .font(.headline)
         Spacer()
         Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
         Button(isEditing ? "Save" : "Add") { attemptSave() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(validationError != nil)
       }
@@ -404,7 +406,7 @@ private struct MacAdditionalHeaderEditorSheet: View {
             onDelete()
             dismiss()
           }
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
         }
       }
       .padding(16)
