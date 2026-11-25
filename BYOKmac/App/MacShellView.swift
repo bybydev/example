@@ -740,11 +740,12 @@ private struct MacAppShell<Sidebar: View, Content: View>: View {
       if sidebarVisible {
         sidebar
           .frame(width: sidebarWidth)
+          .frame(minHeight: 0, maxHeight: .infinity)
           .transition(.move(edge: .leading).combined(with: .opacity))
       }
 
       content
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
     }
     .animation(.easeInOut(duration: 0.18), value: sidebarVisible)
   }

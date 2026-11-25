@@ -1937,19 +1937,20 @@ private struct MacTranscriptSkeletonView: View {
   let bottomSpace: CGFloat
 
   var body: some View {
-    VStack(spacing: 0) {
-      Spacer(minLength: MacDesignTokens.Spacing.transcriptTop)
-
-      MacTranscriptSkeletonContent()
-        .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.horizontal, MacDesignTokens.Spacing.large)
-        .padding(.bottom, bottomSpace + 28)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(MacDesignTokens.Colors.canvas)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Loading conversation")
+    Color.clear
+      .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+      .background(MacDesignTokens.Colors.canvas)
+      .overlay(alignment: .bottom) {
+        MacTranscriptSkeletonContent()
+          .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth, alignment: .leading)
+          .frame(maxWidth: .infinity, alignment: .center)
+          .padding(.horizontal, MacDesignTokens.Spacing.large)
+          .padding(.top, MacDesignTokens.Spacing.transcriptTop)
+          .padding(.bottom, bottomSpace + 28)
+      }
+      .clipped()
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Loading conversation")
   }
 }
 
@@ -2039,6 +2040,7 @@ private struct MacTranscriptSkeletonContent: View {
 nonisolated enum MacComposerSupport: Sendable {
   enum ReturnKeyAction: Equatable, Sendable {
     case send
+    case insertNewline
     case passThroughToEditor
     case swallow
   }
@@ -2052,7 +2054,7 @@ nonisolated enum MacComposerSupport: Sendable {
       return .passThroughToEditor
     }
     if modifiers.contains(.shift) || modifiers.contains(.option) {
-      return .passThroughToEditor
+      return .insertNewline
     }
     if modifiers.contains(.control) {
       return .passThroughToEditor
@@ -2452,7 +2454,8 @@ private struct MacComposerView: View {
         : "Return sends. Shift Return or Option Return inserts a new line"
     )
     .onKeyPress(keys: [.return], phases: .down) { press in
-      let hasMarkedText = (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
+      let textView = NSApp.keyWindow?.firstResponder as? NSTextView
+      let hasMarkedText = textView?.hasMarkedText() == true
       switch MacComposerSupport.returnKeyAction(
         modifiers: press.modifiers,
         hasMarkedText: hasMarkedText,
@@ -2460,6 +2463,13 @@ private struct MacComposerView: View {
       ) {
       case .send:
         submit()
+        return .handled
+      case .insertNewline:
+        if let textView {
+          textView.insertNewlineIgnoringFieldEditor(nil)
+        } else {
+          draftBinding.wrappedValue.append("\n")
+        }
         return .handled
       case .passThroughToEditor:
         return .ignored

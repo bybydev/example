@@ -223,14 +223,14 @@ struct MacAttachmentWorkflowTests {
         modifiers: .shift,
         hasMarkedText: false,
         canSend: true
-      ) == .passThroughToEditor
+      ) == .insertNewline
     )
     #expect(
       MacComposerSupport.returnKeyAction(
         modifiers: .option,
         hasMarkedText: false,
         canSend: true
-      ) == .passThroughToEditor
+      ) == .insertNewline
     )
     #expect(
       MacComposerSupport.returnKeyAction(
