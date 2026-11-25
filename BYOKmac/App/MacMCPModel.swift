@@ -16,11 +16,14 @@ final class MacMCPModel {
   private(set) var projectMCPConfigurations: [ProjectID: MCPChatToolConfiguration] = [:]
   private(set) var pendingApprovals: [MCPToolApprovalRequest] = []
   private(set) var pendingElicitations: [MCPElicitationRequest] = []
+  private(set) var refreshingServerIDs: Set<MCPServerID> = []
 
   var isBusy = false
   var errorMessage: String?
   var statusMessage: String?
   var onProjectStateChanged: (@MainActor () async -> Void)?
+
+  @ObservationIgnored private var activeOperationCount = 0
 
   private let runtime: MCPRemoteRuntime
   private let workspace: MCPWorkspaceStore
@@ -109,6 +112,33 @@ final class MacMCPModel {
     )
   }
 
+  func isServerUsable(_ server: MCPRemoteServer) -> Bool {
+    guard server.isEnabled, !isServerRestricted(server.id) else { return false }
+    return server.authentication.kind == .none || hasCredential(server.id)
+  }
+
+  func activeToolCount(for configuration: MCPChatToolConfiguration) -> Int {
+    let enabledIDs = Set(configuration.enabledServerIDs)
+    var total = 0
+    for server in servers where enabledIDs.contains(server.id) && isServerUsable(server) {
+      total += tools(for: server.id).filter {
+        configuration.policy(for: $0.exposedName) != .disabled
+      }.count
+    }
+    return total
+  }
+
+  func activeServerCount(for configuration: MCPChatToolConfiguration) -> Int {
+    let enabledIDs = Set(configuration.enabledServerIDs)
+    return servers.filter { enabledIDs.contains($0.id) && isServerUsable($0) }.count
+  }
+
+  func consumeErrorMessage() -> String? {
+    let message = errorMessage
+    errorMessage = nil
+    return message
+  }
+
   func chatConfiguration(for conversationID: ConversationID) -> MCPChatToolConfiguration {
     chatConfigurations[conversationID]
       ?? inheritedChatConfigurations[conversationID]
@@ -155,8 +185,10 @@ final class MacMCPModel {
     let succeeded = await performResult(nil) {
       if enabled {
         guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
-          throw MCPError.invalidServer("Enable this MCP server in Settings first.")
+          throw MCPError.invalidServer("Enable this server in MCP Servers first.")
         }
+        refreshingServerIDs.insert(serverID)
+        defer { refreshingServerIDs.remove(serverID) }
         _ = try await runtime.refreshServer(serverID)
         try await reloadSnapshot()
       }
@@ -191,6 +223,29 @@ final class MacMCPModel {
       next.toolPolicies.removeValue(forKey: normalizedName)
     } else {
       next.toolPolicies[normalizedName] = policy
+    }
+    return (true, normalizedDraftConfiguration(next, projectID: projectID))
+  }
+
+  func updatedDraftAllToolPolicies(
+    _ policy: ChatToolPermissionPolicy,
+    serverID: MCPServerID,
+    currentDraft: MCPChatToolConfiguration?,
+    projectID: ProjectID?
+  ) -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
+    if policy != .disabled, !requireServerAccess(serverID) {
+      return (false, currentDraft)
+    }
+    let bindings = tools(for: serverID)
+    guard !bindings.isEmpty else { return (true, currentDraft) }
+    errorMessage = nil
+    var next = effectiveDraftConfiguration(draft: currentDraft, projectID: projectID)
+    for binding in bindings {
+      if policy == .ask {
+        next.toolPolicies.removeValue(forKey: binding.exposedName)
+      } else {
+        next.toolPolicies[binding.exposedName] = policy
+      }
     }
     return (true, normalizedDraftConfiguration(next, projectID: projectID))
   }
@@ -270,10 +325,10 @@ final class MacMCPModel {
       return false
     }
 
-    isBusy = true
+    beginBusy()
     errorMessage = nil
     statusMessage = nil
-    defer { isBusy = false }
+    defer { endBusy() }
 
     do {
       let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -312,6 +367,8 @@ final class MacMCPModel {
 
       var warnings: [String] = []
       if server.isEnabled {
+        refreshingServerIDs.insert(server.id)
+        defer { refreshingServerIDs.remove(server.id) }
         do {
           _ = try await runtime.refreshServer(server.id, force: true)
           MacAppAnalytics.track(.mcpDiscoverySucceeded)
@@ -338,10 +395,10 @@ final class MacMCPModel {
   }
 
   func deleteServer(_ serverID: MCPServerID) async -> Bool {
-    isBusy = true
+    beginBusy()
     errorMessage = nil
     statusMessage = nil
-    defer { isBusy = false }
+    defer { endBusy() }
 
     do {
       let snapshot = await workspace.snapshot()
@@ -373,15 +430,17 @@ final class MacMCPModel {
   func setEnabled(_ enabled: Bool, serverID: MCPServerID) async -> Bool {
     if enabled, !requireServerAccess(serverID) { return false }
 
-    isBusy = true
+    beginBusy()
     errorMessage = nil
     statusMessage = nil
-    defer { isBusy = false }
+    defer { endBusy() }
 
     do {
       try await runtime.setEnabled(enabled, serverID: serverID)
       var discoveryWarning: String?
       if enabled {
+        refreshingServerIDs.insert(serverID)
+        defer { refreshingServerIDs.remove(serverID) }
         do {
           _ = try await runtime.refreshServer(serverID, force: true)
         } catch {
@@ -401,6 +460,8 @@ final class MacMCPModel {
   func refresh(_ serverID: MCPServerID) async -> Bool {
     guard requireServerAccess(serverID) else { return false }
     return await performResult("MCP tools refreshed") {
+      refreshingServerIDs.insert(serverID)
+      defer { refreshingServerIDs.remove(serverID) }
       _ = try await runtime.refreshServer(serverID, force: true)
       try await reloadSnapshot()
     }
@@ -415,8 +476,10 @@ final class MacMCPModel {
     return await performResult(nil) {
       if enabled {
         guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
-          throw MCPError.invalidServer("Enable this MCP server in Settings first.")
+          throw MCPError.invalidServer("Enable this server in MCP Servers first.")
         }
+        refreshingServerIDs.insert(serverID)
+        defer { refreshingServerIDs.remove(serverID) }
         _ = try await runtime.refreshServer(serverID)
       }
       try await persistChatServerEnabled(
@@ -444,6 +507,33 @@ final class MacMCPModel {
         policy,
         exposedToolName: exposedToolName,
         conversationID: conversationID
+      )
+      try await reloadSnapshot()
+    }
+  }
+
+  func setAllChatToolPolicies(
+    _ policy: ChatToolPermissionPolicy,
+    serverID: MCPServerID,
+    conversationID: ConversationID
+  ) async -> Bool {
+    if policy != .disabled, !requireServerAccess(serverID) { return false }
+    let bindings = tools(for: serverID)
+    guard !bindings.isEmpty else { return true }
+    return await performResult("Updated permissions for \(bindings.count) \(bindings.count == 1 ? "tool" : "tools")") {
+      let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
+      var next = chatConfiguration(for: conversationID)
+      for binding in bindings {
+        if policy == .ask {
+          next.toolPolicies.removeValue(forKey: binding.exposedName)
+        } else {
+          next.toolPolicies[binding.exposedName] = policy
+        }
+      }
+      try await workspace.replaceChatConfiguration(
+        next,
+        conversationID: conversationID,
+        preserveEmpty: inherited != nil
       )
       try await reloadSnapshot()
     }
@@ -714,6 +804,16 @@ final class MacMCPModel {
     }
   }
 
+  private func beginBusy() {
+    activeOperationCount += 1
+    isBusy = true
+  }
+
+  private func endBusy() {
+    activeOperationCount = max(0, activeOperationCount - 1)
+    isBusy = activeOperationCount > 0
+  }
+
   private func perform(_ successMessage: String?, operation: () async throws -> Void) async {
     _ = await performResult(successMessage, operation: operation)
   }
@@ -722,10 +822,10 @@ final class MacMCPModel {
     _ successMessage: String?,
     operation: () async throws -> Void
   ) async -> Bool {
-    isBusy = true
+    beginBusy()
     errorMessage = nil
     statusMessage = nil
-    defer { isBusy = false }
+    defer { endBusy() }
     do {
       try await operation()
       statusMessage = successMessage

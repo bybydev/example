@@ -186,12 +186,7 @@ struct MacChatPane: View {
         projectID: chats.newChatProjectID
       )
     }
-    let enabledIDs = Set(configuration.enabledServerIDs)
-    return enabledIDs.reduce(0) { total, serverID in
-      total + mcp.tools(for: serverID).filter {
-        configuration.policy(for: $0.exposedName) != .disabled
-      }.count
-    }
+    return mcp.activeToolCount(for: configuration)
   }
 
   var body: some View {
@@ -1050,6 +1045,12 @@ private struct MacTranscriptView: View {
     conversation?.messages ?? []
   }
 
+  private func hasActiveMCPInteractions(for conversationID: ConversationID) -> Bool {
+    !mcp.pendingApprovals(for: conversationID).isEmpty
+      || !mcp.pendingElicitations(for: conversationID).isEmpty
+      || !chats.activeToolCalls(for: conversationID).isEmpty
+  }
+
   private var activeTargetMessageID: ChatMessageID? {
     if let pendingSourceMessageID { return pendingSourceMessageID }
     if let pendingScrollTarget { return pendingScrollTarget.messageID }
@@ -1155,7 +1156,7 @@ private struct MacTranscriptView: View {
               }
             }
 
-            if let conversationID {
+            if let conversationID, hasActiveMCPInteractions(for: conversationID) {
               transcriptRow(bottomSpacing: 48) {
                 MacMCPInteractionStack(
                   mcp: mcp,
@@ -2116,12 +2117,7 @@ private struct MacComposerView: View {
         projectID: chats.newChatProjectID
       )
     }
-    let enabledIDs = Set(configuration.enabledServerIDs)
-    return enabledIDs.reduce(0) { total, serverID in
-      total + mcp.tools(for: serverID).filter {
-        configuration.policy(for: $0.exposedName) != .disabled
-      }.count
-    }
+    return mcp.activeToolCount(for: configuration)
   }
 
   var body: some View {

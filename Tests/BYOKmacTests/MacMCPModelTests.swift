@@ -474,6 +474,132 @@ struct MacMCPModelTests {
     )
     #expect(!blocked.succeeded)
     #expect(fixture.model.errorMessage != nil)
+    #expect(fixture.model.consumeErrorMessage() != nil)
+    #expect(fixture.model.errorMessage == nil)
+  }
+
+  @Test("activeToolCount excludes disabled servers, missing credentials, restricted servers, and disabled tools")
+  func activeToolCountReflectsUsableServersAndTools() async throws {
+    let fixture = try await MacMCPFixture.make()
+    let readyServer = MCPRemoteServer(
+      id: "ready-server",
+      name: "Ready",
+      endpoint: URL(string: "https://ready.example.com/mcp")!,
+      authentication: MCPAuthentication(kind: .none),
+      isEnabled: true
+    )
+    let disabledServer = MCPRemoteServer(
+      id: "disabled-server",
+      name: "Disabled",
+      endpoint: URL(string: "https://disabled.example.com/mcp")!,
+      authentication: MCPAuthentication(kind: .none),
+      isEnabled: false
+    )
+    let missingCredServer = MCPRemoteServer(
+      id: "missing-cred-server",
+      name: "Missing Cred",
+      endpoint: URL(string: "https://cred.example.com/mcp")!,
+      authentication: MCPAuthentication(kind: .bearer),
+      isEnabled: true
+    )
+    for server in [readyServer, disabledServer, missingCredServer] {
+      try await fixture.workspace.upsertServer(server)
+      try await fixture.workspace.storeSnapshot(
+        MCPServerSnapshot(
+          serverID: server.id,
+          protocolVersion: "2025-03-26",
+          era: .modern,
+          tools: [
+            MCPRemoteTool(remoteName: "read", title: "Read", description: "", inputSchema: .object([:])),
+            MCPRemoteTool(remoteName: "write", title: "Write", description: "", inputSchema: .object([:])),
+          ],
+          expiresAt: Date.now.addingTimeInterval(300)
+        )
+      )
+    }
+    await fixture.model.reloadFromStorage()
+
+    let disabledToolName = MCPToolNamespace.exposedName(serverID: readyServer.id, remoteName: "write")
+    let config = MCPChatToolConfiguration(
+      enabledServerIDs: [readyServer.id, disabledServer.id, missingCredServer.id],
+      toolPolicies: [disabledToolName: .disabled]
+    )
+
+    #expect(fixture.model.activeServerCount(for: config) == 1)
+    #expect(fixture.model.activeToolCount(for: config) == 1)
+  }
+
+  @Test("Bulk tool policy updates apply across all tools for a server in chats and drafts")
+  func bulkToolPoliciesUpdateServerTools() async throws {
+    let fixture = try await MacMCPFixture.make()
+    let server = MCPRemoteServer(
+      id: "bulk-server",
+      name: "Bulk",
+      endpoint: URL(string: "https://bulk.example.com/mcp")!,
+      isEnabled: true
+    )
+    try await fixture.workspace.upsertServer(server)
+    try await fixture.workspace.storeSnapshot(
+      MCPServerSnapshot(
+        serverID: server.id,
+        protocolVersion: "2025-03-26",
+        era: .modern,
+        tools: [
+          MCPRemoteTool(remoteName: "one", title: "One", description: "", inputSchema: .object([:])),
+          MCPRemoteTool(remoteName: "two", title: "Two", description: "", inputSchema: .object([:])),
+        ],
+        expiresAt: Date.now.addingTimeInterval(300)
+      )
+    )
+    await fixture.model.reloadFromStorage()
+
+    let conversationID: ConversationID = "bulk-chat"
+    try await fixture.workspace.replaceChatConfiguration(
+      MCPChatToolConfiguration(enabledServerIDs: [server.id]),
+      conversationID: conversationID
+    )
+    await fixture.model.reloadFromStorage()
+
+    #expect(await fixture.model.setAllChatToolPolicies(.alwaysAllow, serverID: server.id, conversationID: conversationID))
+    let firstExposed = MCPToolNamespace.exposedName(serverID: server.id, remoteName: "one")
+    let secondExposed = MCPToolNamespace.exposedName(serverID: server.id, remoteName: "two")
+    #expect(fixture.model.toolPolicy(firstExposed, for: conversationID) == .alwaysAllow)
+    #expect(fixture.model.toolPolicy(secondExposed, for: conversationID) == .alwaysAllow)
+
+    #expect(await fixture.model.setAllChatToolPolicies(.ask, serverID: server.id, conversationID: conversationID))
+    #expect(fixture.model.toolPolicy(firstExposed, for: conversationID) == .ask)
+    #expect(fixture.model.chatConfiguration(for: conversationID).toolPolicies.isEmpty)
+
+    let draftUpdated = fixture.model.updatedDraftAllToolPolicies(
+      .disabled,
+      serverID: server.id,
+      currentDraft: MCPChatToolConfiguration(enabledServerIDs: [server.id]),
+      projectID: nil
+    )
+    #expect(draftUpdated.succeeded)
+    #expect(draftUpdated.configuration?.policy(for: firstExposed) == .disabled)
+    #expect(draftUpdated.configuration?.policy(for: secondExposed) == .disabled)
+  }
+
+  @Test("Elicitation form support provides specific per-field validation errors")
+  func elicitationFieldValidationErrors() {
+    let requiredText = MCPElicitationField(name: "query", kind: .string, isRequired: true)
+    #expect(MacMCPElicitationFormSupport.fieldError(for: requiredText, storedValue: "   ") != nil)
+    #expect(MacMCPElicitationFormSupport.fieldError(for: requiredText, storedValue: "hello") == nil)
+
+    let integerField = MCPElicitationField(name: "limit", kind: .integer, isRequired: false)
+    #expect(MacMCPElicitationFormSupport.fieldError(for: integerField, storedValue: "") == nil)
+    #expect(MacMCPElicitationFormSupport.fieldError(for: integerField, storedValue: "abc") != nil)
+    #expect(MacMCPElicitationFormSupport.fieldError(for: integerField, storedValue: "42") == nil)
+
+    let enumArray = MCPElicitationField(
+      name: "tags",
+      kind: .stringArray,
+      isRequired: true,
+      allowedValues: ["alpha", "beta"]
+    )
+    #expect(MacMCPElicitationFormSupport.fieldError(for: enumArray, storedValue: "alpha, gamma") != nil)
+    #expect(MacMCPElicitationFormSupport.fieldError(for: enumArray, storedValue: "alpha, beta") == nil)
   }
 }
 
