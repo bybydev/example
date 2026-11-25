@@ -18,6 +18,8 @@ final class MacPreparedAnswer: @unchecked Sendable {
   let markdown: [String: MarkdownContent]
   let markdownSegments: [String: [MarkdownSegment]]
   let inlineMathSources: Set<String>
+  let sources: [MacAnswerSource]
+  let hasSavableImages: Bool
 
   init(source: String) {
     self.source = source
@@ -66,6 +68,8 @@ final class MacPreparedAnswer: @unchecked Sendable {
     self.markdown = markdown
     self.markdownSegments = markdownSegments
     self.inlineMathSources = inlineMathSources
+    self.sources = MacAnswerContentParser.sources(in: blocks)
+    self.hasSavableImages = MacResponseImageScanner.hasImageCandidates(in: source)
   }
 
   static func shouldUseInlineMathRenderer(_ markdown: String) -> Bool {
@@ -144,5 +148,71 @@ actor MacAnswerContentParseCache {
 
   func blocks(for source: String) throws -> [MacAnswerContentBlock] {
     try answer(for: source).blocks
+  }
+
+  /// Prepares multiple unique assistant responses concurrently off the main actor
+  /// so opening a conversation doesn't serialize parsing or trigger cascading
+  /// row relayouts after mount.
+  nonisolated func prepareBatch(_ sources: [String]) async throws -> [String: MacPreparedAnswer] {
+    try Task.checkCancellation()
+    var results: [String: MacPreparedAnswer] = [:]
+    var uncached: [String] = []
+    var seen: Set<String> = []
+    results.reserveCapacity(sources.count)
+
+    for source in sources where !source.isEmpty && seen.insert(source).inserted {
+      if let cached = storage.value(for: source) {
+        results[source] = cached
+      } else {
+        uncached.append(source)
+      }
+    }
+
+    guard !uncached.isEmpty else { return results }
+
+    let parsedPairs = try await withThrowingTaskGroup(
+      of: (String, MacPreparedAnswer).self,
+      returning: [(String, MacPreparedAnswer)].self
+    ) { group in
+      let maxConcurrency = 4
+      var nextIndex = 0
+
+      func enqueueNext() {
+        guard nextIndex < uncached.count else { return }
+        let source = uncached[nextIndex]
+        nextIndex += 1
+        let storage = self.storage
+        group.addTask(priority: .userInitiated) {
+          try Task.checkCancellation()
+          if let cached = storage.value(for: source) {
+            return (source, cached)
+          }
+          let signpostID = OSSignpostID(log: Self.log)
+          os_signpost(.begin, log: Self.log, name: "Prepare Markdown", signpostID: signpostID)
+          defer { os_signpost(.end, log: Self.log, name: "Prepare Markdown", signpostID: signpostID) }
+          let prepared = MacPreparedAnswer(source: source)
+          try Task.checkCancellation()
+          storage.insert(prepared)
+          return (source, prepared)
+        }
+      }
+
+      for _ in 0..<min(maxConcurrency, uncached.count) {
+        enqueueNext()
+      }
+
+      var collected: [(String, MacPreparedAnswer)] = []
+      collected.reserveCapacity(uncached.count)
+      while let pair = try await group.next() {
+        collected.append(pair)
+        enqueueNext()
+      }
+      return collected
+    }
+
+    for (source, prepared) in parsedPairs {
+      results[source] = prepared
+    }
+    return results
   }
 }

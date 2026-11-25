@@ -87,7 +87,9 @@ struct MacShellView: View {
         chats: chats,
         mcp: mcp,
         conversationID: paneConversationID,
+        requestedConversationID: navigation.requestedID,
         summary: chats.summary(paneConversationID),
+        requestedSummary: chats.summary(navigation.requestedID),
         retainedConversations: navigation.retainedConversations,
         navigationTarget: navigation.messageTarget,
         isPreparingConversation: navigation.isPreparing,
@@ -1638,7 +1640,8 @@ final class MacChatNavigation {
   private(set) var messageTarget: MacTranscriptNavigationTarget?
   var errorMessage: String?
   @ObservationIgnored private var selectionRevision = 0
-  private let limit = 3
+  @ObservationIgnored private var recencyOrder: [ConversationID?] = [nil]
+  private let limit = 5
 
   func prepareSelection(
     using prepare: @MainActor (ConversationID) async throws -> MacPreparedConversation
@@ -1650,6 +1653,14 @@ final class MacChatNavigation {
     let signpostID = OSSignpostID(log: log)
     os_signpost(.begin, log: log, name: "Chat Selection", signpostID: signpostID)
     defer { os_signpost(.end, log: log, name: "Chat Selection", signpostID: signpostID) }
+
+    if retainedConversations.contains(where: { $0.id == requested }) {
+      touchRecency(requested)
+      displayedID = requested
+      os_signpost(.event, log: log, name: "Display Prepared Chat")
+      return
+    }
+
     isPreparing = true
     defer {
       if revision == selectionRevision { isPreparing = false }
@@ -1657,17 +1668,13 @@ final class MacChatNavigation {
 
     do {
       let prepared: MacPreparedConversation
-      if let retained = retainedConversations.first(where: { $0.id == requested }) {
-        prepared = retained
-      } else if let requested {
+      if let requested {
         prepared = try await prepare(requested)
       } else {
         prepared = .newChat
       }
       guard !Task.isCancelled, revision == selectionRevision, requestedID == requested else { return }
-      retainedConversations.removeAll { $0.id == requested }
-      retainedConversations.append(prepared)
-      while retainedConversations.count > limit { retainedConversations.removeFirst() }
+      insertRetained(prepared)
       displayedID = requested
       os_signpost(.event, log: log, name: "Display Prepared Chat")
     } catch {
@@ -1677,6 +1684,38 @@ final class MacChatNavigation {
       errorMessage = error.localizedDescription
       requestedID = displayedID
     }
+  }
+
+  private func touchRecency(_ id: ConversationID?) {
+    recencyOrder.removeAll { $0 == id }
+    recencyOrder.append(id)
+  }
+
+  /// Inserts a newly prepared conversation without reordering existing entries
+  /// in `retainedConversations` so SwiftUI keeps existing `NSTableView` subtrees
+  /// in place.
+  private func insertRetained(_ prepared: MacPreparedConversation) {
+    if let existingIndex = retainedConversations.firstIndex(where: { $0.id == prepared.id }) {
+      retainedConversations[existingIndex] = prepared
+      touchRecency(prepared.id)
+      return
+    }
+
+    if retainedConversations.count >= limit,
+      let oldestID = recencyOrder.first(where: { $0 != prepared.id && $0 != displayedID }),
+      let evictionIndex = retainedConversations.firstIndex(where: { $0.id == oldestID })
+    {
+      recencyOrder.removeAll { $0 == oldestID }
+      retainedConversations[evictionIndex] = prepared
+    } else if retainedConversations.count >= limit {
+      let removed = retainedConversations.removeFirst()
+      recencyOrder.removeAll { $0 == removed.id }
+      retainedConversations.append(prepared)
+    } else {
+      retainedConversations.append(prepared)
+    }
+
+    touchRecency(prepared.id)
   }
 
   func canFollowSend(from source: ConversationID?) -> Bool {
@@ -1694,10 +1733,15 @@ final class MacChatNavigation {
       item.id.map { valid.contains($0) } ?? true
     }
     if retained.count != retainedConversations.count { retainedConversations = retained }
+    recencyOrder.removeAll { id in
+      if let id { return !valid.contains(id) }
+      return false
+    }
     if let displayedID, !valid.contains(displayedID) {
       self.displayedID = nil
       if !retainedConversations.contains(where: { $0.id == nil }) {
         retainedConversations.append(.newChat)
+        touchRecency(nil)
       }
     }
     if let requestedID, !valid.contains(requestedID) {

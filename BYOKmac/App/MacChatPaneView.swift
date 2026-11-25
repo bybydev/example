@@ -50,7 +50,9 @@ struct MacChatPane: View {
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
+  let requestedConversationID: ConversationID?
   let summary: ChatConversation?
+  let requestedSummary: ChatConversation?
   let retainedConversations: [MacPreparedConversation]
   let navigationTarget: MacTranscriptNavigationTarget?
   let isPreparingConversation: Bool
@@ -74,9 +76,11 @@ struct MacChatPane: View {
   let send: (String, [ChatAttachment]) -> Void
 
   @Environment(MacWorkspaceModel.self) private var workspace
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var composerHeight: CGFloat = 0
   @State private var showingPromptsPicker = false
   @State private var dismissedOmittedBannerKey: String?
+  @State private var showLoadingSkeleton = false
 
   private var transcriptBottomSpace: CGFloat {
     max(
@@ -89,18 +93,33 @@ struct MacChatPane: View {
     chats.conversation(conversationID)
   }
 
+  private var headerConversationID: ConversationID? {
+    requestedConversationID
+  }
+
+  private var headerConversation: ChatConversation? {
+    chats.conversation(headerConversationID)
+  }
+
   private var title: String {
-    let value = activeConversation?.title ?? summary?.title ?? ""
+    let value = headerConversation?.title ?? requestedSummary?.title ?? ""
     return value.isEmpty ? "New Chat" : value
   }
 
   private var messageCount: Int? {
-    activeConversation?.messages.count ?? summary?.messageCount
+    headerConversation?.messages.count ?? requestedSummary?.messageCount
   }
 
   private var activeProject: ChatProject? {
     if let conversationID {
       return workspace.project(for: conversationID)
+    }
+    return workspace.project(chats.newChatProjectID)
+  }
+
+  private var headerProject: ChatProject? {
+    if let headerConversationID {
+      return workspace.project(for: headerConversationID)
     }
     return workspace.project(chats.newChatProjectID)
   }
@@ -150,8 +169,8 @@ struct MacChatPane: View {
       MacChatHeader(
         title: title,
         messageCount: messageCount,
-        activeProject: activeProject,
-        hasPersistedConversation: conversationID != nil,
+        activeProject: headerProject,
+        hasPersistedConversation: headerConversationID != nil,
         canExportMarkdown: canExportMarkdown,
         enabledToolCount: enabledToolCount,
         sidebarVisible: sidebarVisible,
@@ -165,6 +184,8 @@ struct MacChatPane: View {
         exportMarkdown: exportMarkdown,
         deleteConversation: deleteConversation
       )
+      .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: headerConversationID)
+      .zIndex(1)
 
       if showOmittedBanner {
         MacContextOmittedBanner(
@@ -180,15 +201,17 @@ struct MacChatPane: View {
       ZStack(alignment: .bottom) {
         ZStack {
           ForEach(retainedConversations) { retained in
+            let isCurrent = retained.id == conversationID
+            let isVisible = isCurrent && !showLoadingSkeleton
             MacTranscriptView(
               providers: providers,
               chats: chats,
               mcp: mcp,
               conversationID: retained.id,
               initialConversation: retained.conversation,
-              activeProject: retained.id == conversationID ? activeProject : nil,
+              activeProject: isCurrent ? activeProject : nil,
               bottomSpace: transcriptBottomSpace,
-              isActive: retained.id == conversationID,
+              isActive: isCurrent,
               navigationTarget: navigationTarget,
               chooseTarget: chooseTarget,
               manageProviders: manageProviders,
@@ -198,22 +221,36 @@ struct MacChatPane: View {
               applyPromptPreset: applyPromptPreset
             )
             .environment(\.macPreparedAnswers, retained.answers)
-            .environment(\.macTranscriptIsActive, retained.id == conversationID)
-            .opacity(retained.id == conversationID ? 1 : 0)
-            .allowsHitTesting(retained.id == conversationID)
-            .accessibilityHidden(retained.id != conversationID)
-            .disabled(retained.id != conversationID)
+            .environment(\.macTranscriptIsActive, isCurrent)
+            .opacity(isVisible ? 1 : 0)
+            .offset(y: isVisible || reduceMotion ? 0 : 4)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
+            .disabled(!isCurrent)
+            .animation(
+              reduceMotion ? nil : .easeOut(duration: 0.18),
+              value: isVisible
+            )
           }
-        }
-        .overlay(alignment: .topTrailing) {
-          if isPreparingConversation {
-            ProgressView("Opening chat…")
-              .controlSize(.small)
-              .padding(10)
-              .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-              .padding(12)
+
+          if showLoadingSkeleton {
+            MacTranscriptSkeletonView(bottomSpace: transcriptBottomSpace)
+              .transition(reduceMotion ? .identity : .opacity)
               .allowsHitTesting(false)
           }
+        }
+        .animation(
+          reduceMotion ? nil : .easeOut(duration: 0.16),
+          value: showLoadingSkeleton
+        )
+        .task(id: isPreparingConversation) {
+          guard isPreparingConversation else {
+            showLoadingSkeleton = false
+            return
+          }
+          try? await Task.sleep(for: .milliseconds(70))
+          guard !Task.isCancelled, isPreparingConversation else { return }
+          showLoadingSkeleton = true
         }
 
         VStack(spacing: 10) {
@@ -240,7 +277,6 @@ struct MacChatPane: View {
             removeAttachment: removeAttachment,
             send: send
           )
-          .id(conversationID?.rawValue ?? "new-chat")
         }
         .frame(maxWidth: MacDesignTokens.Layout.composerMaximumWidth)
         .onGeometryChange(for: CGFloat.self) { geometry in
@@ -252,6 +288,7 @@ struct MacChatPane: View {
         .padding(.bottom, MacDesignTokens.Layout.composerBottomMargin)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .clipped()
     }
     .background(MacDesignTokens.Colors.canvas)
     .sheet(isPresented: $showingPromptsPicker) {
@@ -351,7 +388,13 @@ private struct MacChatHeader: View {
     }
     .padding(.horizontal, MacDesignTokens.Spacing.compact)
     .frame(height: MacDesignTokens.Layout.titlebarHeight)
-    .background(MacDesignTokens.Colors.surface)
+    .background {
+      ZStack {
+        Color(nsColor: .windowBackgroundColor)
+        MacDesignTokens.Colors.canvas
+        MacDesignTokens.Colors.surface
+      }
+    }
     .overlay(alignment: .bottom) {
       Rectangle()
         .fill(MacDesignTokens.Colors.separator.opacity(0.75))
@@ -779,6 +822,7 @@ private struct MacTranscriptView: View {
   @State private var isUserDraggingTimeline = false
   @State private var showJumpToLatest = false
   @State private var hasCompletedInitialScroll = false
+  @State private var hasRevealedInitialLayout: Bool
   @State private var pendingSourceMessageID: ChatMessageID?
   @State private var pendingScrollTarget: PendingScrollTarget?
   @State private var visibleMessageLimit = MacChatMessageWindowPolicy.initialVisibleCount
@@ -832,6 +876,9 @@ private struct MacTranscriptView: View {
     self.applyPromptPreset = applyPromptPreset
     _retainedConversation = State(initialValue: initialConversation)
     _retainedBottomSpace = State(initialValue: bottomSpace)
+    _hasRevealedInitialLayout = State(
+      initialValue: conversationID == nil || (initialConversation?.messages.isEmpty ?? true)
+    )
   }
 
   private var effectiveBottomSpace: CGFloat {
@@ -880,7 +927,7 @@ private struct MacTranscriptView: View {
     return ScrollViewReader { proxy in
       ZStack(alignment: .bottom) {
         List {
-          transcriptRow {
+          transcriptRow(attachScrollAnchor: true) {
             Color.clear
               .frame(height: MacDesignTokens.Spacing.transcriptTop)
           }
@@ -956,7 +1003,7 @@ private struct MacTranscriptView: View {
             }
           }
 
-          transcriptRow {
+          transcriptRow(attachScrollAnchor: true) {
             Color.clear
               .frame(height: effectiveBottomSpace)
           }
@@ -966,6 +1013,14 @@ private struct MacTranscriptView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollIndicators(.automatic)
+        .scrollClipDisabled(false)
+        .clipped()
+        .opacity(hasRevealedInitialLayout ? 1 : 0)
+        .offset(y: hasRevealedInitialLayout || reduceMotion ? 0 : 6)
+        .animation(
+          reduceMotion ? nil : .easeOut(duration: 0.2),
+          value: hasRevealedInitialLayout
+        )
         .background {
           MacTranscriptScrollObserver(isEnabled: isActive, connection: scrollConnection) { previous, current in
             guard isActive else { return }
@@ -1088,6 +1143,9 @@ private struct MacTranscriptView: View {
           await Task.yield()
           guard !Task.isCancelled else { return }
           hasCompletedInitialScroll = true
+          if !hasRevealedInitialLayout {
+            hasRevealedInitialLayout = true
+          }
           showJumpToLatest = !isNearBottom
         }
 
@@ -1121,6 +1179,7 @@ private struct MacTranscriptView: View {
 
   private func transcriptRow<Content: View>(
     bottomSpacing: CGFloat = 0,
+    attachScrollAnchor: Bool = false,
     @ViewBuilder content: () -> Content
   ) -> some View {
     content()
@@ -1128,25 +1187,20 @@ private struct MacTranscriptView: View {
       .frame(maxWidth: .infinity, alignment: .center)
       .padding(.horizontal, MacDesignTokens.Spacing.large)
       .padding(.bottom, bottomSpacing)
-      .background(MacTranscriptScrollAnchor(connection: scrollConnection).allowsHitTesting(false))
+      .background {
+        if attachScrollAnchor {
+          MacTranscriptScrollAnchor(connection: scrollConnection)
+            .allowsHitTesting(false)
+        }
+      }
       .listRowInsets(EdgeInsets())
       .listRowSeparator(.hidden)
       .listRowBackground(Color.clear)
   }
 
   private var loadingState: some View {
-    VStack(spacing: 12) {
-      ProgressView()
-        .accessibilityLabel("Loading conversation")
-      if let preview = retainedConversation?.lastMessagePreview, !preview.isEmpty {
-        Text(preview)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .lineLimit(3)
-      }
-    }
-    .frame(maxWidth: .infinity)
-    .padding(.top, 60)
+    MacTranscriptSkeletonContent()
+      .padding(.top, 12)
   }
 
   @ViewBuilder
@@ -1490,11 +1544,8 @@ private struct MacTranscriptView: View {
           .map(\.content)
         let expandedCount = (allMessages.count - currentStartIndex) + batchCount
         Task { @MainActor in
-          for text in textsToPrewarm {
-            guard !Task.isCancelled else { return }
-            _ = try? await MacAnswerContentParseCache.shared.answer(for: text)
-          }
-          guard conversationID == targetConversationID else { return }
+          _ = try? await MacAnswerContentParseCache.shared.prepareBatch(textsToPrewarm)
+          guard !Task.isCancelled, conversationID == targetConversationID else { return }
           pendingEarlierAnchorID = anchorMessageID
           visibleMessageLimit = max(visibleMessageLimit, expandedCount)
           isLoadingEarlierMessages = false
@@ -1610,6 +1661,109 @@ private struct MacTranscriptView: View {
     } else {
       scroll()
     }
+  }
+}
+
+private struct MacTranscriptSkeletonView: View {
+  let bottomSpace: CGFloat
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Spacer(minLength: MacDesignTokens.Spacing.transcriptTop)
+
+      MacTranscriptSkeletonContent()
+        .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, MacDesignTokens.Spacing.large)
+        .padding(.bottom, bottomSpace + 28)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(MacDesignTokens.Colors.canvas)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Loading conversation")
+  }
+}
+
+private struct MacTranscriptSkeletonContent: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isPulsing = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 36) {
+      userBubbleSkeleton(widths: [240])
+
+      assistantSkeleton(
+        lineWidths: [540, 490, 340],
+        includesCard: false
+      )
+
+      userBubbleSkeleton(widths: [310, 180])
+
+      assistantSkeleton(
+        lineWidths: [580, 520, 410],
+        includesCard: true
+      )
+    }
+    .opacity(reduceMotion ? 0.72 : (isPulsing ? 0.88 : 0.48))
+    .onAppear {
+      guard !reduceMotion else { return }
+      withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) {
+        isPulsing = true
+      }
+    }
+  }
+
+  private func userBubbleSkeleton(widths: [CGFloat]) -> some View {
+    HStack {
+      Spacer(minLength: 80)
+      VStack(alignment: .leading, spacing: 8) {
+        ForEach(Array(widths.enumerated()), id: \.offset) { _, width in
+          skeletonBar(maxWidth: width, height: 11, opacity: 0.085)
+        }
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .background(
+        Color.primary.opacity(0.045),
+        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.message, style: .continuous)
+      )
+    }
+  }
+
+  private func assistantSkeleton(lineWidths: [CGFloat], includesCard: Bool) -> some View {
+    VStack(alignment: .leading, spacing: 11) {
+      ForEach(Array(lineWidths.enumerated()), id: \.offset) { _, width in
+        skeletonBar(maxWidth: width, height: 11, opacity: 0.07)
+      }
+
+      if includesCard {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(Color.primary.opacity(0.04))
+          .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+              .stroke(Color.primary.opacity(0.06), lineWidth: 0.75)
+          }
+          .frame(maxWidth: 520, minHeight: 74, maxHeight: 74)
+          .padding(.top, 4)
+      }
+
+      HStack(spacing: 8) {
+        Circle()
+          .fill(Color.primary.opacity(0.06))
+          .frame(width: 14, height: 14)
+        Circle()
+          .fill(Color.primary.opacity(0.06))
+          .frame(width: 14, height: 14)
+      }
+      .padding(.top, 4)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func skeletonBar(maxWidth: CGFloat, height: CGFloat, opacity: CGFloat) -> some View {
+    Capsule(style: .continuous)
+      .fill(Color.primary.opacity(opacity))
+      .frame(maxWidth: maxWidth, minHeight: height, maxHeight: height)
   }
 }
 
@@ -1780,6 +1934,9 @@ private struct MacComposerView: View {
     }
     .onChange(of: focusRequestID) { _, _ in
       editorFocused = true
+    }
+    .onChange(of: conversationID) { _, _ in
+      fileDropTargeted = false
     }
   }
 
@@ -2068,6 +2225,7 @@ private struct MacComposerView: View {
 
 private struct MacAssistantMessageActions: View {
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+  @Environment(\.macPreparedAnswers) private var preparedAnswers
   @Environment(MacWorkspaceModel.self) private var workspace
   @Environment(\.macToastCenter) private var toastCenter
   @Bindable var providers: MacProviderModel
@@ -2079,12 +2237,19 @@ private struct MacAssistantMessageActions: View {
   var toolDisplayName: ((String) -> String)? = nil
 
   @State private var copied = false
+  @State private var resolvedAnswer: MacPreparedAnswer?
   @State private var showingDetails = false
   @State private var showingSources = false
   @State private var activeSources: [MacAnswerSource] = []
   @State private var showingSaveImages = false
   @State private var activeImageCandidates: [MacResponseImageCandidate] = []
   @State private var showingRegenerateConfirmation = false
+
+  private var preparedAnswer: MacPreparedAnswer? {
+    if let resolvedAnswer, resolvedAnswer.source == message.content { return resolvedAnswer }
+    return preparedAnswers[message.content]
+      ?? MacAnswerContentParseCache.shared.cachedAnswer(for: message.content)
+  }
 
   private var canRetry: Bool {
     guard isTranscriptActive, let conversationID else { return false }
@@ -2098,12 +2263,12 @@ private struct MacAssistantMessageActions: View {
 
   private var extractedSources: [MacAnswerSource] {
     guard showContentActions, !message.content.isEmpty else { return [] }
-    return MacAnswerContentParser.sources(in: message.content)
+    return preparedAnswer?.sources ?? []
   }
 
   private var hasSavableImages: Bool {
     guard showContentActions, conversationID != nil, !message.content.isEmpty else { return false }
-    return MacResponseImageScanner.hasImageCandidates(in: message.content)
+    return preparedAnswer?.hasSavableImages ?? false
   }
 
   var body: some View {
@@ -2213,6 +2378,20 @@ private struct MacAssistantMessageActions: View {
     // Pulls the leading glyph back over its centered frame's inset so the
     // first icon's visual edge lines up with the message text above.
     .padding(.leading, -7)
+    .task(id: message.content) {
+      guard isTranscriptActive, showContentActions, !message.content.isEmpty else { return }
+      if let cached = preparedAnswer {
+        resolvedAnswer = cached
+        return
+      }
+      let source = message.content
+      if let prepared = try? await MacAnswerContentParseCache.shared.answer(for: source),
+        !Task.isCancelled,
+        source == message.content
+      {
+        resolvedAnswer = prepared
+      }
+    }
     .sheet(isPresented: $showingDetails) {
       MacMessageDetailsView(
         message: message,

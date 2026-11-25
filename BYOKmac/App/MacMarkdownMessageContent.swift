@@ -249,7 +249,32 @@ struct MacMarkdownMessageContent: View {
     }
   }
 
+  private struct ChatThemeKey: Hashable {
+    let textSize: CGFloat
+    let columnAlignments: [MacTableColumnAlignment]
+  }
+
+  @MainActor
+  private static var cachedThemes: [ChatThemeKey: MarkdownUI.Theme] = [:]
+
+  @MainActor
   private static func chatTheme(
+    textSize: CGFloat,
+    columnAlignments: [MacTableColumnAlignment] = []
+  ) -> MarkdownUI.Theme {
+    let key = ChatThemeKey(textSize: textSize, columnAlignments: columnAlignments)
+    if let existing = cachedThemes[key] {
+      return existing
+    }
+    let theme = buildChatTheme(textSize: textSize, columnAlignments: columnAlignments)
+    if cachedThemes.count >= 16 {
+      cachedThemes.removeAll(keepingCapacity: true)
+    }
+    cachedThemes[key] = theme
+    return theme
+  }
+
+  private static func buildChatTheme(
     textSize: CGFloat,
     columnAlignments: [MacTableColumnAlignment] = []
   ) -> MarkdownUI.Theme {

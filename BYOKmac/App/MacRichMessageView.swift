@@ -897,27 +897,51 @@ enum MacUserMessageTextSupport {
     )
   }
 
+  private final class LinkDetectorCache: @unchecked Sendable {
+    static let shared = LinkDetectorCache()
+
+    private let lock = NSLock()
+    private lazy var detector: NSDataDetector? = try? NSDataDetector(
+      types: NSTextCheckingResult.CheckingType.link.rawValue
+    )
+    private var cache: [String: [LinkMatch]] = [:]
+    private var order: [String] = []
+    private let limit = 128
+
+    func matches(in text: String) -> [LinkMatch] {
+      lock.lock()
+      defer { lock.unlock() }
+      if let cached = cache[text] {
+        return cached
+      }
+      guard let detector else { return [] }
+      let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+      var matches: [LinkMatch] = []
+      for match in detector.matches(in: text, range: fullRange) {
+        guard let url = match.url,
+          MacUserMessageTextSupport.isValidBrowsableURL(url),
+          let range = Range(match.range, in: text)
+        else { continue }
+        let startOffset = text.distance(from: text.startIndex, to: range.lowerBound)
+        let endOffset = text.distance(from: text.startIndex, to: range.upperBound)
+        guard endOffset > startOffset else { continue }
+        matches.append(LinkMatch(startOffset: startOffset, endOffset: endOffset, url: url))
+      }
+      cache[text] = matches
+      order.append(text)
+      if order.count > limit {
+        cache.removeValue(forKey: order.removeFirst())
+      }
+      return matches
+    }
+  }
+
   static func linkMatches(in text: String) -> [LinkMatch] {
     guard text.contains("http://")
       || text.contains("https://")
       || text.localizedCaseInsensitiveContains("www.")
     else { return [] }
-    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    else { return [] }
-
-    let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-    var matches: [LinkMatch] = []
-    for match in detector.matches(in: text, range: fullRange) {
-      guard let url = match.url,
-        isValidBrowsableURL(url),
-        let range = Range(match.range, in: text)
-      else { continue }
-      let startOffset = text.distance(from: text.startIndex, to: range.lowerBound)
-      let endOffset = text.distance(from: text.startIndex, to: range.upperBound)
-      guard endOffset > startOffset else { continue }
-      matches.append(LinkMatch(startOffset: startOffset, endOffset: endOffset, url: url))
-    }
-    return matches
+    return LinkDetectorCache.shared.matches(in: text)
   }
 
   static func attributedText(

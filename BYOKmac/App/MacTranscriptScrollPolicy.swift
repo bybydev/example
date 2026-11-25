@@ -163,6 +163,10 @@ final class MacTranscriptScrollObservationView: NSView {
     scrollView = scroll
     documentView = scroll.documentView
     isObserving = true
+    scroll.clipsToBounds = true
+    scroll.contentView.clipsToBounds = true
+    scroll.automaticallyAdjustsContentInsets = false
+    scroll.contentInsets = NSEdgeInsets()
     let center = NotificationCenter.default
     for name in [
       NSScrollView.willStartLiveScrollNotification,

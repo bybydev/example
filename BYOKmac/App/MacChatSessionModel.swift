@@ -330,7 +330,9 @@ final class MacChatSessionModel {
       if draftValues[id] == nil {
         draftValues[id] = conversation.draftText ?? ""
       }
-      try await reloadSummaries()
+      if summary(id) == nil {
+        try await reloadSummaries()
+      }
       return conversation
     }
     conversationLoadTasks[id] = task
@@ -346,14 +348,14 @@ final class MacChatSessionModel {
     defer { os_signpost(.end, log: log, name: "Prepare Conversation", signpostID: signpostID) }
     let conversation = try await hydrateConversation(id)
     try Task.checkCancellation()
-    var answers: [String: MacPreparedAnswer] = [:]
-    // Prepare the recent viewport first. Older rows prepare on demand instead
-    // of making a long history a prerequisite for displaying the conversation.
-    for message in conversation.messages.suffix(8)
-    where message.role == .assistant && !message.content.isEmpty {
-      try Task.checkCancellation()
-      answers[message.content] = try await MacAnswerContentParseCache.shared.answer(for: message.content)
-    }
+    // Prepare every assistant message in the initial visible window concurrently
+    // off the main actor so rows render prepared content on their first frame
+    // without triggering cascading height relayouts after mount.
+    let assistantSources = conversation.messages
+      .suffix(MacChatMessageWindowPolicy.initialVisibleCount)
+      .filter { $0.role == .assistant && !$0.content.isEmpty }
+      .map(\.content)
+    let answers = try await MacAnswerContentParseCache.shared.prepareBatch(assistantSources)
     try Task.checkCancellation()
     guard summary(id) != nil else { throw ProviderError.conversationNotFound(id) }
     return MacPreparedConversation(
