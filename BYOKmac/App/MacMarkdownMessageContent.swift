@@ -1285,12 +1285,26 @@ struct MacMarkdownResponseImageView: View {
     self.url = url
   }
 
+  private static let maxDisplayHeight: CGFloat = 360
+
   private var displayPixelSize: CGFloat {
     min(1_200, max(360, 360 * displayScale))
   }
 
   private func decodedCacheKey(for baseKey: String) -> String {
     "\(baseKey)@\(Int(displayPixelSize.rounded()))"
+  }
+
+  private func fittedMaxWidth(for image: NSImage) -> CGFloat? {
+    let size = image.size
+    guard size.width > 0, size.height > 0 else { return nil }
+    let aspectRatio = size.width / size.height
+    let widthAtMaxHeight = Self.maxDisplayHeight * aspectRatio
+    let wasDownsampled = max(size.width, size.height) >= displayPixelSize - 1
+    if wasDownsampled {
+      return widthAtMaxHeight
+    }
+    return min(size.width, widthAtMaxHeight)
   }
 
   var body: some View {
@@ -1307,7 +1321,7 @@ struct MacMarkdownResponseImageView: View {
           Image(nsImage: resolvedImage)
             .resizable()
             .scaledToFit()
-            .frame(maxWidth: .infinity, maxHeight: 360, alignment: .leading)
+            .frame(maxWidth: fittedMaxWidth(for: resolvedImage), maxHeight: Self.maxDisplayHeight)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
               RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1337,7 +1351,7 @@ struct MacMarkdownResponseImageView: View {
       } else {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
           .fill(MacDesignTokens.Colors.surface)
-          .frame(maxWidth: .infinity)
+          .frame(maxWidth: 320)
           .frame(height: 180)
           .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)

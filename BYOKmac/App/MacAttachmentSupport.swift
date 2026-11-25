@@ -252,6 +252,15 @@ struct MacAttachmentStrip: View {
   var saveToLibrary: ((ChatAttachment) -> Void)? = nil
   var loadThumbnail: ((String, CGFloat) async -> Data?)?
 
+  private var messageContentWidth: CGFloat? {
+    guard presentation == .message, !attachments.isEmpty else { return nil }
+    let gaps = CGFloat(9 * max(0, attachments.count - 1))
+    let tiles = attachments.reduce(CGFloat(0)) {
+      $0 + ($1.isImage ? presentation.imageSize.width : presentation.fileWidth)
+    }
+    return tiles + gaps + 2
+  }
+
   var body: some View {
     ScrollView(.horizontal) {
       LazyHStack(spacing: 9) {
@@ -273,9 +282,12 @@ struct MacAttachmentStrip: View {
           addAttachmentTile(action: addAttachment)
         }
       }
+      .padding(.horizontal, presentation == .message ? 1 : 0)
       .padding(.vertical, 2)
     }
     .scrollIndicators(.hidden)
+    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+    .frame(maxWidth: messageContentWidth)
     .frame(height: presentation.imageSize.height + 4)
   }
 
