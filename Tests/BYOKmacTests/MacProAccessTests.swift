@@ -437,6 +437,7 @@ struct MacAIProvidersFeatureTests {
   func providerPresentationStates() {
     #expect(MacProviderPresentationState.ready.rawValue == "Ready")
     #expect(MacProviderPresentationState.disabled.rawValue == "Disabled")
+    #expect(MacProviderPresentationState.proRequired.rawValue == "Pro required")
     #expect(MacProviderPresentationState.credentialRequired.rawValue == "Credential required")
     #expect(MacProviderPresentationState.modelRequired.rawValue == "Model required")
   }

@@ -192,6 +192,23 @@ struct MacProviderModelTests {
 
     #expect(succeeded)
     #expect(model.models(for: accountID).contains { $0.model.id == ModelID(rawValue: "model-b") })
+
+    // Removing a seed model from seedModelIDs deletes its manual model record on save.
+    let pruned = await model.updateConnection(
+      accountID: accountID,
+      label: "Local Server",
+      newCredential: nil,
+      baseURL: "https://local.example.test/v1",
+      headers: [:],
+      metadata: [:],
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: nil,
+      authChoice: .none,
+      seedModelIDs: ["model-b"]
+    )
+    #expect(pruned)
+    #expect(!model.models(for: accountID, includeHidden: true).contains { $0.model.id == ModelID(rawValue: "model-a") })
+    #expect(model.models(for: accountID).contains { $0.model.id == ModelID(rawValue: "model-b") })
   }
 
   @Test("Credential update failure restores the previous provider configuration")
@@ -329,6 +346,9 @@ struct MacProviderModelTests {
 
     #expect(!model.isProviderRestricted(first.id))
     #expect(model.isProviderRestricted(second.id))
+    let restrictedSecond = try #require(model.account(second.id))
+    #expect(macProviderPresentationState(model: model, account: restrictedSecond) == .proRequired)
+    #expect(model.defaultAccountID == first.id)
     #expect(model.preferredTarget()?.accountID == first.id)
 
     let updated = await model.updateConnection(

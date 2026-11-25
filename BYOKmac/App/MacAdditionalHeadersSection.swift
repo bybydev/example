@@ -98,6 +98,8 @@ struct MacAdditionalHeadersSection: View {
   @Binding var editorTarget: MacAdditionalHeaderEditorTarget?
   var onChange: (() -> Void)? = nil
 
+  @Environment(\.macToastCenter) private var toastCenter
+
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       if headers.isEmpty {
@@ -176,7 +178,7 @@ struct MacAdditionalHeadersSection: View {
 
       HStack(spacing: 4) {
         Button {
-          copyToPasteboard(item.value)
+          copyToPasteboard(item.value, name: item.name)
         } label: {
           Image(systemName: "doc.on.doc")
         }
@@ -219,7 +221,7 @@ struct MacAdditionalHeadersSection: View {
         editorTarget = .edit(item)
       }
       Button("Copy Value", systemImage: "doc.on.doc") {
-        copyToPasteboard(item.value)
+        copyToPasteboard(item.value, name: item.name)
       }
       Divider()
       Button("Delete", systemImage: "trash", role: .destructive) {
@@ -228,9 +230,10 @@ struct MacAdditionalHeadersSection: View {
     }
   }
 
-  private func copyToPasteboard(_ value: String) {
+  private func copyToPasteboard(_ value: String, name: String) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(value, forType: .string)
+    toastCenter?.success("Copied value for \(name)")
   }
 
   private func deleteHeader(id: UUID) {

@@ -516,8 +516,9 @@ struct ModelWire: Decodable {
   var supportsImageInput: Bool?
   var supportsTools: Bool?
   var archived: Bool?
+  var endpoints: [String]?
   enum CodingKeys: String, CodingKey {
-    case id, name, type, active, architecture, pricing, capabilities, archived, effort, reasoning
+    case id, name, type, active, architecture, pricing, capabilities, archived, effort, reasoning, endpoints
     case displayName = "display_name"
     case contextLength = "context_length"
     case maxContextLength = "max_context_length"

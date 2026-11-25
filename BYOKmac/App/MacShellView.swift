@@ -239,6 +239,14 @@ struct MacShellView: View {
         activeUpsellFeature = pending
       }
     }
+    .onChange(of: showingTargetPicker) { _, isPresented in
+      guard !isPresented, let pending = pendingUpsellFeature else { return }
+      pendingUpsellFeature = nil
+      Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(250))
+        activeUpsellFeature = pending
+      }
+    }
     .onReceive(NotificationCenter.default.publisher(for: .macOpenConversationFromLibrary)) { notification in
       guard let rawValue = notification.object as? String else { return }
       let conversationID = ConversationID(rawValue: rawValue)
@@ -633,6 +641,9 @@ struct MacShellView: View {
     if utilitySheets.destination != nil {
       pendingUpsellFeature = feature
       utilitySheets.dismiss()
+    } else if showingTargetPicker {
+      pendingUpsellFeature = feature
+      showingTargetPicker = false
     } else {
       activeUpsellFeature = feature
     }

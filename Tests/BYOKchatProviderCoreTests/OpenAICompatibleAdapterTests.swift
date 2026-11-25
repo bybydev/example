@@ -1290,6 +1290,47 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   }
 }
 
+@Test func openRouterListModelsFiltersBatchOnlyEntries() async throws {
+  let payload = Data(
+    #"""
+    {
+      "data": [
+        {
+          "id": "openai/gpt-5",
+          "name": "OpenAI: GPT-5",
+          "endpoints": ["/api/v1/chat/completions"]
+        },
+        {
+          "id": "openai/gpt-5:batch",
+          "name": "OpenAI: GPT-5 (Batch)",
+          "endpoints": ["/api/v1/batches"]
+        },
+        {
+          "id": "vendor/batch-only-no-suffix",
+          "name": "Vendor Batch Only",
+          "endpoints": ["/api/v1/batches"]
+        },
+        {
+          "id": "vendor/legacy-without-endpoints",
+          "name": "Vendor Legacy"
+        }
+      ]
+    }
+    """#.utf8
+  )
+  let adapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.openRouter,
+    transport: MockTransport(data: payload)
+  )
+  let discovered = try await adapter.listModels(account: account(providerID: "openrouter"))
+  let ids = Set(discovered.map(\.id))
+
+  #expect(ids.contains("openai/gpt-5"))
+  #expect(ids.contains("vendor/legacy-without-endpoints"))
+  #expect(!ids.contains("openai/gpt-5:batch"))
+  #expect(!ids.contains("vendor/batch-only-no-suffix"))
+}
+
 @Test func nvidiaListModelsFiltersNonChatNIMsAndPreservesSeedCapabilities() async throws {
   let payload = """
     {

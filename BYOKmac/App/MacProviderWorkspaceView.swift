@@ -13,6 +13,7 @@ enum MacProviderDetailTab: String, CaseIterable, Identifiable {
 enum MacProviderPresentationState: String, Equatable {
   case ready = "Ready"
   case disabled = "Disabled"
+  case proRequired = "Pro required"
   case credentialRequired = "Credential required"
   case modelRequired = "Model required"
 }
@@ -48,6 +49,7 @@ func macProviderPresentationState(
   model: MacProviderModel,
   account: ProviderAccount
 ) -> MacProviderPresentationState {
+  if model.isProviderRestricted(account.id) { return .proRequired }
   guard account.isEnabled else { return .disabled }
   if account.definition.requiresCredential, !model.hasCredential(account.id) {
     return .credentialRequired
@@ -63,6 +65,7 @@ struct MacProviderManagementView: View {
   let showsCloseButton: Bool
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.macToastCenter) private var toastCenter
   @State private var selectedAccountID: ProviderAccountID?
   @State private var searchText = ""
   @State private var showingProviderPicker = false
@@ -162,9 +165,13 @@ struct MacProviderManagementView: View {
     ) {
       Button("Delete Connection", role: .destructive) {
         guard let account = deleteAccount else { return }
+        let label = account.label
         deleteAccount = nil
         Task { @MainActor in
           await model.deleteConnection(account.id)
+          if model.errorMessage == nil {
+            toastCenter?.success("Deleted \(label)")
+          }
           if selectedAccountID == account.id { selectedAccountID = nil }
         }
       }
@@ -324,91 +331,104 @@ struct MacProviderManagementView: View {
 
   private func providerCard(_ account: ProviderAccount) -> some View {
     let state = macProviderPresentationState(model: model, account: account)
-    let records = model.models(for: account.id, includeHidden: true)
-    let isDefault = model.defaultAccountID == account.id
+    let visibleRecords = model.models(for: account.id)
+    let availableCount = visibleRecords.filter(\.isAvailable).count
+    let hiddenCount = model.models(for: account.id, includeHidden: true).count - visibleRecords.count
+    let isDefault = model.defaultAccountID == account.id && state == .ready
     let isTesting = testingAccountID == account.id
 
-    return VStack(alignment: .leading, spacing: 12) {
-      HStack(alignment: .top, spacing: 11) {
-        MacProviderIcon(account: account, size: 40, isReady: state == .ready)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(account.label)
-            .font(.system(size: 14, weight: .semibold))
+    return MacProviderAccountCard(onOpen: { selectedAccountID = account.id }) {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .top, spacing: 11) {
+          MacProviderMark(account: account, size: 40, isReady: state == .ready)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(account.label)
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .lineLimit(1)
+            Text(providerTypeName(account))
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          Spacer()
+          Menu {
+            providerCardMenuItems(for: account, state: state, isDefault: isDefault)
+          } label: {
+            MacIconMenuLabel(systemImage: "ellipsis")
+          }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
+          .fixedSize()
+        }
+
+        HStack(spacing: 8) {
+          MacProviderStateLabel(state: state)
+          if isDefault {
+            Text("DEFAULT")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(MacDesignTokens.Colors.accent)
+              .padding(.horizontal, 7)
+              .padding(.vertical, 3)
+              .background(MacDesignTokens.Colors.accent.opacity(0.10), in: Capsule())
+          }
+        }
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(defaultModelSummary(account))
+            .font(.system(size: 13, weight: .medium))
             .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .lineLimit(1)
-          Text(providerTypeName(account))
+          Text(modelCountSummary(available: availableCount, hidden: hiddenCount))
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
-        Spacer()
-        Menu {
-          providerCardMenuItems(for: account, state: state, isDefault: isDefault)
-        } label: {
-          MacIconMenuLabel(systemImage: "ellipsis")
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-      }
 
-      HStack(spacing: 8) {
-        MacProviderStateLabel(state: state)
-        if isDefault {
-          Text("DEFAULT")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(MacDesignTokens.Colors.accent)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(MacDesignTokens.Colors.accent.opacity(0.10), in: Capsule())
-        }
-      }
-
-      VStack(alignment: .leading, spacing: 3) {
-        Text(defaultModelSummary(account))
-          .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          .lineLimit(1)
-        Text("\(records.count) model\(records.count == 1 ? "" : "s")")
+        if testResultAccountID == account.id, let testSucceeded {
+          Label(
+            testSucceeded ? "Connection succeeded" : "Connection failed",
+            systemImage: testSucceeded ? "checkmark.circle" : "exclamationmark.triangle"
+          )
           .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      }
-
-      if testResultAccountID == account.id, let testSucceeded {
-        Label(
-          testSucceeded ? "Connection succeeded" : "Connection failed",
-          systemImage: testSucceeded ? "checkmark.circle" : "exclamationmark.triangle"
-        )
-        .font(.caption)
-        .foregroundStyle(testSucceeded ? MacDesignTokens.Colors.textMuted : Color.orange)
-      }
-
-      HStack {
-        if state == .ready {
-          Button(isTesting ? "Testing…" : "Test") { testConnection(account) }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            .disabled(isTesting || model.isBusy)
+          .foregroundStyle(testSucceeded ? MacDesignTokens.Colors.textMuted : Color.orange)
         }
-        Spacer()
-        Button(state == .ready ? "Manage" : "Configure") { selectedAccountID = account.id }
-          .buttonStyle(MacActionButtonStyle(state == .ready ? .secondary : .primary, size: .small))
+
+        HStack {
+          if state == .ready {
+            Button(isTesting ? "Testing…" : "Test") { testConnection(account) }
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+              .disabled(isTesting || model.isBusy)
+          } else if state == .proRequired {
+            Button("Upgrade") { MacProAccess.requestUpgrade(.providerAccounts) }
+              .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+          }
+          Spacer()
+          Button(state == .ready || state == .proRequired ? "Manage" : "Configure") {
+            selectedAccountID = account.id
+          }
+          .buttonStyle(
+            MacActionButtonStyle(
+              state == .ready || state == .proRequired ? .secondary : .primary,
+              size: .small
+            )
+          )
+        }
       }
     }
-    .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 185, alignment: .topLeading)
-    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 11))
-    .overlay {
-      RoundedRectangle(cornerRadius: 11)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
-    }
-    .contentShape(Rectangle())
-    .onTapGesture { selectedAccountID = account.id }
     .contextMenu {
       providerCardMenuItems(for: account, state: state, isDefault: isDefault)
     }
   }
 
+  private func modelCountSummary(available: Int, hidden: Int) -> String {
+    let base = "\(available) model\(available == 1 ? "" : "s")"
+    guard hidden > 0 else { return base }
+    return "\(base) · \(hidden) hidden"
+  }
+
   private func canRefreshModels(_ account: ProviderAccount, state: MacProviderPresentationState) -> Bool {
-    guard state == .ready, !model.isProviderRestricted(account.id) else { return false }
+    guard state == .ready || state == .modelRequired, !model.isProviderRestricted(account.id) else {
+      return false
+    }
     let modelsPath = model.provider(for: account.providerID)?.modelsPath ?? account.definition.modelsPath
     return modelsPath != nil
   }
@@ -420,26 +440,41 @@ struct MacProviderManagementView: View {
     isDefault: Bool
   ) -> some View {
     Button("Manage", systemImage: "arrow.right.circle") { selectedAccountID = account.id }
-    Button("Edit Connection…", systemImage: "pencil") { editorRoute = .edit(account.id) }
-    if !isDefault && state == .ready {
-      Button("Make Default", systemImage: "checkmark.circle") {
-        Task { _ = await model.setDefaultAccount(account.id) }
+    if state == .proRequired {
+      Button("Upgrade to BYOK Pro", systemImage: "crown.fill") {
+        MacProAccess.requestUpgrade(.providerAccounts)
       }
-    }
-    if canRefreshModels(account, state: state) {
+    } else {
+      Button("Edit Connection…", systemImage: "pencil") { editorRoute = .edit(account.id) }
+      if !isDefault && state == .ready {
+        Button("Make Default", systemImage: "checkmark.circle") {
+          Task {
+            if await model.setDefaultAccount(account.id) {
+              toastCenter?.success("Default connection set to \(account.label)")
+            }
+          }
+        }
+      }
+      if canRefreshModels(account, state: state) {
+        Button(
+          refreshingAccountID == account.id ? "Refreshing Models…" : "Refresh Models",
+          systemImage: "arrow.clockwise"
+        ) {
+          refreshModels(account)
+        }
+        .disabled(model.isBusy || refreshingAccountID == account.id)
+      }
       Button(
-        refreshingAccountID == account.id ? "Refreshing Models…" : "Refresh Models",
-        systemImage: "arrow.clockwise"
+        account.isEnabled ? "Disable" : "Enable",
+        systemImage: account.isEnabled ? "pause.circle" : "play.circle"
       ) {
-        refreshModels(account)
+        let nextEnabled = !account.isEnabled
+        Task {
+          if await model.setAccountEnabled(nextEnabled, accountID: account.id) {
+            toastCenter?.success("\(account.label) \(nextEnabled ? "enabled" : "disabled")")
+          }
+        }
       }
-      .disabled(model.isBusy || refreshingAccountID == account.id)
-    }
-    Button(
-      account.isEnabled ? "Disable" : "Enable",
-      systemImage: account.isEnabled ? "pause.circle" : "play.circle"
-    ) {
-      Task { _ = await model.setAccountEnabled(!account.isEnabled, accountID: account.id) }
     }
     Divider()
     Button("Delete Connection…", systemImage: "trash", role: .destructive) {
@@ -452,7 +487,10 @@ struct MacProviderManagementView: View {
     refreshingAccountID = account.id
     Task { @MainActor in
       defer { refreshingAccountID = nil }
-      _ = await model.refreshModels(accountID: account.id)
+      if await model.refreshModels(accountID: account.id) {
+        let count = model.models(for: account.id).filter(\.isAvailable).count
+        toastCenter?.success("Refreshed \(count) model\(count == 1 ? "" : "s") for \(account.label)")
+      }
     }
   }
 
@@ -498,12 +536,21 @@ private struct MacProviderWorkspaceDetailView: View {
   let edit: () -> Void
   let requestDelete: () -> Void
 
+  @Environment(\.macToastCenter) private var toastCenter
   @State private var tab: MacProviderDetailTab = .overview
   @State private var isTesting = false
+  @State private var isRefreshing = false
   @State private var testResult: Bool?
 
   private var state: MacProviderPresentationState {
     macProviderPresentationState(model: model, account: account)
+  }
+
+  private var canRefreshModels: Bool {
+    guard state == .ready || state == .modelRequired, !model.isProviderRestricted(account.id) else {
+      return false
+    }
+    return (model.provider(for: account.providerID)?.modelsPath ?? account.definition.modelsPath) != nil
   }
 
   var body: some View {
@@ -515,11 +562,11 @@ private struct MacProviderWorkspaceDetailView: View {
         }
         .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
         Divider().frame(height: 24)
-        MacProviderIcon(account: account, size: 40, isReady: state == .ready)
+        MacProviderMark(account: account, size: 40, isReady: state == .ready)
         VStack(alignment: .leading, spacing: 3) {
           HStack(spacing: 7) {
             Text(account.label).font(.title3.weight(.semibold)).lineLimit(1)
-            if model.defaultAccountID == account.id {
+            if model.defaultAccountID == account.id && state == .ready {
               Text("DEFAULT")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(MacDesignTokens.Colors.accent)
@@ -530,33 +577,55 @@ private struct MacProviderWorkspaceDetailView: View {
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
         Spacer()
-        Button(isTesting ? "Testing…" : "Test Connection", systemImage: "bolt.horizontal.circle") {
-          testConnection()
-        }
-        .buttonStyle(MacActionButtonStyle(.secondary))
-        .disabled(isTesting || state != .ready || model.isBusy)
-        Button("Edit", systemImage: "pencil", action: edit)
+        if state == .proRequired {
+          Button("Upgrade to Pro", systemImage: "crown.fill") {
+            MacProAccess.requestUpgrade(.providerAccounts)
+          }
+          .buttonStyle(MacActionButtonStyle(.primary))
+        } else {
+          Button(isTesting ? "Testing…" : "Test Connection", systemImage: "bolt.horizontal.circle") {
+            testConnection()
+          }
           .buttonStyle(MacActionButtonStyle(.secondary))
+          .disabled(isTesting || state != .ready || model.isBusy)
+          Button("Edit", systemImage: "pencil", action: edit)
+            .buttonStyle(MacActionButtonStyle(.secondary))
+        }
         Menu {
-          if model.defaultAccountID != account.id && state == .ready {
-            Button("Make Default", systemImage: "checkmark.circle") {
-              Task { _ = await model.setDefaultAccount(account.id) }
+          if state == .proRequired {
+            Button("Upgrade to BYOK Pro", systemImage: "crown.fill") {
+              MacProAccess.requestUpgrade(.providerAccounts)
             }
-          }
-          if state == .ready,
-            !model.isProviderRestricted(account.id),
-            (model.provider(for: account.providerID)?.modelsPath ?? account.definition.modelsPath) != nil
-          {
-            Button("Refresh Models", systemImage: "arrow.clockwise") {
-              Task { _ = await model.refreshModels(accountID: account.id) }
+          } else {
+            if model.defaultAccountID != account.id && state == .ready {
+              Button("Make Default", systemImage: "checkmark.circle") {
+                Task {
+                  if await model.setDefaultAccount(account.id) {
+                    toastCenter?.success("Default connection set to \(account.label)")
+                  }
+                }
+              }
             }
-            .disabled(model.isBusy)
-          }
-          Button(
-            account.isEnabled ? "Disable" : "Enable",
-            systemImage: account.isEnabled ? "pause.circle" : "play.circle"
-          ) {
-            Task { _ = await model.setAccountEnabled(!account.isEnabled, accountID: account.id) }
+            if canRefreshModels {
+              Button(
+                isRefreshing ? "Refreshing Models…" : "Refresh Models",
+                systemImage: "arrow.clockwise"
+              ) {
+                refreshModels()
+              }
+              .disabled(model.isBusy || isRefreshing)
+            }
+            Button(
+              account.isEnabled ? "Disable" : "Enable",
+              systemImage: account.isEnabled ? "pause.circle" : "play.circle"
+            ) {
+              let nextEnabled = !account.isEnabled
+              Task {
+                if await model.setAccountEnabled(nextEnabled, accountID: account.id) {
+                  toastCenter?.success("\(account.label) \(nextEnabled ? "enabled" : "disabled")")
+                }
+              }
+            }
           }
           Divider()
           Button("Delete Connection…", systemImage: "trash", role: .destructive, action: requestDelete)
@@ -572,6 +641,27 @@ private struct MacProviderWorkspaceDetailView: View {
       .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
       Divider()
+
+      if state == .proRequired {
+        HStack(spacing: 12) {
+          Image(systemName: "crown.fill")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+          Text("This restored connection exceeds the Free 1-connection limit. Upgrade to BYOK Pro or remove another connection to unlock it.")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 8)
+          Button("Upgrade") {
+            MacProAccess.requestUpgrade(.providerAccounts)
+          }
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(MacDesignTokens.Colors.accentSoft.opacity(0.65))
+
+        Divider()
+      }
 
       MacSegmentedControl(
         options: MacProviderDetailTab.allCases,
@@ -613,6 +703,18 @@ private struct MacProviderWorkspaceDetailView: View {
     account.kind == .openAICompatible ? "OpenAI-compatible" : account.kind.displayName
   }
 
+  private func refreshModels() {
+    guard !isRefreshing else { return }
+    isRefreshing = true
+    Task { @MainActor in
+      defer { isRefreshing = false }
+      if await model.refreshModels(accountID: account.id) {
+        let count = model.models(for: account.id).filter(\.isAvailable).count
+        toastCenter?.success("Refreshed \(count) model\(count == 1 ? "" : "s")")
+      }
+    }
+  }
+
   private func testConnection() {
     guard !isTesting else { return }
     isTesting = true
@@ -633,8 +735,14 @@ private struct MacProviderOverviewView: View {
   let showModels: () -> Void
   let showConnection: () -> Void
 
+  @Environment(\.macToastCenter) private var toastCenter
+
   private var records: [AccountModelRecord] {
     model.models(for: account.id, includeHidden: true)
+  }
+
+  private var state: MacProviderPresentationState {
+    macProviderPresentationState(model: model, account: account)
   }
 
   var body: some View {
@@ -642,7 +750,7 @@ private struct MacProviderOverviewView: View {
       VStack(alignment: .leading, spacing: 14) {
         MacProviderSectionCard(title: "Status", systemImage: "checkmark.circle") {
           VStack(alignment: .leading, spacing: 9) {
-            MacProviderStateLabel(state: macProviderPresentationState(model: model, account: account))
+            MacProviderStateLabel(state: state)
             MacProviderValueRow(title: "Connection", value: account.isEnabled ? "Enabled" : "Disabled")
             MacProviderValueRow(title: "Credential", value: credentialSummary)
             if let testResult {
@@ -653,18 +761,23 @@ private struct MacProviderOverviewView: View {
 
         MacProviderSectionCard(title: "Default", systemImage: "checkmark.seal") {
           VStack(alignment: .leading, spacing: 9) {
-            MacProviderValueRow(title: "Default Connection", value: model.defaultAccountID == account.id ? "Yes" : "No")
+            MacProviderValueRow(
+              title: "Default Connection",
+              value: (model.defaultAccountID == account.id && state == .ready) ? "Yes" : "No"
+            )
             MacProviderValueRow(title: "Default Model", value: defaultModelLabel)
-            HStack(spacing: 8) {
-              Spacer()
-              if model.defaultAccountID != account.id,
-                macProviderPresentationState(model: model, account: account) == .ready
-              {
-                Button("Make Default") { Task { _ = await model.setDefaultAccount(account.id) } }
-                  .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              }
-              Button("View Models", action: showModels)
+            if model.defaultAccountID != account.id && state == .ready {
+              HStack(spacing: 8) {
+                Spacer()
+                Button("Make Default") {
+                  Task {
+                    if await model.setDefaultAccount(account.id) {
+                      toastCenter?.success("Default connection set to \(account.label)")
+                    }
+                  }
+                }
                 .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+              }
             }
           }
         }
@@ -740,9 +853,19 @@ private struct MacProviderModelsWorkspaceView: View {
   @Bindable var model: MacProviderModel
   let account: ProviderAccount
 
+  @Environment(\.macToastCenter) private var toastCenter
   @State private var searchText = ""
   @State private var showHidden = false
   @State private var showingAddModel = false
+  @State private var isRefreshing = false
+
+  private var state: MacProviderPresentationState {
+    macProviderPresentationState(model: model, account: account)
+  }
+
+  private var canRefreshModels: Bool {
+    (state == .ready || state == .modelRequired) && !model.isProviderRestricted(account.id)
+  }
 
   private var records: [AccountModelRecord] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -768,14 +891,25 @@ private struct MacProviderModelsWorkspaceView: View {
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
               .lineLimit(1)
           }
-          Button("Refresh", systemImage: "arrow.clockwise") {
-            Task { _ = await model.refreshModels(accountID: account.id) }
+          Button {
+            refreshModels()
+          } label: {
+            if isRefreshing {
+              HStack(spacing: 6) {
+                ProgressView()
+                  .controlSize(.small)
+                Text("Refreshing…")
+              }
+            } else {
+              Label("Refresh", systemImage: "arrow.clockwise")
+            }
           }
           .buttonStyle(MacActionButtonStyle(.secondary))
-          .disabled(model.isBusy)
+          .disabled(isRefreshing || model.isBusy || !canRefreshModels)
         }
         Button("Add Model", systemImage: "plus") { showingAddModel = true }
           .buttonStyle(MacActionButtonStyle(.primary))
+          .disabled(state == .proRequired)
       }
       .padding(.horizontal, 16)
       .frame(height: 54)
@@ -803,7 +937,23 @@ private struct MacProviderModelsWorkspaceView: View {
     }
     .sheet(isPresented: $showingAddModel) {
       MacProviderAddModelSheet { modelID in
-        Task { _ = await model.addManualModel(modelID, accountID: account.id) }
+        Task {
+          if await model.addManualModel(modelID, accountID: account.id) {
+            toastCenter?.success("Added \(modelID)")
+          }
+        }
+      }
+    }
+  }
+
+  private func refreshModels() {
+    guard !isRefreshing else { return }
+    isRefreshing = true
+    Task { @MainActor in
+      defer { isRefreshing = false }
+      if await model.refreshModels(accountID: account.id) {
+        let count = model.models(for: account.id).filter(\.isAvailable).count
+        toastCenter?.success("Refreshed \(count) model\(count == 1 ? "" : "s")")
       }
     }
   }
@@ -842,16 +992,24 @@ private struct MacProviderModelsWorkspaceView: View {
 
       Spacer()
 
-      if account.defaultModelID != record.model.id && record.isAvailable && !record.isHidden {
+      if account.defaultModelID != record.model.id && record.isAvailable && !record.isHidden && state != .proRequired {
         Button("Make Default") {
-          Task { _ = await model.setDefaultModel(record.model.id, accountID: account.id) }
+          Task {
+            if await model.setDefaultModel(record.model.id, accountID: account.id) {
+              toastCenter?.success("Default model set to \(record.model.displayName)")
+            }
+          }
         }
         .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       }
 
-      if record.isManual {
+      if record.isManual && state != .proRequired {
         Button {
-          Task { _ = await model.removeManualModel(record.model.id, accountID: account.id) }
+          Task {
+            if await model.removeManualModel(record.model.id, accountID: account.id) {
+              toastCenter?.success("Removed \(record.model.displayName)")
+            }
+          }
         } label: {
           Image(systemName: "trash")
         }
@@ -878,9 +1036,13 @@ private struct MacProviderModelsWorkspaceView: View {
         .stroke(MacDesignTokens.Colors.separator.opacity(0.72), lineWidth: 0.5)
     }
     .contextMenu {
-      if record.isManual {
+      if record.isManual && state != .proRequired {
         Button("Remove Custom Model", systemImage: "trash", role: .destructive) {
-          Task { _ = await model.removeManualModel(record.model.id, accountID: account.id) }
+          Task {
+            if await model.removeManualModel(record.model.id, accountID: account.id) {
+              toastCenter?.success("Removed \(record.model.displayName)")
+            }
+          }
         }
       }
     }
@@ -913,6 +1075,7 @@ private struct MacProviderConnectionWorkspaceView: View {
               Spacer()
               Button("Edit", action: edit)
                 .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+                .disabled(macProviderPresentationState(model: model, account: account) == .proRequired)
             }
           }
         }
@@ -928,6 +1091,7 @@ private struct MacProviderConnectionWorkspaceView: View {
               Spacer()
               Button("Edit", action: edit)
                 .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+                .disabled(macProviderPresentationState(model: model, account: account) == .proRequired)
             }
           }
         }
@@ -938,13 +1102,17 @@ private struct MacProviderConnectionWorkspaceView: View {
               Text("No custom headers").foregroundStyle(MacDesignTokens.Colors.textMuted)
             } else {
               ForEach(account.additionalHeaders.keys.sorted(), id: \.self) { key in
-                MacProviderValueRow(title: key, value: "Configured")
+                MacProviderValueRow(
+                  title: key,
+                  value: account.additionalHeaders[key] ?? ""
+                )
               }
             }
             HStack {
               Spacer()
               Button("Edit", action: edit)
                 .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+                .disabled(macProviderPresentationState(model: model, account: account) == .proRequired)
             }
           }
         }
@@ -958,6 +1126,7 @@ private struct MacProviderConnectionWorkspaceView: View {
                 Spacer()
                 Button("Edit", action: edit)
                   .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+                  .disabled(macProviderPresentationState(model: model, account: account) == .proRequired)
               }
             }
           }
@@ -1117,7 +1286,7 @@ struct MacProviderKindPickerSheet: View {
     let isSelected = kind == currentSelection
     return Button { choose(kind) } label: {
       HStack(spacing: 11) {
-        MacProviderIcon(kind: kind, size: 36, isReady: true)
+        MacProviderMark(kind: kind, size: 36, isReady: true)
         VStack(alignment: .leading, spacing: 2) {
           Text(kind.macPickerTitle)
             .font(.system(size: 13.5, weight: .semibold))
@@ -1240,7 +1409,7 @@ struct MacSupportedProvidersCatalogView: View {
       onSelect(kind)
     } label: {
       HStack(spacing: 11) {
-        MacProviderIcon(kind: kind, size: 36, isReady: true)
+        MacProviderMark(kind: kind, size: 36, isReady: true)
         VStack(alignment: .leading, spacing: 2) {
           Text(kind.macPickerTitle)
             .font(.system(size: 13.5, weight: .semibold))
@@ -1272,12 +1441,21 @@ struct MacSupportedProvidersCatalogView: View {
 private struct MacProviderAddModelSheet: View {
   let add: (String) -> Void
   @Environment(\.dismiss) private var dismiss
+  @FocusState private var isModelFieldFocused: Bool
   @State private var modelID = ""
+
+  private var trimmedModelID: String {
+    modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
       Text("Add Model").font(.headline)
       TextField("Model ID", text: $modelID)
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: 13, design: .monospaced))
+        .focused($isModelFieldFocused)
+        .onSubmit { submit() }
       Text("Add a model ID manually when discovery does not list it.")
         .font(.caption)
         .foregroundStyle(MacDesignTokens.Colors.textMuted)
@@ -1286,17 +1464,59 @@ private struct MacProviderAddModelSheet: View {
         Button("Cancel") { dismiss() }
           .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
-        Button("Add") {
-          add(modelID.trimmingCharacters(in: .whitespacesAndNewlines))
-          dismiss()
-        }
-        .buttonStyle(MacActionButtonStyle(.primary))
-        .keyboardShortcut(.defaultAction)
-        .disabled(modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Button("Add") { submit() }
+          .buttonStyle(MacActionButtonStyle(.primary))
+          .keyboardShortcut(.defaultAction)
+          .disabled(trimmedModelID.isEmpty)
       }
     }
     .padding(20)
     .frame(width: 420)
+    .background(MacDesignTokens.Colors.canvas)
+    .onAppear {
+      isModelFieldFocused = true
+    }
+  }
+
+  private func submit() {
+    guard !trimmedModelID.isEmpty else { return }
+    add(trimmedModelID)
+    dismiss()
+  }
+}
+
+private struct MacProviderAccountCard<Content: View>: View {
+  let onOpen: () -> Void
+  @ViewBuilder let content: Content
+
+  @State private var isHovered = false
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+    content
+      .padding(14)
+      .frame(maxWidth: .infinity, minHeight: 185, alignment: .topLeading)
+      .background(MacDesignTokens.Colors.surface, in: shape)
+      .overlay {
+        shape.fill(Color.primary.opacity(isHovered ? 0.03 : 0))
+          .allowsHitTesting(false)
+      }
+      .overlay {
+        shape.stroke(
+          isHovered
+            ? MacDesignTokens.Colors.accent.opacity(0.45)
+            : MacDesignTokens.Colors.separator.opacity(0.75),
+          lineWidth: isHovered ? 0.85 : 0.5
+        )
+        .allowsHitTesting(false)
+      }
+      .contentShape(shape)
+      .onTapGesture(perform: onOpen)
+      .onHover { isHovered = $0 }
+      .animation(
+        .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+        value: isHovered
+      )
   }
 }
 
@@ -1325,48 +1545,31 @@ private struct MacProviderSearchField: View {
   }
 }
 
-private struct MacProviderIcon: View {
-  private let account: ProviderAccount?
-  private let kind: ProviderKind
-  let size: CGFloat
-  let isReady: Bool
-
-  init(account: ProviderAccount, size: CGFloat, isReady: Bool) {
-    self.account = account
-    self.kind = account.kind
-    self.size = size
-    self.isReady = isReady
-  }
-
-  init(kind: ProviderKind, size: CGFloat, isReady: Bool) {
-    self.account = nil
-    self.kind = kind
-    self.size = size
-    self.isReady = isReady
-  }
-
-  var body: some View {
-    if let account {
-      MacProviderMark(account: account, size: size, isReady: isReady)
-    } else {
-      MacProviderMark(kind: kind, size: size, isReady: isReady)
-    }
-  }
-}
-
 private struct MacProviderStateLabel: View {
   let state: MacProviderPresentationState
 
   var body: some View {
     Label(state.rawValue, systemImage: symbol)
       .font(.caption.weight(.medium))
-      .foregroundStyle(state == .credentialRequired || state == .modelRequired ? Color.orange : MacDesignTokens.Colors.textMuted)
+      .foregroundStyle(tint)
+  }
+
+  private var tint: Color {
+    switch state {
+    case .credentialRequired, .modelRequired:
+      Color.orange
+    case .proRequired:
+      MacDesignTokens.Colors.accent
+    case .ready, .disabled:
+      MacDesignTokens.Colors.textMuted
+    }
   }
 
   private var symbol: String {
     switch state {
     case .ready: "checkmark.circle.fill"
     case .disabled: "pause.circle"
+    case .proRequired: "crown.fill"
     case .credentialRequired: "key.horizontal"
     case .modelRequired: "cube"
     }

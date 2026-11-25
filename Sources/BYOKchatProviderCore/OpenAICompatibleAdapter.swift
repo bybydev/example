@@ -90,6 +90,9 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
   }
 
   private func discoveredModel(from wire: ModelWire) -> ProviderModel? {
+    if definition.behavior == .openRouter, !Self.isOpenRouterInteractiveChatModel(wire) {
+      return nil
+    }
     if definition.behavior == .mistral,
       wire.archived == true || wire.capabilities?.completionChat == false
     {
@@ -701,6 +704,21 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     )
     let nonChatTokens: Set<String> = ["tts", "asr", "stt", "bge", "sdxl", "sd3", "rune"]
     return tokens.isDisjoint(with: nonChatTokens)
+  }
+
+  /// OpenRouter's `GET /api/v1/models` includes `:batch`-only models whose
+  /// `endpoints` only expose `/api/v1/batches` and fail for interactive chat.
+  private static func isOpenRouterInteractiveChatModel(_ wire: ModelWire) -> Bool {
+    if wire.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasSuffix(":batch") {
+      return false
+    }
+    if let endpoints = wire.endpoints, !endpoints.isEmpty {
+      return endpoints.contains { endpoint in
+        let normalized = endpoint.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.hasSuffix("/chat/completions") || normalized == "chat/completions"
+      }
+    }
+    return true
   }
 }
 

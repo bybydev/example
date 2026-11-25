@@ -1,8 +1,67 @@
+import AppKit
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
 
 // MARK: - Shared Model Capability Badges
+
+private struct MacBadgeFlowLayout: Layout {
+  var horizontalSpacing: CGFloat = 5
+  var verticalSpacing: CGFloat = 4
+
+  func sizeThatFits(
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) -> CGSize {
+    let maxWidth = proposal.width ?? .infinity
+    var x: CGFloat = 0
+    var y: CGFloat = 0
+    var rowHeight: CGFloat = 0
+    var totalWidth: CGFloat = 0
+
+    for subview in subviews {
+      let size = subview.sizeThatFits(.unspecified)
+      if x > 0 && x + size.width > maxWidth {
+        x = 0
+        y += rowHeight + verticalSpacing
+        rowHeight = 0
+      }
+      totalWidth = max(totalWidth, x + size.width)
+      x += size.width + horizontalSpacing
+      rowHeight = max(rowHeight, size.height)
+    }
+
+    return CGSize(width: totalWidth, height: y + rowHeight)
+  }
+
+  func placeSubviews(
+    in bounds: CGRect,
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) {
+    var x = bounds.minX
+    var y = bounds.minY
+    var rowHeight: CGFloat = 0
+
+    for subview in subviews {
+      let size = subview.sizeThatFits(.unspecified)
+      if x > bounds.minX && x + size.width > bounds.maxX {
+        x = bounds.minX
+        y += rowHeight + verticalSpacing
+        rowHeight = 0
+      }
+      subview.place(
+        at: CGPoint(x: x, y: y),
+        anchor: .topLeading,
+        proposal: ProposedViewSize(size)
+      )
+      x += size.width + horizontalSpacing
+      rowHeight = max(rowHeight, size.height)
+    }
+  }
+}
 
 struct MacModelCapabilityBadges: View {
   let kind: ProviderKind
@@ -43,7 +102,7 @@ struct MacModelCapabilityBadges: View {
 
   var body: some View {
     if hasAnyBadge {
-      HStack(spacing: 5) {
+      MacBadgeFlowLayout(horizontalSpacing: 5, verticalSpacing: 4) {
         if !isAvailable {
           badge("Unavailable", systemImage: "exclamationmark.triangle.fill", tint: .orange)
         }
@@ -106,6 +165,7 @@ struct MacTargetPickerView: View {
   @State private var showingProviders = false
   @State private var showingManualModelSheet = false
   @State private var manualModelDraft = ""
+  @FocusState private var isManualModelFieldFocused: Bool
   @State private var explicitlyEnteredManualIDs: Set<ModelID> = []
   @State private var removedManualModelIDs: Set<ModelID> = []
   @State private var refreshAccountID: ProviderAccountID?
@@ -297,12 +357,14 @@ struct MacTargetPickerView: View {
           .disabled(!canCommit)
       }
       .padding(16)
+      .background(MacDesignTokens.Colors.surface)
 
       Divider()
 
       HSplitView {
         accountListPane
           .frame(minWidth: 190, idealWidth: 220, maxWidth: 255)
+          .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
         VStack(spacing: 0) {
           modelToolbar
@@ -325,9 +387,11 @@ struct MacTargetPickerView: View {
           }
         }
         .frame(minWidth: 430)
+        .background(MacDesignTokens.Colors.canvas)
       }
     }
-    .frame(width: 740, height: 560)
+    .frame(minWidth: 700, idealWidth: 760, minHeight: 500, idealHeight: 580)
+    .background(MacDesignTokens.Colors.canvas)
     .interactiveDismissDisabled(isSaving)
     .task(id: accountID) {
       guard let accountID else { return }
@@ -396,6 +460,7 @@ struct MacTargetPickerView: View {
             .tag(account.id)
           }
         }
+        .scrollContentBackground(.hidden)
       }
     }
   }
@@ -404,13 +469,13 @@ struct MacTargetPickerView: View {
     HStack(spacing: 8) {
       HStack(spacing: 6) {
         Image(systemName: "magnifyingglass")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
         TextField("Search models", text: $searchText)
           .textFieldStyle(.plain)
         if !searchText.isEmpty {
           Button { searchText = "" } label: {
             Image(systemName: "xmark.circle.fill")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
           }
           .buttonStyle(.plain)
         }
@@ -443,8 +508,8 @@ struct MacTargetPickerView: View {
       }
     }
     .padding(.horizontal, 12)
-    .frame(height: 40)
-    .background(Color.primary.opacity(0.04))
+    .frame(height: 44)
+    .background(MacDesignTokens.Colors.surface.opacity(0.45))
   }
 
   @ViewBuilder
@@ -541,6 +606,7 @@ struct MacTargetPickerView: View {
             .tag(record.model.id)
         }
       }
+      .scrollContentBackground(.hidden)
     }
   }
 
@@ -551,16 +617,17 @@ struct MacTargetPickerView: View {
         HStack(spacing: 5) {
           Text(record.model.displayName)
             .fontWeight(.medium)
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .lineLimit(1)
           if record.isFavorite {
             Image(systemName: "star.fill")
               .font(.caption2)
-              .foregroundStyle(.yellow)
+              .foregroundStyle(MacDesignTokens.Colors.accent)
           }
         }
         Text(record.model.id.rawValue)
           .font(.caption.monospaced())
-          .foregroundStyle(.secondary)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
           .lineLimit(1)
         MacModelCapabilityBadges(
           kind: kind,
@@ -577,7 +644,7 @@ struct MacTargetPickerView: View {
         } label: {
           Image(systemName: "trash")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
         .buttonStyle(MacIconButtonStyle())
         .help("Remove custom model")
@@ -585,6 +652,16 @@ struct MacTargetPickerView: View {
       }
     }
     .padding(.vertical, 2)
+    .contentShape(Rectangle())
+    .simultaneousGesture(
+      TapGesture(count: 2).onEnded {
+        guard record.isAvailable else { return }
+        modelID = record.model.id
+        if canCommit {
+          save()
+        }
+      }
+    )
     .opacity(record.isAvailable ? 1 : 0.5)
     .contextMenu {
       if record.isManual {
@@ -707,13 +784,14 @@ struct MacTargetPickerView: View {
 
     Divider()
 
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 6) {
       if let account = selectedAccount, let modelID {
         let model = selectedRecord?.model
           ?? ProviderModel(providerID: account.providerID, id: modelID, displayName: modelID.rawValue)
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
           Text(selectedRecord?.model.displayName ?? modelID.rawValue)
             .font(.caption.weight(.medium))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .lineLimit(1)
           MacModelCapabilityBadges(
             kind: account.kind,
@@ -722,7 +800,6 @@ struct MacTargetPickerView: View {
             isHidden: selectedRecord?.isHidden ?? false,
             isAvailable: !selectedModelIsUnavailable
           )
-          Spacer(minLength: 0)
         }
       }
 
@@ -741,24 +818,24 @@ struct MacTargetPickerView: View {
         Spacer(minLength: 0)
       }
       .font(.caption)
-      .foregroundStyle(.secondary)
+      .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
       if let refreshMessage {
         Text(refreshMessage)
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
           .fixedSize(horizontal: false, vertical: true)
       }
 
       if !removedManualModelIDs.isEmpty {
         Text("Custom model removal will be saved when you click Done.")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
       }
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 9)
-    .background(Color.primary.opacity(0.025))
+    .background(MacDesignTokens.Colors.surface.opacity(0.6))
   }
 
   private var manualModelPromptSheet: some View {
@@ -766,10 +843,12 @@ struct MacTargetPickerView: View {
       Text("Enter Model ID")
         .font(.headline)
       TextField("Exact model ID", text: $manualModelDraft)
+        .textFieldStyle(.roundedBorder)
+        .focused($isManualModelFieldFocused)
         .onSubmit { commitManualPrompt() }
       Text("Select a model that is not yet listed by your provider. It will be saved when you click Done.")
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
       HStack(spacing: 8) {
         Spacer()
         Button("Cancel") {
@@ -786,6 +865,10 @@ struct MacTargetPickerView: View {
     }
     .padding(20)
     .frame(width: 420)
+    .background(MacDesignTokens.Colors.canvas)
+    .onAppear {
+      isManualModelFieldFocused = true
+    }
   }
 
   private func accountStatusWarning(for account: ProviderAccount) -> String? {
@@ -949,6 +1032,11 @@ enum MacConnectionEditorRoute: Identifiable {
 
 nonisolated enum MacConnectionURLValidator {
   static let invalidURLMessage = "Enter a valid URL starting with https:// or http://."
+  static let httpsRequiredMessage = "Use an https:// URL for this provider."
+  static let privateNetworkHTTPMessage =
+    "Cleartext http:// is only allowed for localhost and private LAN hosts. Use https:// for public endpoints."
+  static let credentialsNotAllowedMessage =
+    "Remove embedded username or password from the URL."
 
   /// Resolves a draft base URL string for a given `ProviderKind`.
   /// Empty input returns `nil` for custom OpenAI-compatible servers and the
@@ -963,15 +1051,35 @@ nonisolated enum MacConnectionURLValidator {
       scheme == "http" || scheme == "https",
       let host = parsed.host, !host.isEmpty
     else { return nil }
-    return kind.normalizedBaseURL(parsed)
+    let normalized = kind.normalizedBaseURL(parsed)
+    guard (try? ProviderHTTP.validateBaseURL(normalized, allowsLocalHTTP: kind.allowsLocalHTTP)) != nil else {
+      return nil
+    }
+    return normalized
   }
 
   /// Returns an inline validation error message when a non-empty Base URL fails
-  /// HTTP(S) validation.
+  /// HTTP(S) or transport security validation.
   static func validationError(for rawURL: String, kind: ProviderKind) -> String? {
     let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    return resolvedEndpoint(for: trimmed, kind: kind) == nil ? invalidURLMessage : nil
+    guard let parsed = URL(string: trimmed),
+      let scheme = parsed.scheme?.lowercased(),
+      scheme == "http" || scheme == "https",
+      let host = parsed.host, !host.isEmpty
+    else { return invalidURLMessage }
+    if parsed.user != nil || parsed.password != nil {
+      return credentialsNotAllowedMessage
+    }
+    if scheme == "http" {
+      if !kind.allowsLocalHTTP {
+        return httpsRequiredMessage
+      }
+      if !ProviderHTTP.isPrivateNetworkHost(host) {
+        return privateNetworkHTTPMessage
+      }
+    }
+    return nil
   }
 }
 
@@ -979,7 +1087,8 @@ struct MacConnectionEditorView: View {
   private enum ConnectionTestState: Equatable {
     case idle
     case testing
-    case connected(modelCount: Int)
+    case fetchingModels
+    case discovered(modelCount: Int)
     case connectedVerified(modelID: String)
     case failed(String)
   }
@@ -1030,7 +1139,11 @@ struct MacConnectionEditorView: View {
   @State private var httpReferer: String
   @State private var isEnabled: Bool
   @State private var isSaving = false
+  @State private var saveError: String?
   @State private var isRevealing = false
+  @State private var revealedStoredCredential: String?
+  @State private var didCopyRevealedCredential = false
+  @State private var isDraftCredentialVisible = false
   @State private var clearCredential = false
   @State private var showingAdvanced = false
   @State private var showingModelPicker = false
@@ -1304,7 +1417,8 @@ struct MacConnectionEditorView: View {
   }
 
   private var manualOnlyRecords: [AccountModelRecord] {
-    modelRecords.filter(\.isManual)
+    let seedIDs = isCustom ? Set(parseSeedModels(seedModelsText).map(ModelID.init(rawValue:))) : []
+    return modelRecords.filter { $0.isManual && !seedIDs.contains($0.model.id) }
   }
 
   private var selectedModelRecord: AccountModelRecord? {
@@ -1351,7 +1465,7 @@ struct MacConnectionEditorView: View {
     return selectedModelID?.rawValue ?? "Choose model"
   }
 
-  private var canRunDiscoveryOrTest: Bool {
+  private var hasValidPreviewCredentialsAndEndpoint: Bool {
     guard !isDiscoveryRunning, resolvedDraftEndpoint != nil else { return false }
     guard !hasInvalidAdditionalHeaders else { return false }
     if isCustom && authMode == "header"
@@ -1362,11 +1476,21 @@ struct MacConnectionEditorView: View {
     if requiresCredential && !keyAvailableForDiscovery {
       return false
     }
-    if draftDefinition.modelsPath == nil {
-      let typed = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-      return !typed.isEmpty || selectedModelID != nil || !modelRecords.isEmpty
-    }
     return true
+  }
+
+  private var canFetchModels: Bool {
+    hasValidPreviewCredentialsAndEndpoint && draftDefinition.modelsPath != nil
+  }
+
+  private var previewTargetModelID: ModelID? {
+    let typed = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !typed.isEmpty { return ModelID(rawValue: typed) }
+    return selectedModelID ?? modelRecords.first?.model.id
+  }
+
+  private var canTestConnection: Bool {
+    hasValidPreviewCredentialsAndEndpoint && previewTargetModelID != nil
   }
 
   private var hasNonEnabledUnsavedChanges: Bool {
@@ -1464,6 +1588,34 @@ struct MacConnectionEditorView: View {
 
       Divider()
 
+      if let saveError {
+        HStack(alignment: .top, spacing: 8) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .foregroundStyle(.red)
+            .padding(.top, 1)
+          Text(saveError)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 6)
+          Button {
+            self.saveError = nil
+          } label: {
+            Image(systemName: "xmark")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .accessibilityLabel("Dismiss error")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.09))
+
+        Divider()
+      }
+
       ScrollView {
         VStack(alignment: .leading, spacing: 14) {
           editorCard("Connection", systemImage: "link") {
@@ -1504,12 +1656,15 @@ struct MacConnectionEditorView: View {
               } else {
                 LabeledContent("Provider", value: providerDisplayName(kind))
               }
-              TextField("Connection Name", text: $label)
-                .onChange(of: label) { _, newValue in
-                  if newValue != suggestedLabel {
-                    didEditLabel = true
+              labeledField("Connection Name") {
+                TextField("Connection Name", text: $label, prompt: Text("e.g. OpenAI"))
+                  .textFieldStyle(.roundedBorder)
+                  .onChange(of: label) { _, newValue in
+                    if newValue != suggestedLabel {
+                      didEditLabel = true
+                    }
                   }
-                }
+              }
               if !isCreate {
                 Divider()
                 HStack(alignment: .center, spacing: 12) {
@@ -1542,7 +1697,11 @@ struct MacConnectionEditorView: View {
                   Text("None").tag("none")
                 }
                 if authMode == "header" {
-                  TextField("Header Name", text: $customHeaderName)
+                  labeledField("Header Name") {
+                    TextField("Header Name", text: $customHeaderName, prompt: Text("e.g. X-API-Key"))
+                      .textFieldStyle(.roundedBorder)
+                      .font(.system(size: 13, design: .monospaced))
+                  }
                 }
               }
 
@@ -1559,22 +1718,81 @@ struct MacConnectionEditorView: View {
                     .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
                   }
                 } else {
-                  SecureField(credentialPlaceholder, text: $credential)
+                  labeledField(isCreate ? "API Key / Token" : "Replace API Key / Token") {
+                    HStack(spacing: 6) {
+                      Group {
+                        if isDraftCredentialVisible {
+                          TextField(credentialPlaceholder, text: $credential)
+                            .font(.system(size: 13, design: .monospaced))
+                        } else {
+                          SecureField(credentialPlaceholder, text: $credential)
+                        }
+                      }
+                      .textFieldStyle(.roundedBorder)
+
+                      Button {
+                        isDraftCredentialVisible.toggle()
+                      } label: {
+                        Image(systemName: isDraftCredentialVisible ? "eye.slash" : "eye")
+                          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                      }
+                      .buttonStyle(MacIconButtonStyle())
+                      .help(isDraftCredentialVisible ? "Hide typed key" : "Show typed key")
+                      .accessibilityLabel(isDraftCredentialVisible ? "Hide typed key" : "Show typed key")
+                    }
+                  }
                   if hasStoredCredential {
                     HStack(spacing: 8) {
                       Label("Credential stored in Keychain", systemImage: "lock.fill")
                         .font(.caption)
                         .foregroundStyle(MacDesignTokens.Colors.textMuted)
                       Spacer()
-                      Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
+                      if revealedStoredCredential != nil {
+                        Button("Hide Key") {
+                          hideRevealedCredential()
+                        }
                         .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                        .disabled(isRevealing)
+                      } else {
+                        Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
+                          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+                          .disabled(isRevealing)
+                      }
                       if !requiresCredential {
                         Button("Remove Key", role: .destructive) {
+                          hideRevealedCredential()
                           clearCredential = true
                           credential = ""
                         }
                         .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
+                      }
+                    }
+
+                    if let revealed = revealedStoredCredential {
+                      HStack(alignment: .center, spacing: 8) {
+                        Text(revealed)
+                          .font(.system(size: 12, design: .monospaced))
+                          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                          .textSelection(.enabled)
+                          .lineLimit(2)
+                          .truncationMode(.middle)
+                          .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Button(didCopyRevealedCredential ? "Copied" : "Copy") {
+                          NSPasteboard.general.clearContents()
+                          NSPasteboard.general.setString(revealed, forType: .string)
+                          didCopyRevealedCredential = true
+                        }
+                        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+                      }
+                      .padding(.horizontal, 10)
+                      .padding(.vertical, 8)
+                      .background(
+                        MacDesignTokens.Colors.codeSurface,
+                        in: RoundedRectangle(cornerRadius: 8)
+                      )
+                      .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
                       }
                     }
                   } else {
@@ -1602,31 +1820,51 @@ struct MacConnectionEditorView: View {
           if isCustom {
             editorCard("Endpoint", systemImage: "network") {
               VStack(alignment: .leading, spacing: 10) {
-                TextField("Base URL", text: $baseURL, prompt: Text("https://example.com/v1"))
+                labeledField("Base URL") {
+                  TextField("Base URL", text: $baseURL, prompt: Text("https://example.com/v1"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13, design: .monospaced))
+                }
                 if let urlError = baseURLValidationError {
                   Label(urlError, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                TextField("Chat Completions Path", text: $chatPath)
-                TextField("Models Path (blank disables discovery)", text: $modelsPath)
-                Text("HTTP and HTTPS endpoints are accepted, including private LAN and self-hosted servers.")
+                labeledField("Chat Completions Path") {
+                  TextField("Chat Completions Path", text: $chatPath, prompt: Text("/chat/completions"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13, design: .monospaced))
+                }
+                labeledField("Models Path (leave blank to disable discovery)") {
+                  TextField("Models Path", text: $modelsPath, prompt: Text("/models"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13, design: .monospaced))
+                }
+                Text("HTTPS endpoints are accepted anywhere; cleartext HTTP is allowed for localhost and private LAN servers.")
                   .font(.caption)
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  .fixedSize(horizontal: false, vertical: true)
               }
             }
           } else if kind.isLocalServer {
             editorCard("Local Server", systemImage: "network") {
               VStack(alignment: .leading, spacing: 10) {
-                TextField("Server URL", text: $baseURL, prompt: Text(localServerPlaceholder))
+                labeledField("Server URL") {
+                  TextField("Server URL", text: $baseURL, prompt: Text(localServerPlaceholder))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13, design: .monospaced))
+                }
                 if let urlError = baseURLValidationError {
                   Label(urlError, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(localServerHint)
                   .font(.caption)
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  .fixedSize(horizontal: false, vertical: true)
               }
             }
           }
@@ -1637,9 +1875,20 @@ struct MacConnectionEditorView: View {
             editorCard("Seed Models", systemImage: "list.bullet") {
               VStack(alignment: .leading, spacing: 8) {
                 TextEditor(text: $seedModelsText)
-                  .font(.body.monospaced())
-                  .frame(minHeight: 72)
-                Text("Optional model IDs, one per line. Discovery can also be run above before saving.")
+                  .font(.system(size: 12.5, design: .monospaced))
+                  .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                  .scrollContentBackground(.hidden)
+                  .frame(minHeight: 76)
+                  .padding(6)
+                  .background(
+                    MacDesignTokens.Colors.codeSurface,
+                    in: RoundedRectangle(cornerRadius: 8)
+                  )
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                      .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.75)
+                  }
+                Text("Optional model IDs, one per line. Removing a line removes that seed model on Save.")
                   .font(.caption)
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
               }
@@ -1649,11 +1898,20 @@ struct MacConnectionEditorView: View {
               VStack(spacing: 12) {
                 editorCard("Endpoint Override", systemImage: "network") {
                   VStack(alignment: .leading, spacing: 8) {
-                    TextField("Base URL Override", text: $baseURL)
+                    labeledField("Base URL Override") {
+                      TextField(
+                        "Base URL Override",
+                        text: $baseURL,
+                        prompt: Text(kind.defaultEndpoint?.absoluteString ?? "https://")
+                      )
+                      .textFieldStyle(.roundedBorder)
+                      .font(.system(size: 13, design: .monospaced))
+                    }
                     if let urlError = baseURLValidationError {
                       Label(urlError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                     Text("Leave unchanged to use the provider default endpoint.")
                       .font(.caption)
@@ -1678,8 +1936,14 @@ struct MacConnectionEditorView: View {
           if kind == .openRouter {
             editorCard("OpenRouter", systemImage: "arrow.triangle.branch") {
               VStack(alignment: .leading, spacing: 10) {
-                TextField("App Title", text: $appTitle)
-                TextField("HTTP Referer", text: $httpReferer)
+                labeledField("App Title") {
+                  TextField("App Title", text: $appTitle, prompt: Text("Optional X-Title header"))
+                    .textFieldStyle(.roundedBorder)
+                }
+                labeledField("HTTP Referer") {
+                  TextField("HTTP Referer", text: $httpReferer, prompt: Text("Optional HTTP-Referer URL"))
+                    .textFieldStyle(.roundedBorder)
+                }
               }
             }
           }
@@ -1707,7 +1971,10 @@ struct MacConnectionEditorView: View {
     .background(MacDesignTokens.Colors.canvas)
     .interactiveDismissDisabled(isSaving || hasUnsavedChanges)
     .onChange(of: discoveryInput) { _, _ in invalidateDiscovery() }
-    .onDisappear { cancelDiscovery() }
+    .onDisappear {
+      cancelDiscovery()
+      hideRevealedCredential()
+    }
     .sheet(isPresented: $showingProviderPicker) {
       MacProviderKindPickerSheet(currentSelection: selectedKind) { newKind in
         switchKind(to: newKind)
@@ -1762,11 +2029,16 @@ struct MacConnectionEditorView: View {
             Label("Test Connection", systemImage: "bolt.horizontal.circle")
           }
           .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-          .disabled(!canRunDiscoveryOrTest)
+          .disabled(!canTestConnection)
+          .help(
+            previewTargetModelID == nil
+              ? "Fetch models or enter a model ID first to verify chat requests."
+              : "Send a lightweight test request to verify credentials and model access."
+          )
 
           if draftDefinition.modelsPath != nil {
             Button {
-              fetchModels(recordConnectionTest: true)
+              fetchModels()
             } label: {
               HStack(spacing: 5) {
                 Label("Fetch Models", systemImage: "arrow.clockwise")
@@ -1777,7 +2049,7 @@ struct MacConnectionEditorView: View {
               }
             }
             .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            .disabled(!canRunDiscoveryOrTest)
+            .disabled(!canFetchModels)
           }
 
           if isDiscoveryRunning {
@@ -1820,12 +2092,16 @@ struct MacConnectionEditorView: View {
           }
         }
 
-        HStack(spacing: 8) {
-          TextField("Or enter a model ID", text: $manualModelID)
-            .onSubmit { selectManualModel() }
-          Button("Use Model ID") { selectManualModel() }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        labeledField("Add or Override Model ID") {
+          HStack(spacing: 8) {
+            TextField("Or enter a model ID", text: $manualModelID)
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 13, design: .monospaced))
+              .onSubmit { selectManualModel() }
+            Button("Use Model ID") { selectManualModel() }
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+              .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
         }
 
         if !manualOnlyRecords.isEmpty {
@@ -1881,18 +2157,24 @@ struct MacConnectionEditorView: View {
       Text("Testing connection…")
         .font(.caption)
         .foregroundStyle(MacDesignTokens.Colors.textMuted)
-    case .connected(let count):
+    case .fetchingModels:
+      Text("Fetching models…")
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    case .discovered(let count):
       let summary =
         count == 0
-        ? "Connected — no models loaded yet"
-        : "Connected — \(count) \(count == 1 ? "model" : "models") found"
+        ? "Discovery returned no models"
+        : "Fetched \(count) \(count == 1 ? "model" : "models") — use Test Connection to verify chat access"
       Label(summary, systemImage: "checkmark.circle.fill")
         .font(.caption)
-        .foregroundStyle(.green)
+        .foregroundStyle(MacDesignTokens.Colors.accent)
+        .fixedSize(horizontal: false, vertical: true)
     case .connectedVerified(let verifiedModelID):
       Label("Connected — verified with \(verifiedModelID)", systemImage: "checkmark.circle.fill")
         .font(.caption)
         .foregroundStyle(.green)
+        .fixedSize(horizontal: false, vertical: true)
     case .failed(let message):
       Label(message, systemImage: "exclamationmark.triangle.fill")
         .font(.caption)
@@ -1927,6 +2209,9 @@ struct MacConnectionEditorView: View {
     }
     credential = ""
     clearCredential = false
+    hideRevealedCredential()
+    isDraftCredentialVisible = false
+    saveError = nil
     additionalHeaders = []
     headerEditorTarget = nil
     selectedModelID = newKind.seedModels.first?.id
@@ -2028,16 +2313,8 @@ struct MacConnectionEditorView: View {
   }
 
   private func runPreSaveConnectionTest() {
-    if draftDefinition.modelsPath != nil {
-      fetchModels(recordConnectionTest: true)
-      return
-    }
-    let typed = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-    let targetModelID: ModelID? = !typed.isEmpty
-      ? ModelID(rawValue: typed)
-      : (selectedModelID ?? modelRecords.first?.model.id)
-    guard let targetModelID else {
-      let message = "Enter a model ID first to test this connection."
+    guard let targetModelID = previewTargetModelID else {
+      let message = "Fetch models or enter a model ID first to test this connection."
       discoveryWarning = message
       connectionTestState = .failed(message)
       return
@@ -2080,16 +2357,14 @@ struct MacConnectionEditorView: View {
     }
   }
 
-  private func fetchModels(recordConnectionTest: Bool = false) {
+  private func fetchModels() {
     let resolved: ResolvedProviderAccount
     let storedCredentialID: ProviderAccountID?
     do {
       (resolved, storedCredentialID) = try makePreviewResolvedAccount()
     } catch {
       discoveryWarning = error.localizedDescription
-      if recordConnectionTest {
-        connectionTestState = .failed(error.localizedDescription)
-      }
+      connectionTestState = .failed(error.localizedDescription)
       return
     }
     let input = discoveryInput
@@ -2098,9 +2373,7 @@ struct MacConnectionEditorView: View {
     discoveryID = requestID
     isDiscoveryRunning = true
     discoveryWarning = nil
-    if recordConnectionTest {
-      connectionTestState = .testing
-    }
+    connectionTestState = .fetchingModels
     discoveryTask = Task { @MainActor in
       defer {
         if discoveryID == requestID {
@@ -2115,9 +2388,7 @@ struct MacConnectionEditorView: View {
         )
         guard !Task.isCancelled, discoveryID == requestID, discoveryInput == input else { return }
         discoveredModels = models
-        if recordConnectionTest {
-          connectionTestState = .connected(modelCount: models.count)
-        }
+        connectionTestState = .discovered(modelCount: models.count)
         if !modelRecords.contains(where: { $0.model.id == selectedModelID }) {
           selectedModelID = modelRecords.first?.model.id
         }
@@ -2126,12 +2397,7 @@ struct MacConnectionEditorView: View {
         }
       } catch {
         guard !Task.isCancelled, discoveryID == requestID, discoveryInput == input else { return }
-        if recordConnectionTest {
-          connectionTestState = .failed("Connection failed: \(error.localizedDescription)")
-        } else {
-          discoveryWarning =
-            "Model discovery failed: \(error.localizedDescription). Enter a model ID manually to continue."
-        }
+        connectionTestState = .failed("Model discovery failed: \(error.localizedDescription)")
       }
     }
   }
@@ -2166,6 +2432,7 @@ struct MacConnectionEditorView: View {
 
   private func save() {
     guard canSave, !isSaving else { return }
+    saveError = nil
     let headers: [String: String]
     do {
       headers = try MacAdditionalHeaderItem.validatedDictionary(
@@ -2173,7 +2440,7 @@ struct MacConnectionEditorView: View {
         policy: headerValidationPolicy
       )
     } catch {
-      model.errorMessage = error.localizedDescription
+      saveError = error.localizedDescription
       return
     }
 
@@ -2186,6 +2453,7 @@ struct MacConnectionEditorView: View {
     let effectiveRemoved = removedManualModelIDs.subtracting(Set(manualIDs.map(ModelID.init(rawValue:))))
 
     cancelDiscovery()
+    hideRevealedCredential()
 
     if case .edit(let accountID) = route, !hasUnsavedChanges {
       onFinished(accountID)
@@ -2217,6 +2485,8 @@ struct MacConnectionEditorView: View {
           onFinished(id)
           dismiss()
         } else {
+          saveError = model.errorMessage ?? "Unable to create connection."
+          model.errorMessage = nil
           isSaving = false
         }
 
@@ -2259,6 +2529,8 @@ struct MacConnectionEditorView: View {
           onFinished(accountID)
           dismiss()
         } else {
+          saveError = model.errorMessage ?? "Unable to save connection."
+          model.errorMessage = nil
           isSaving = false
         }
       }
@@ -2276,11 +2548,32 @@ struct MacConnectionEditorView: View {
   private func revealCredential() {
     guard let accountID = existing?.id else { return }
     isRevealing = true
+    didCopyRevealedCredential = false
     Task { @MainActor in
       if let value = await model.revealCredential(accountID: accountID) {
-        credential = value
+        revealedStoredCredential = value
+      } else if let error = model.errorMessage {
+        saveError = error
+        model.errorMessage = nil
       }
       isRevealing = false
+    }
+  }
+
+  private func hideRevealedCredential() {
+    revealedStoredCredential = nil
+    didCopyRevealedCredential = false
+  }
+
+  private func labeledField<Content: View>(
+    _ title: String,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      content()
     }
   }
 
@@ -2414,7 +2707,7 @@ private struct MacConnectionModelPickerSheet: View {
               if record.isFavorite {
                 Image(systemName: "star.fill")
                   .font(.caption)
-                  .foregroundStyle(.yellow)
+                  .foregroundStyle(MacDesignTokens.Colors.accent)
               }
               Text(record.model.displayName)
                 .font(.system(size: 13.5, weight: .medium))

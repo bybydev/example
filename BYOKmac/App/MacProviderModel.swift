@@ -263,7 +263,9 @@ final class MacProviderModel {
     manualModelIDs: [String] = []
   ) async -> ProviderAccountID? {
     guard MacProAccess.requireProviderAccountCapacity(currentCount: accounts.count) else {
-      errorMessage = "Free includes 1 provider connection. Upgrade to BYOK Pro to add more."
+      errorMessage = MacProAccess.blockedMessage(
+        freeMessage: "Free includes 1 provider connection. Upgrade to BYOK Pro to add more."
+      )
       return nil
     }
 
@@ -390,11 +392,22 @@ final class MacProviderModel {
         updated.modelsPath = normalizedOptionalPath(modelsPath)
         updated.authChoice = authChoice ?? .bearer
         let normalizedSeeds = normalizedSeedModelIDs(seedModelIDs)
+        let previousSeeds = Set((original.seedModelIDs ?? []).map(ModelID.init(rawValue:)))
+        let nextSeeds: [String]?
         if !effectiveRemoved.isEmpty, let normalizedSeeds {
           let filtered = normalizedSeeds.filter { !effectiveRemoved.contains(ModelID(rawValue: $0)) }
-          updated.seedModelIDs = filtered.isEmpty ? nil : filtered
+          nextSeeds = filtered.isEmpty ? nil : filtered
         } else {
-          updated.seedModelIDs = normalizedSeeds
+          nextSeeds = normalizedSeeds
+        }
+        updated.seedModelIDs = nextSeeds
+        let nextSeedSet = Set((nextSeeds ?? []).map(ModelID.init(rawValue:)))
+        let deletedSeeds = previousSeeds
+          .subtracting(nextSeedSet)
+          .subtracting(addedManualIDs)
+        effectiveRemoved.formUnion(deletedSeeds)
+        if let defaultModelID, !clearDefaultModel {
+          effectiveRemoved.remove(defaultModelID)
         }
       }
       try await accountManager.updateAccount(updated)
@@ -462,7 +475,14 @@ final class MacProviderModel {
     }
     if !effectiveRemoved.isEmpty {
       do {
-        try await workspace.removeManualModels(effectiveRemoved, for: accountID)
+        let removableManualIDs = Set(
+          await workspace.modelRecords(for: accountID, includeHidden: true)
+            .filter { $0.isManual && effectiveRemoved.contains($0.model.id) }
+            .map(\.model.id)
+        )
+        if !removableManualIDs.isEmpty {
+          try await workspace.removeManualModels(removableManualIDs, for: accountID)
+        }
       } catch {
         MacAppAnalytics.reportError("provider_model_sync_failed", component: "provider")
         warnings.append("Connection changes were saved, but manual models could not be removed: \(error.localizedDescription)")
@@ -581,18 +601,40 @@ final class MacProviderModel {
     }
   }
 
-  /// Explicit user-triggered model discovery. Always unthrottled.
+  /// Explicit user-triggered model discovery. Always unthrottled and deduplicated
+  /// against any in-flight refresh for the same account.
   func refreshModels(accountID: ProviderAccountID) async -> Bool {
     guard requireProviderAccess(accountID) else { return false }
-    let succeeded = await performCommittedResult(
-      warningPrefix: "Models were refreshed, but the provider list could not refresh:"
-    ) {
+    if let existing = catalogRefreshTasks[accountID] {
+      let succeeded = await performResult {
+        try await existing.value
+      }
+      if succeeded {
+        catalogRefreshFailures[accountID] = nil
+      }
+      return succeeded
+    }
+
+    isBusy = true
+    errorMessage = nil
+    defer { isBusy = false }
+
+    let task = Task { @MainActor in
       _ = try await runtime.refreshModels(accountID: accountID)
+      try await reloadSnapshot()
     }
-    if succeeded {
+    catalogRefreshTasks[accountID] = task
+    defer { catalogRefreshTasks[accountID] = nil }
+
+    do {
+      try await task.value
       catalogRefreshFailures[accountID] = nil
+      return true
+    } catch {
+      MacAppAnalytics.reportError("provider_operation_failed", component: "provider")
+      errorMessage = error.localizedDescription
+      return false
     }
-    return succeeded
   }
 
   /// Pre-save discovery using the editor's unsaved endpoint, auth, headers, and credential draft.
@@ -924,8 +966,16 @@ final class MacProviderModel {
     modelCatalogStatus = catalogStatus
     modelCatalogRevision = catalogStatus.revision
 
+    let loadedIDs = loadedAccounts.map(\.id)
+    let entitlement = effectiveEntitlementAccess
+
     func ready(_ account: ProviderAccount) -> Bool {
       guard account.isEnabled else { return false }
+      guard !restrictions.isProviderRestricted(
+        account.id,
+        currentIDs: loadedIDs,
+        entitlement: entitlement
+      ) else { return false }
       if account.definition.requiresCredential {
         guard credentials.contains(account.id) else { return false }
       }
@@ -940,8 +990,6 @@ final class MacProviderModel {
       defaultAccountID = storedDefaultID
     } else {
       defaultAccountID = loadedAccounts.first(where: ready)?.id
-        ?? loadedAccounts.first(where: \.isEnabled)?.id
-        ?? loadedAccounts.first?.id
     }
 
     let presentedAccounts = loadedAccounts.map { account -> ProviderAccount in

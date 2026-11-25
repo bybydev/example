@@ -140,6 +140,34 @@ struct MacPolishTests {
     }
   }
 
+  @Test("Transport security rules reject cleartext HTTP on cloud and public hosts and embedded credentials")
+  func urlValidatorTransportSecurity() {
+    #expect(
+      MacConnectionURLValidator.validationError(for: "http://api.openai.com/v1", kind: .openai)
+        == MacConnectionURLValidator.httpsRequiredMessage
+    )
+    #expect(
+      MacConnectionURLValidator.resolvedEndpoint(for: "http://api.openai.com/v1", kind: .openai) == nil
+    )
+
+    #expect(
+      MacConnectionURLValidator.validationError(for: "http://example.com/v1", kind: .openAICompatible)
+        == MacConnectionURLValidator.privateNetworkHTTPMessage
+    )
+    #expect(
+      MacConnectionURLValidator.resolvedEndpoint(for: "http://example.com/v1", kind: .openAICompatible) == nil
+    )
+
+    #expect(
+      MacConnectionURLValidator.validationError(for: "https://user:pass@api.example.com/v1", kind: .openAICompatible)
+        == MacConnectionURLValidator.credentialsNotAllowedMessage
+    )
+    #expect(
+      MacConnectionURLValidator.resolvedEndpoint(for: "https://user:pass@api.example.com/v1", kind: .openAICompatible)
+        == nil
+    )
+  }
+
   // MARK: - Edit & Resend Guard
 
   @Test("Empty and whitespace-only edits are blocked")
