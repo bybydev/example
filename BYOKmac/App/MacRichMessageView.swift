@@ -700,8 +700,10 @@ struct MacEditAndResendView: View {
         }
         Spacer()
         Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
         Button("Resend") { commit() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(!canResend)
       }
@@ -1813,13 +1815,12 @@ struct MacMessageDetailsView: View {
           copiedDetails ? "Copied" : "Copy Details",
           systemImage: copiedDetails ? "checkmark" : "doc.on.doc"
         )
-        .font(.system(size: 12, weight: .medium))
       }
-      .buttonStyle(.bordered)
-      .controlSize(.small)
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       .help("Copy a plain-text summary of message details")
 
       Button("Done") { dismiss() }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .keyboardShortcut(.cancelAction)
     }
     .padding(16)

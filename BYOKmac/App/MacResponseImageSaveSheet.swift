@@ -127,6 +127,7 @@ struct MacResponseImageSaveSheet: View {
       Spacer(minLength: 8)
 
       Button(selectableIDs.isEmpty ? "Done" : "Cancel") { dismiss() }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .keyboardShortcut(.cancelAction)
         .disabled(isSaving)
 
@@ -142,6 +143,7 @@ struct MacResponseImageSaveSheet: View {
         Button(saveButtonTitle) {
           Task { await saveSelection() }
         }
+        .buttonStyle(MacActionButtonStyle(.primary))
         .keyboardShortcut(.defaultAction)
         .disabled(selected.isEmpty)
       }

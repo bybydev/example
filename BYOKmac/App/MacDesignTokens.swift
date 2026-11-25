@@ -154,6 +154,73 @@ struct MacIconMenuLabel: View {
   }
 }
 
+/// Consistent secondary-styled label for borderless text `Menu` triggers so
+/// dropdown buttons match `MacActionButtonStyle(.secondary)` across macOS versions.
+struct MacMenuButtonLabel: View {
+  let title: String
+  var systemImage: String? = nil
+  var size: MacActionButtonStyle.Size = .regular
+  var showsChevron: Bool = true
+  var isAccentIcon: Bool = false
+
+  @State private var isHovered = false
+
+  private var height: CGFloat {
+    switch size {
+    case .regular: MacDesignTokens.Control.actionButtonHeight
+    case .small: MacDesignTokens.Control.actionButtonSmallHeight
+    }
+  }
+
+  private var horizontalPadding: CGFloat {
+    switch size {
+    case .regular: MacDesignTokens.Control.actionHorizontalPadding
+    case .small: MacDesignTokens.Control.actionSmallHorizontalPadding
+    }
+  }
+
+  private var cornerRadius: CGFloat {
+    switch size {
+    case .regular: 8
+    case .small: MacDesignTokens.Radius.small
+    }
+  }
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    HStack(spacing: 5) {
+      if let systemImage {
+        Image(systemName: systemImage)
+          .font(.system(size: size == .regular ? 12 : 11, weight: .medium))
+          .foregroundStyle(
+            isAccentIcon ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
+          )
+      }
+      Text(title)
+        .font(.system(size: size == .regular ? 13 : 12, weight: .medium))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .lineLimit(1)
+      if showsChevron {
+        Image(systemName: "chevron.down")
+          .font(.system(size: 9.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+    }
+    .padding(.horizontal, horizontalPadding)
+    .frame(height: height)
+    .background(Color.primary.opacity(isHovered ? 0.075 : 0.045), in: shape)
+    .overlay {
+      shape.stroke(Color.primary.opacity(isHovered ? 0.18 : 0.12), lineWidth: 0.75)
+    }
+    .contentShape(shape)
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
+  }
+}
+
 struct MacSheetCloseButton: View {
   let accessibilityLabel: String
   let action: () -> Void
@@ -343,10 +410,12 @@ struct MacActionButtonStyle: ButtonStyle {
 
   let variant: Variant
   let size: Size
+  let tint: Color?
 
-  init(_ variant: Variant = .secondary, size: Size = .regular) {
+  init(_ variant: Variant = .secondary, size: Size = .regular, tint: Color? = nil) {
     self.variant = variant
     self.size = size
+    self.tint = tint
   }
 
   func makeBody(configuration: Configuration) -> some View {
@@ -354,7 +423,8 @@ struct MacActionButtonStyle: ButtonStyle {
       label: configuration.label,
       isPressed: configuration.isPressed,
       variant: variant,
-      size: size
+      size: size,
+      tint: tint
     )
   }
 }
@@ -364,6 +434,7 @@ private struct MacActionButtonStyleBody<Label: View>: View {
   let isPressed: Bool
   let variant: MacActionButtonStyle.Variant
   let size: MacActionButtonStyle.Size
+  let tint: Color?
 
   @Environment(\.isEnabled) private var isEnabled
   @State private var isHovered = false
@@ -444,7 +515,7 @@ private struct MacActionButtonStyleBody<Label: View>: View {
   private var background: Color {
     switch variant {
     case .primary:
-      MacDesignTokens.Colors.accent.opacity(activePress ? 0.82 : activeHover ? 0.90 : 1.0)
+      (tint ?? MacDesignTokens.Colors.accent).opacity(activePress ? 0.82 : activeHover ? 0.90 : 1.0)
     case .secondary:
       Color.primary.opacity(activePress ? 0.11 : activeHover ? 0.075 : 0.045)
     case .subtle:
@@ -533,5 +604,97 @@ private struct MacCardButtonStyleBody<Label: View>: View {
       return MacDesignTokens.Colors.accent.opacity(0.35)
     }
     return MacDesignTokens.Colors.separator.opacity(0.75)
+  }
+}
+
+/// Version-independent segmented control so tab and filter bars render identically
+/// across macOS 15 and newer macOS releases.
+struct MacSegmentedControl<Option: Hashable>: View {
+  let options: [Option]
+  @Binding var selection: Option
+  var equalWidth: Bool = true
+  let title: (Option) -> String
+
+  init(
+    options: [Option],
+    selection: Binding<Option>,
+    equalWidth: Bool = true,
+    title: @escaping (Option) -> String
+  ) {
+    self.options = options
+    self._selection = selection
+    self.equalWidth = equalWidth
+    self.title = title
+  }
+
+  var body: some View {
+    HStack(spacing: 4) {
+      ForEach(options, id: \.self) { option in
+        MacSegmentedControlItem(
+          title: title(option),
+          isSelected: selection == option,
+          equalWidth: equalWidth
+        ) {
+          withAnimation(.easeOut(duration: MacDesignTokens.Control.interactionDuration)) {
+            selection = option
+          }
+        }
+      }
+    }
+    .padding(3)
+    .background(
+      Color.primary.opacity(0.05),
+      in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 9, style: .continuous)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.55), lineWidth: 0.5)
+    }
+  }
+}
+
+private struct MacSegmentedControlItem: View {
+  let title: String
+  let isSelected: Bool
+  let equalWidth: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+    Button(action: action) {
+      Text(title)
+        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+        .lineLimit(1)
+        .foregroundStyle(
+          isSelected
+            ? MacDesignTokens.Colors.textPrimary
+            : (isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted)
+        )
+        .padding(.horizontal, equalWidth ? 10 : 12)
+        .frame(maxWidth: equalWidth ? .infinity : nil)
+        .frame(height: 26)
+        .background(background, in: shape)
+        .overlay {
+          if isSelected {
+            shape.stroke(MacDesignTokens.Colors.separator.opacity(0.8), lineWidth: 0.75)
+          }
+        }
+        .contentShape(shape)
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
+  }
+
+  private var background: Color {
+    if isSelected { return MacDesignTokens.Colors.surface }
+    if isHovered { return Color.primary.opacity(0.04) }
+    return .clear
   }
 }

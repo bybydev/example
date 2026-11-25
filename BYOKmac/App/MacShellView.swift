@@ -1260,11 +1260,9 @@ private struct MacSidebarView: View {
         MacProAccess.requestUpgrade(.chatSearch)
       } label: {
         Text("Upgrade to Pro")
-          .font(.system(size: 11.5, weight: .semibold))
           .frame(maxWidth: .infinity)
       }
-      .buttonStyle(.borderedProminent)
-      .controlSize(.small)
+      .buttonStyle(MacActionButtonStyle(.primary, size: .small))
       .disabled(isCheckingEntitlement)
     }
     .padding(10)
@@ -1586,11 +1584,13 @@ struct MacRenameConversationSheet: View {
         .focused($titleFocused)
         .onSubmit { commit() }
 
-      HStack {
+      HStack(spacing: 8) {
         Spacer()
         Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
         Button("Rename") { commit() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
       }

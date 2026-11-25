@@ -164,7 +164,7 @@ struct MacProjectsWorkspaceView: View {
         Text("Projects keep chats, sources, instructions, defaults, prompts, and tools together.")
       } actions: {
         Button("New Project", systemImage: "plus") { beginNewProject() }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(MacActionButtonStyle(.primary))
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
@@ -209,6 +209,7 @@ struct MacProjectsWorkspaceView: View {
       Spacer()
 
       Button("New Project", systemImage: "plus") { beginNewProject() }
+        .buttonStyle(MacActionButtonStyle(.primary))
     }
     .padding(.horizontal, 16)
     .frame(height: 54)
@@ -255,7 +256,7 @@ struct MacProjectsWorkspaceView: View {
         startNewChat(project.id, nil)
         dismiss()
       }
-      .controlSize(.small)
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
 
       Menu {
         Button("Open Project", systemImage: "arrow.right.circle") {
@@ -270,10 +271,10 @@ struct MacProjectsWorkspaceView: View {
           deleteProject = project
         }
       } label: {
-        Image(systemName: "ellipsis")
-          .frame(width: 28, height: 28)
+        MacIconMenuLabel(systemImage: "ellipsis")
       }
       .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
       .fixedSize()
       .help("Project actions")
     }
@@ -360,12 +361,11 @@ private struct MacProjectWorkspaceDetailView: View {
       detailHeader
       Divider()
 
-      Picker("Section", selection: $section) {
-        ForEach(MacProjectWorkspaceSection.allCases) { section in
-          Text(section.rawValue).tag(section)
-        }
-      }
-      .pickerStyle(.segmented)
+      MacSegmentedControl(
+        options: MacProjectWorkspaceSection.allCases,
+        selection: $section,
+        title: \.rawValue
+      )
       .padding(.horizontal, 18)
       .padding(.vertical, 12)
 
@@ -412,9 +412,9 @@ private struct MacProjectWorkspaceDetailView: View {
     HStack(spacing: 12) {
       Button(action: back) {
         Label("All Projects", systemImage: "chevron.left")
+          .foregroundStyle(MacDesignTokens.Colors.accent)
       }
-      .buttonStyle(.plain)
-      .foregroundStyle(MacDesignTokens.Colors.accent)
+      .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
 
       Divider()
         .frame(height: 24)
@@ -435,6 +435,7 @@ private struct MacProjectWorkspaceDetailView: View {
       Button("New Chat", systemImage: "square.and.pencil") {
         startNewChat(nil)
       }
+      .buttonStyle(MacActionButtonStyle(.primary))
 
       Menu {
         Button("Overview", systemImage: "rectangle.grid.1x2") { section = .overview }
@@ -446,10 +447,10 @@ private struct MacProjectWorkspaceDetailView: View {
           requestDelete()
         }
       } label: {
-        Image(systemName: "ellipsis")
-          .frame(width: 28, height: 28)
+        MacIconMenuLabel(systemImage: "ellipsis")
       }
       .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
       .fixedSize()
     }
     .padding(.horizontal, 18)
@@ -501,6 +502,7 @@ private struct MacProjectOverviewView: View {
             }
             Spacer()
             Button("Edit") { editor = .identity }
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           }
         }
 
@@ -521,6 +523,7 @@ private struct MacProjectOverviewView: View {
               }
               Spacer()
               Button("Edit") { editor = .defaults }
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             }
             if accountStatus.isUnavailable || modelStatus.isUnavailable {
               Label(
@@ -549,6 +552,7 @@ private struct MacProjectOverviewView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
               Button("Edit") { editor = .instructions }
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             }
           }
         }
@@ -562,6 +566,7 @@ private struct MacProjectOverviewView: View {
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
           Button("Delete Project…", role: .destructive) { requestDelete() }
+            .buttonStyle(MacActionButtonStyle(.destructive))
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -658,6 +663,7 @@ private struct MacProjectOverviewView: View {
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
             Spacer()
             Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
               .disabled(atPromptLimit)
           }
         } else {
@@ -673,15 +679,17 @@ private struct MacProjectOverviewView: View {
               }
               Spacer()
               Button("Use") { startNewChat(preset.prompt) }
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
               Menu {
                 Button("Edit", systemImage: "pencil") { promptToEdit = preset }
                 Button("Delete", systemImage: "trash", role: .destructive) {
                   deletePromptPreset(preset)
                 }
               } label: {
-                Image(systemName: "ellipsis")
+                MacIconMenuLabel(systemImage: "ellipsis")
               }
               .menuStyle(.borderlessButton)
+              .menuIndicator(.hidden)
               .fixedSize()
             }
             .padding(.vertical, 3)
@@ -695,6 +703,7 @@ private struct MacProjectOverviewView: View {
             }
             Spacer()
             Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
               .disabled(atPromptLimit)
           }
         }
@@ -786,7 +795,7 @@ private struct MacProjectChatsWorkspaceView: View {
           .frame(maxWidth: 340)
         Spacer()
         if !otherConversations.isEmpty {
-          Menu("Add Existing", systemImage: "folder.badge.plus") {
+          Menu {
             ForEach(otherConversations) { conversation in
               Button(conversationTitle(conversation)) {
                 Task { @MainActor in
@@ -796,10 +805,15 @@ private struct MacProjectChatsWorkspaceView: View {
                 }
               }
             }
+          } label: {
+            MacMenuButtonLabel(title: "Add Existing", systemImage: "folder.badge.plus")
           }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
           .fixedSize()
         }
         Button("New Chat", systemImage: "plus") { startNewChat() }
+          .buttonStyle(MacActionButtonStyle(.primary))
       }
       .padding(.horizontal, 16)
       .frame(height: 52)
@@ -818,7 +832,7 @@ private struct MacProjectChatsWorkspaceView: View {
         } actions: {
           if searchText.isEmpty {
             Button("New Chat") { startNewChat() }
-              .buttonStyle(.borderedProminent)
+              .buttonStyle(MacActionButtonStyle(.primary))
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -928,10 +942,10 @@ private struct MacProjectChatsWorkspaceView: View {
       Menu {
         conversationActions(conversation)
       } label: {
-        Image(systemName: "ellipsis")
-          .frame(width: 28, height: 28)
+        MacIconMenuLabel(systemImage: "ellipsis")
       }
       .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
       .fixedSize()
       .help("Chat actions")
     }
@@ -1047,6 +1061,7 @@ private struct MacProjectSourcesWorkspaceView: View {
           .frame(maxWidth: 340)
         Spacer()
         Button("Add Files", systemImage: "doc.badge.plus") { showingImporter = true }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .disabled(
             project.projectFiles.count >= ProjectWorkspaceStore.maxFileCount
               || isWorking
@@ -1065,7 +1080,7 @@ private struct MacProjectSourcesWorkspaceView: View {
           Text("Add reference files that can be attached to chats in this project when needed.")
         } actions: {
           Button("Add Files", systemImage: "plus") { showingImporter = true }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MacActionButtonStyle(.primary))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else if visibleFiles.isEmpty {
@@ -1183,10 +1198,10 @@ private struct MacProjectSourcesWorkspaceView: View {
           remove(file)
         }
       } label: {
-        Image(systemName: "ellipsis")
-          .frame(width: 28, height: 28)
+        MacIconMenuLabel(systemImage: "ellipsis")
       }
       .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
       .fixedSize()
     }
     .padding(.horizontal, 12)
@@ -1217,6 +1232,7 @@ private struct MacProjectSourcesWorkspaceView: View {
         Button("Done") {
           showingPreview = false
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .keyboardShortcut(.cancelAction)
       }
       .padding(.horizontal, 16)
@@ -1399,6 +1415,7 @@ private struct MacProjectToolsWorkspaceView: View {
         }
         Spacer()
         Button("Save Changes") { saveChanges() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .disabled(isSaving || workspace.isBusy)
       }
       .padding(.horizontal, 16)
@@ -1470,7 +1487,7 @@ private struct MacProjectToolsWorkspaceView: View {
         } label: {
           Image(systemName: "plus")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MacIconButtonStyle())
         .help("Save current configuration as preset")
       }
 
@@ -1497,13 +1514,15 @@ private struct MacProjectToolsWorkspaceView: View {
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
                 HStack {
                   Button("Apply") { configuration = preset.configuration }
+                    .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
                   Spacer()
                   Button(role: .destructive) {
                     presets.removeAll { $0.id == preset.id }
                   } label: {
                     Image(systemName: "trash")
+                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
                   }
-                  .buttonStyle(.plain)
+                  .buttonStyle(MacIconButtonStyle())
                   .help("Delete preset")
                 }
               }
@@ -1521,6 +1540,7 @@ private struct MacProjectToolsWorkspaceView: View {
       Button("Save Current as Preset…", systemImage: "plus") {
         showingSavePreset = true
       }
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       .frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(14)
@@ -2274,11 +2294,13 @@ private struct MacProjectChatRenameSheet: View {
         .focused($titleFocused)
         .onSubmit { commit() }
 
-      HStack {
+      HStack(spacing: 8) {
         Spacer()
         Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
         Button("Rename") { commit() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(!canSave)
       }
@@ -2379,13 +2401,15 @@ private struct MacProjectSheetHeader: View {
   let primary: () -> Void
 
   var body: some View {
-    HStack {
+    HStack(spacing: 8) {
       Text(title)
         .font(.headline)
       Spacer()
       Button("Cancel", action: cancel)
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .keyboardShortcut(.cancelAction)
       Button(primaryTitle, action: primary)
+        .buttonStyle(MacActionButtonStyle(.primary))
         .keyboardShortcut(.defaultAction)
         .disabled(!primaryEnabled)
     }

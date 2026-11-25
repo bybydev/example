@@ -931,6 +931,7 @@ struct MacProUpsellSheet: View {
       Button(content.secondaryActionTitle) {
         dismiss()
       }
+      .buttonStyle(MacActionButtonStyle(.secondary))
       .keyboardShortcut(.cancelAction)
 
       Button(content.primaryActionTitle) {
@@ -941,7 +942,7 @@ struct MacProUpsellSheet: View {
           openWindow(id: MacWindowID.proPaywall)
         }
       }
-      .buttonStyle(.borderedProminent)
+      .buttonStyle(MacActionButtonStyle(.primary))
       .keyboardShortcut(.defaultAction)
     }
   }

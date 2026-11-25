@@ -163,14 +163,16 @@ struct MacLibraryAttachmentPickerView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 8) {
         Text("Attach from Library")
           .font(.headline)
         Spacer()
         Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
           .disabled(isLoading)
         Button(totalSelectionCount == 0 ? "Attach" : "Attach (\(totalSelectionCount))") { commit() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(totalSelectionCount == 0 || isLoading)
       }
@@ -179,12 +181,11 @@ struct MacLibraryAttachmentPickerView: View {
       Divider()
 
       VStack(spacing: 8) {
-        Picker("Source", selection: $tab) {
-          ForEach(Tab.allCases) { tab in
-            Text(tab.rawValue).tag(tab)
-          }
-        }
-        .pickerStyle(.segmented)
+        MacSegmentedControl(
+          options: Tab.allCases,
+          selection: $tab,
+          title: \.rawValue
+        )
         .disabled(isLoading)
 
         HStack(spacing: 7) {

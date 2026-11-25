@@ -75,25 +75,30 @@ struct MacStartupView: View {
         Button("Try Again") {
           Task { await model.retryStartup() }
         }
+        .buttonStyle(MacActionButtonStyle(.primary))
         .keyboardShortcut(.defaultAction)
 
         Button("Show Data in Finder") {
           model.revealDataDirectory()
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
 
         Button("Copy Diagnostics") {
           copyDiagnostics(failure.diagnosticText)
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
 
         Button("Start Fresh, Keep Backup") {
           confirmStartFresh = true
         }
+        .buttonStyle(MacActionButtonStyle(.destructive))
       }
 
       if model.lastRecoveryBackupURL != nil {
         Button("Show Recovery Backup", systemImage: "clock.arrow.circlepath") {
           model.revealRecoveryBackup()
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
       }
 
       DisclosureGroup("Technical Details") {

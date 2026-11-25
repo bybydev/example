@@ -283,20 +283,19 @@ struct MacLibraryView: View {
       HStack(spacing: 10) {
         searchField
 
-        Picker("Source", selection: $sourceFilter) {
-          ForEach(MacLibrarySourceFilter.allCases) { filter in
-            Text(filter.compactTitle).tag(filter)
-          }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(width: 300)
+        MacSegmentedControl(
+          options: MacLibrarySourceFilter.allCases,
+          selection: $sourceFilter,
+          title: \.compactTitle
+        )
+        .frame(width: 310)
 
         Spacer(minLength: 8)
 
         Button("Import", systemImage: "plus") {
           showingImporter = true
         }
+        .buttonStyle(MacActionButtonStyle(.primary))
         .disabled(isWorking)
       }
 
@@ -327,14 +326,17 @@ struct MacLibraryView: View {
             }
           }
         } label: {
-          Label(
-            kindFilter == .all ? "Type" : kindFilter.rawValue,
+          MacMenuButtonLabel(
+            title: kindFilter == .all ? "Type" : kindFilter.rawValue,
             systemImage: filtersAreActive
               ? "line.3.horizontal.decrease.circle.fill"
-              : "line.3.horizontal.decrease.circle"
+              : "line.3.horizontal.decrease.circle",
+            size: .small,
+            isAccentIcon: filtersAreActive
           )
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
         .help("Filter by file type")
 
@@ -425,6 +427,7 @@ struct MacLibraryView: View {
         Button("Quick Look", systemImage: "eye") {
           preview(selectedEntry)
         }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .keyboardShortcut(.space, modifiers: [])
         .disabled(previewLoadingID != nil || isWorking)
         .help("Quick Look (Space)")
@@ -433,23 +436,27 @@ struct MacLibraryView: View {
       Button("Export", systemImage: "square.and.arrow.down") {
         export(selectedEntries)
       }
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       .disabled(isWorking)
 
       Button("Share", systemImage: "square.and.arrow.up") {
         share(selectedEntries)
       }
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       .disabled(isWorking)
 
       if let selectedEntry {
         Button("Rename", systemImage: "pencil") {
           renameTarget = selectedEntry
         }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .disabled(isWorking)
       }
 
       Button("Delete", systemImage: "trash", role: .destructive) {
         deleteTargets = selection
       }
+      .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
       .disabled(isWorking)
 
       Button {
@@ -458,7 +465,7 @@ struct MacLibraryView: View {
         Image(systemName: "xmark.circle.fill")
           .foregroundStyle(.secondary)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(MacIconButtonStyle())
       .help("Clear selection")
     }
     .padding(.horizontal, 16)
@@ -494,7 +501,7 @@ struct MacLibraryView: View {
           Button("Clear Search & Filters") {
             clearSearchAndFilters()
           }
-          .buttonStyle(.bordered)
+          .buttonStyle(MacActionButtonStyle(.secondary))
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -751,7 +758,7 @@ struct MacLibraryView: View {
               Button("Open Source Message", systemImage: "bubble.left") {
                 openSourceChat(source.conversationID, source.messageID)
               }
-              .buttonStyle(.bordered)
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             } else {
               Label("Source Chat Deleted", systemImage: "bubble.left.and.exclamationmark.bubble.right")
                 .font(.caption)
@@ -765,6 +772,7 @@ struct MacLibraryView: View {
             Button("Quick Look", systemImage: "eye") {
               preview(entry)
             }
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(previewLoadingID != nil)
 
             Menu {
@@ -782,8 +790,11 @@ struct MacLibraryView: View {
                 deleteTargets = [entry.id]
               }
             } label: {
-              Image(systemName: "ellipsis")
+              MacIconMenuLabel(systemImage: "ellipsis")
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
           }
         }
         .padding(16)
@@ -831,6 +842,7 @@ struct MacLibraryView: View {
         Button("Done") {
           showingPreview = false
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .keyboardShortcut(.cancelAction)
       }
       .padding(.horizontal, 16)
@@ -1424,11 +1436,13 @@ private struct MacLibraryRenameSheet: View {
         Button("Cancel") {
           dismiss()
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .keyboardShortcut(.cancelAction)
 
         Button("Rename") {
           commit()
         }
+        .buttonStyle(MacActionButtonStyle(.primary))
         .keyboardShortcut(.defaultAction)
         .disabled(!validation.canSave || isSaving)
       }

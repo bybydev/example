@@ -165,6 +165,7 @@ struct MacDiagnosticsView: View {
             Button("Open Event Log…", systemImage: "list.bullet.rectangle") {
               showingLogs = true
             }
+            .buttonStyle(MacActionButtonStyle(.secondary))
           }
           .padding(8)
         }
@@ -190,6 +191,7 @@ struct MacDiagnosticsView: View {
               Button("Retry Telemetry", systemImage: "arrow.clockwise") {
                 Task { await diagnostics.retryTelemetry() }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(diagnostics.isBusy)
             }
           }
@@ -228,6 +230,7 @@ struct MacDiagnosticsView: View {
             Button("Run Cleanup", systemImage: "sparkles") {
               Task { await diagnostics.runMaintenance() }
             }
+            .buttonStyle(MacActionButtonStyle(.secondary))
             .disabled(diagnostics.isBusy)
             Text("Cleanup removes oldest telemetry when retention caps are reached. Usage and cost stored in conversations are unaffected.")
               .font(.caption)
@@ -241,11 +244,13 @@ struct MacDiagnosticsView: View {
             Button("Clear Diagnostic Logs", systemImage: "eraser") {
               confirmClearDiagnostics = true
             }
+            .buttonStyle(MacActionButtonStyle(.secondary))
             .disabled(diagnostics.isBusy || diagnostics.statistics.diagnosticEventCount == 0)
 
             Button("Clear All Telemetry", systemImage: "trash", role: .destructive) {
               confirmClearAll = true
             }
+            .buttonStyle(MacActionButtonStyle(.destructive))
             .disabled(
               diagnostics.isBusy
                 || !MacDiagnosticsSupport.canClearAllTelemetry(diagnostics.statistics)
@@ -352,18 +357,22 @@ private struct MacTelemetryLogsView: View {
         Button(activeFilterCount == 0 ? "Filter" : "Filter · \(activeFilterCount)", systemImage: "line.3.horizontal.decrease.circle") {
           showingFilters = true
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
 
         Button("Export", systemImage: "square.and.arrow.up") {
           exportFilteredEvents()
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .disabled(filteredEvents.isEmpty)
 
         Button("Refresh", systemImage: "arrow.clockwise") {
           Task { await diagnostics.load() }
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
 
         Spacer()
         Button("Done") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
       }
       .padding(12)
@@ -467,7 +476,7 @@ private struct MacTelemetryFilterView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 8) {
         Text("Telemetry Filters")
           .font(.headline)
         Spacer()
@@ -475,7 +484,9 @@ private struct MacTelemetryFilterView: View {
           let search = filter.searchText
           filter = TelemetryLogFilter(searchText: search)
         }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         Button("Done") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
       }
       .padding(16)
@@ -607,7 +618,9 @@ private struct MacTelemetryEventDetailView: View {
           Label("Share", systemImage: "square.and.arrow.up")
         }
         Button("Copy JSON") { copyJSON() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
         Button("Done") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
       }
       .padding(16)

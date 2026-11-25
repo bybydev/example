@@ -161,6 +161,7 @@ struct MacMCPServerManagementView: View {
           guard MacProAccess.requireMCPServerCapacity(currentCount: mcp.servers.count) else { return }
           showingAddServer = true
         }
+        .buttonStyle(MacActionButtonStyle(.primary))
       }
       .padding(.horizontal, 18)
       .padding(.vertical, 14)
@@ -283,8 +284,7 @@ struct MacMCPServerManagementView: View {
           deleteServer = server
         }
       } label: {
-        Image(systemName: "ellipsis")
-          .frame(width: 28, height: 24)
+        MacIconMenuLabel(systemImage: "ellipsis")
       }
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
@@ -356,8 +356,13 @@ private struct MacMCPServerDetailView: View {
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 10) {
-        Button("MCP Servers", systemImage: "chevron.left") { dismissDetail() }
-          .buttonStyle(.borderless)
+        Button {
+          dismissDetail()
+        } label: {
+          Label("MCP Servers", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
         Divider().frame(height: 18)
         VStack(alignment: .leading, spacing: 2) {
           Text(server.name).font(.headline)
@@ -384,12 +389,11 @@ private struct MacMCPServerDetailView: View {
 
       Divider()
 
-      Picker("Section", selection: $tab) {
-        ForEach(MacMCPServerDetailTab.allCases) { item in
-          Text(item.rawValue).tag(item)
-        }
-      }
-      .pickerStyle(.segmented)
+      MacSegmentedControl(
+        options: MacMCPServerDetailTab.allCases,
+        selection: $tab,
+        title: \.rawValue
+      )
       .frame(maxWidth: 420)
       .padding(.vertical, 12)
 
@@ -427,6 +431,7 @@ private struct MacMCPServerDetailView: View {
           Button("Refresh Tools", systemImage: "arrow.clockwise") {
             Task { _ = await mcp.refresh(server.id) }
           }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .disabled(mcp.isBusy || !server.isEnabled)
         }
 
@@ -472,6 +477,7 @@ private struct MacMCPServerDetailView: View {
           Button("Edit Connection…", systemImage: "slider.horizontal.3") {
             showingConnectionEditor = true
           }
+          .buttonStyle(MacActionButtonStyle(.secondary))
         }
       }
       .padding(18)
@@ -582,8 +588,10 @@ private struct MacMCPServerDetailView: View {
 
         HStack {
           Button("Delete Server…", role: .destructive) { requestDelete() }
+            .buttonStyle(MacActionButtonStyle(.destructive))
           Spacer()
           Button("Edit Connection…", systemImage: "pencil") { showingConnectionEditor = true }
+            .buttonStyle(MacActionButtonStyle(.secondary))
         }
       }
       .padding(18)
@@ -698,13 +706,15 @@ private struct MacMCPServerConnectionEditorView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 8) {
         Text(server == nil ? "Add MCP Server" : "Edit Connection")
           .font(.headline)
         Spacer()
         Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
         Button(server == nil ? "Add Server" : "Save") { save() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
           .disabled(!canSave)
       }
@@ -920,7 +930,7 @@ struct MacChatToolsView: View {
         Spacer()
 
         if !presets.isEmpty {
-          Menu("Apply Preset") {
+          Menu {
             ForEach(presets) { preset in
               let isApplied = normalizedToolConfiguration(preset.configuration) == activeConfig
               Button {
@@ -933,7 +943,12 @@ struct MacChatToolsView: View {
                 }
               }
             }
+          } label: {
+            MacMenuButtonLabel(title: "Apply Preset")
           }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
+          .fixedSize()
           .disabled(isMutationDisabled)
         }
 
@@ -941,10 +956,12 @@ struct MacChatToolsView: View {
           Button("Reset to Project Defaults") {
             resetToProjectDefaults()
           }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .disabled(isMutationDisabled)
         }
 
         Button("Done") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.cancelAction)
       }
       .padding(16)
@@ -1160,7 +1177,7 @@ private struct MacMCPServerConfigurationList: View {
             Button("Add MCP Server") {
               addServer()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MacActionButtonStyle(.primary))
             .disabled(mcp.isBusy)
           }
         }
@@ -1219,6 +1236,7 @@ private struct MacMCPServerConfigurationList: View {
               Button("Refresh Tools", systemImage: "arrow.clockwise") {
                 Task { _ = await mcp.refresh(server.id) }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
               .disabled(mcp.isBusy)
             }
           } else {
@@ -1476,7 +1494,6 @@ private struct MacMCPApprovalCard: View {
           }
           .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .controlSize(.small)
         .disabled(isResolving)
       }
     }
@@ -1499,18 +1516,17 @@ private struct MacMCPApprovalCard: View {
 
   private var denyButton: some View {
     Button("Deny", role: .destructive) { submit(.deny) }
-      .buttonStyle(.bordered)
+      .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
   }
 
   @ViewBuilder
   private var allowOnceButton: some View {
     if isDestructive {
       Button("Allow Once") { submit(.allowOnce) }
-        .buttonStyle(.borderedProminent)
-        .tint(Color.orange)
+        .buttonStyle(MacActionButtonStyle(.primary, size: .small, tint: Color.orange))
     } else {
       Button("Allow Once") { submit(.allowOnce) }
-        .buttonStyle(.bordered)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
     }
   }
 
@@ -1518,10 +1534,10 @@ private struct MacMCPApprovalCard: View {
   private var alwaysAllowButton: some View {
     if isDestructive {
       Button("Always Allow") { submit(.alwaysAllow) }
-        .buttonStyle(.bordered)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
     } else {
       Button("Always Allow") { submit(.alwaysAllow) }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(MacActionButtonStyle(.primary, size: .small))
     }
   }
 }
@@ -1662,6 +1678,7 @@ private struct MacMCPElicitationCard: View {
   let request: MCPElicitationRequest
   let resolve: (MCPElicitationDecision) -> Void
 
+  @Environment(\.openURL) private var openURL
   @State private var textValues: [String: String]
   @State private var boolValues: [String: Bool]
   @State private var isResolving = false
@@ -1705,10 +1722,12 @@ private struct MacMCPElicitationCard: View {
               .lineLimit(3)
               .truncationMode(.middle)
               .textSelection(.enabled)
-            Link(destination: url) {
+            Button {
+              openURL(url)
+            } label: {
               Label("Open \(url.host ?? url.absoluteString)", systemImage: "arrow.up.right.square")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MacActionButtonStyle(.primary, size: .small))
           }
         }
       }
@@ -1738,7 +1757,6 @@ private struct MacMCPElicitationCard: View {
           }
           .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .controlSize(.small)
         .disabled(isResolving)
       }
     }
@@ -1758,19 +1776,19 @@ private struct MacMCPElicitationCard: View {
 
   private var cancelButton: some View {
     Button("Cancel") { submitDecision(.cancel) }
-      .buttonStyle(.bordered)
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
   }
 
   private var declineButton: some View {
     Button("Decline", role: .destructive) { submitDecision(.decline) }
-      .buttonStyle(.bordered)
+      .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
   }
 
   private var submitButton: some View {
     Button(request.mode == .url ? "Continue" : "Submit") {
       submitDecision(.accept(responseContent()))
     }
-    .buttonStyle(.borderedProminent)
+    .buttonStyle(MacActionButtonStyle(.primary, size: .small))
     .disabled(!canSubmit || isResolving)
   }
 

@@ -207,14 +207,12 @@ struct MacAllChatsView: View {
       searchField
         .frame(maxWidth: 340)
 
-      Picker("Scope", selection: $scope) {
-        ForEach(Scope.allCases) { item in
-          Text(item.rawValue).tag(item)
-        }
-      }
-      .pickerStyle(.segmented)
-      .labelsHidden()
-      .frame(width: 148)
+      MacSegmentedControl(
+        options: Scope.allCases,
+        selection: $scope,
+        title: \.rawValue
+      )
+      .frame(width: 152)
 
       if !workspace.projects.isEmpty {
         Menu {
@@ -247,26 +245,21 @@ struct MacAllChatsView: View {
             }
           }
         } label: {
-          HStack(spacing: 5) {
-            Image(systemName: projectFilter == .all ? "folder" : "line.3.horizontal.decrease.circle.fill")
-              .font(.system(size: 11.5, weight: .medium))
-              .foregroundStyle(
-                projectFilter == .all
-                  ? MacDesignTokens.Colors.textMuted
-                  : MacDesignTokens.Colors.accent
-              )
-            Text(projectFilterLabel)
-              .font(.system(size: 12.5, weight: .medium))
-              .lineLimit(1)
-          }
+          MacMenuButtonLabel(
+            title: projectFilterLabel,
+            systemImage: projectFilter == .all ? "folder" : "line.3.horizontal.decrease.circle.fill",
+            isAccentIcon: projectFilter != .all
+          )
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
       }
 
       Spacer(minLength: 8)
 
       Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+        .buttonStyle(MacActionButtonStyle(.primary))
     }
     .padding(.horizontal, 16)
     .frame(height: 54)
@@ -323,7 +316,7 @@ struct MacAllChatsView: View {
       Text("Your conversations will appear here once you start chatting.")
     } actions: {
       Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(MacActionButtonStyle(.primary))
     }
   }
 
@@ -344,6 +337,7 @@ struct MacAllChatsView: View {
         scope = .all
         projectFilter = .all
       }
+      .buttonStyle(MacActionButtonStyle(.secondary))
     }
   }
 
@@ -471,6 +465,7 @@ struct MacAllChatsView: View {
               scope = .all
               projectFilter = .all
             }
+            .buttonStyle(MacActionButtonStyle(.secondary))
           }
         }
       } else {
@@ -548,8 +543,7 @@ struct MacAllChatsView: View {
       Button("Upgrade to Pro") {
         MacProAccess.requestUpgrade(.chatSearch)
       }
-      .buttonStyle(.borderedProminent)
-      .controlSize(.small)
+      .buttonStyle(MacActionButtonStyle(.primary, size: .small))
       .disabled(isCheckingEntitlement)
     }
     .padding(.horizontal, 16)

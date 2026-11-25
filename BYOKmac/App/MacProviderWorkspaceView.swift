@@ -573,46 +573,11 @@ private struct MacProviderWorkspaceDetailView: View {
 
       Divider()
 
-      HStack(spacing: 4) {
-        ForEach(MacProviderDetailTab.allCases) { value in
-          let isSelected = tab == value
-          Button {
-            withAnimation(.easeOut(duration: MacDesignTokens.Control.interactionDuration)) {
-              tab = value
-            }
-          } label: {
-            Text(value.rawValue)
-              .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
-              .foregroundStyle(
-                isSelected ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
-              )
-              .frame(maxWidth: .infinity)
-              .frame(height: 28)
-              .background(
-                isSelected ? MacDesignTokens.Colors.surface : Color.clear,
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-              )
-              .overlay {
-                if isSelected {
-                  RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(MacDesignTokens.Colors.separator.opacity(0.8), lineWidth: 0.75)
-                }
-              }
-              .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-          }
-          .buttonStyle(.plain)
-          .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        }
-      }
-      .padding(3)
-      .background(
-        Color.primary.opacity(0.05),
-        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+      MacSegmentedControl(
+        options: MacProviderDetailTab.allCases,
+        selection: $tab,
+        title: \.rawValue
       )
-      .overlay {
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.55), lineWidth: 0.5)
-      }
       .padding(.horizontal, 18)
       .padding(.vertical, 12)
 

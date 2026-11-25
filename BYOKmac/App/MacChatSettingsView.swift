@@ -379,6 +379,7 @@ struct MacChatSettingsView: View {
       Spacer()
 
       Button("Cancel") { dismiss() }
+        .buttonStyle(MacActionButtonStyle(.secondary))
         .keyboardShortcut(.cancelAction)
         .disabled(isSaving)
 
@@ -390,6 +391,7 @@ struct MacChatSettingsView: View {
         Button("Save") {
           Task { await save() }
         }
+        .buttonStyle(MacActionButtonStyle(.primary))
         .keyboardShortcut(.defaultAction)
         .disabled(!canSave)
       }
@@ -417,6 +419,7 @@ struct MacChatSettingsView: View {
           Button("Change…") {
             showingTargetPicker = true
           }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(isSaving || isGenerating)
         }
 
@@ -477,7 +480,7 @@ struct MacChatSettingsView: View {
             Button("Reset to Project") {
               systemPrompt = normalizedProjectInstructions
             }
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(isSaving)
           }
 
@@ -487,7 +490,7 @@ struct MacChatSettingsView: View {
             Button("Reset to Default") {
               systemPrompt = normalizedDefaultPrompt
             }
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(isSaving)
           }
 
@@ -497,7 +500,7 @@ struct MacChatSettingsView: View {
             Button("Clear", role: .destructive) {
               systemPrompt = ""
             }
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
             .disabled(isSaving)
           }
         }
@@ -594,7 +597,7 @@ struct MacChatSettingsView: View {
               useCustomTopP = false
               maxOutputTokensText = ""
             }
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(isSaving)
           }
         }
@@ -696,7 +699,7 @@ struct MacChatSettingsView: View {
               openRouterZeroDataRetention = false
               openRouterProviderOrderText = ""
             }
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
             .disabled(isSaving)
           }
         }

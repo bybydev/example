@@ -189,6 +189,58 @@ public actor ConversationStore {
     return values.sorted(by: Self.conversationSort)
   }
 
+  /// Fast read-only corpus snapshot for analytics. Reads and decodes uncached
+  /// shards concurrently off-actor without mutating the LRU cache or running
+  /// per-shard repair/backfill writes.
+  public func analyticsConversations() async -> [ChatConversation] {
+    let entries = sortedIndexEntries()
+    var values: [ChatConversation] = []
+    values.reserveCapacity(entries.count)
+    var uncachedIDs: [ConversationID] = []
+
+    for entry in entries {
+      if let cached = cachedByID[entry.id] {
+        values.append(cached)
+      } else {
+        uncachedIDs.append(entry.id)
+      }
+    }
+
+    if !uncachedIDs.isEmpty {
+      let persistence = self.persistence
+      let maxConcurrency = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount))
+      let decoded = await Task.detached(priority: .userInitiated) {
+        await withTaskGroup(of: ChatConversation?.self, returning: [ChatConversation].self) { group in
+          var iterator = uncachedIDs.makeIterator()
+          var loaded: [ChatConversation] = []
+          loaded.reserveCapacity(uncachedIDs.count)
+
+          func enqueueNext() {
+            guard let nextID = iterator.next() else { return }
+            group.addTask {
+              guard let data = try? await persistence.loadShard(id: nextID.rawValue) else {
+                return nil
+              }
+              return try? ConversationStore.decodeShardData(data, expectedID: nextID.rawValue).conversation
+            }
+          }
+
+          for _ in 0..<min(maxConcurrency, uncachedIDs.count) {
+            enqueueNext()
+          }
+          for await conversation in group {
+            if let conversation { loaded.append(conversation) }
+            enqueueNext()
+          }
+          return loaded
+        }
+      }.value
+      values.append(contentsOf: decoded)
+    }
+
+    return values.sorted(by: Self.conversationSort)
+  }
+
   /// Hydrates exactly one full shard on demand.
   public func conversation(id: ConversationID) async throws -> ChatConversation {
     try await loadConversation(id: id, cache: true)
@@ -1071,6 +1123,13 @@ public actor ConversationStore {
   }
 
   private func decodeShard(_ data: Data, expectedID: String) throws -> DecodedShard {
+    try Self.decodeShardData(data, expectedID: expectedID)
+  }
+
+  private nonisolated static func decodeShardData(
+    _ data: Data,
+    expectedID: String
+  ) throws -> DecodedShard {
     // Fast path: decode versioned ConversationShardRecord in a single JSON pass
     // so large conversation shards are not parsed twice on open.
     do {

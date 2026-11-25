@@ -134,6 +134,7 @@ struct MacUtilitySheetContainer<Content: View>: View {
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
           Spacer()
           Button("Close") { dismiss() }
+            .buttonStyle(MacActionButtonStyle(.secondary))
             .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 16)
@@ -179,7 +180,7 @@ struct MacSidebarUtilityGrid: View {
     } label: {
       tileLabel(title: destination.title, systemImage: destination.systemImage)
     }
-    .buttonStyle(.plain)
+    .buttonStyle(MacCardButtonStyle(cornerRadius: 8))
   }
 
   private var settingsTile: some View {
@@ -188,7 +189,7 @@ struct MacSidebarUtilityGrid: View {
     } label: {
       tileLabel(title: "Settings", systemImage: "gearshape")
     }
-    .buttonStyle(.plain)
+    .buttonStyle(MacCardButtonStyle(cornerRadius: 8))
   }
 
   private func tileLabel(title: String, systemImage: String) -> some View {
@@ -208,10 +209,5 @@ struct MacSidebarUtilityGrid: View {
     }
     .padding(.horizontal, 8)
     .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
-    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
-    .overlay {
-      RoundedRectangle(cornerRadius: 8)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 0.5)
-    }
   }
 }

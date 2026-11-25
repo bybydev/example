@@ -533,8 +533,7 @@ private struct MacContextOmittedBanner: View {
       Spacer(minLength: 8)
 
       Button("Start New Chat", action: startNewChat)
-        .controlSize(.small)
-        .buttonStyle(.bordered)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
 
       Button(action: dismiss) {
         Image(systemName: "xmark")
@@ -589,18 +588,14 @@ private struct MacConfigurationRepairBanner: View {
       HStack(spacing: 8) {
         if issue.prefersProviderRepair {
           Button("Switch Model", action: switchModel)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           Button("Fix Connection", action: openProviders)
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.primary, size: .small))
         } else {
           Button("Open Providers", action: openProviders)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           Button("Switch Model", action: switchModel)
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .buttonStyle(MacActionButtonStyle(.primary, size: .small))
         }
       }
     }
@@ -666,7 +661,9 @@ private struct MacChatPromptsPickerSheet: View {
         }
         Spacer()
         Button("Manage in Projects…", action: openProjects)
+          .buttonStyle(MacActionButtonStyle(.secondary))
         Button("Close") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
           .keyboardShortcut(.cancelAction)
       }
       .padding(16)
@@ -711,7 +708,7 @@ private struct MacChatPromptsPickerSheet: View {
         } actions: {
           if searchText.isEmpty {
             Button("Open Projects", action: openProjects)
-              .buttonStyle(.borderedProminent)
+              .buttonStyle(MacActionButtonStyle(.primary))
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1411,9 +1408,9 @@ private struct MacTranscriptView: View {
 
         HStack(spacing: 10) {
           Button("Switch Model", action: chooseTarget)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MacActionButtonStyle(.primary))
           Button("Open Providers", action: manageProviders)
-            .buttonStyle(.bordered)
+            .buttonStyle(MacActionButtonStyle(.secondary))
         }
       }
       .frame(maxWidth: .infinity)
@@ -1641,12 +1638,9 @@ private struct MacTranscriptView: View {
 
       Button(action: primaryAction) {
         Label(primaryLabel, systemImage: primaryIcon)
-          .font(.system(size: 13.5, weight: .semibold))
-          .padding(.horizontal, 14)
-          .padding(.vertical, 4)
+          .padding(.horizontal, 6)
       }
-      .buttonStyle(.borderedProminent)
-      .controlSize(.large)
+      .buttonStyle(MacActionButtonStyle(.primary))
 
       HStack(alignment: .top, spacing: 12) {
         setupInfoCard(

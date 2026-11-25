@@ -8,17 +8,27 @@ private struct MacAnalyticsOverviewComputation: Sendable {
   let snapshot: UsageAnalyticsSnapshot
   let budgetSnapshot: UsageAnalyticsSnapshot
   let conversationUsageByID: [ConversationID: ConversationUsageBreakdown]
+  let conversationsByID: [String: ChatConversation]
+  let overviewMetrics: [MacAnalyticsMetric]
+  let modelNameIndex: [String: String]
+  let providerDisplayNamesByID: [String: String]
+  let modelDisplayNamesByID: [String: String]
 }
 
 private struct MacAnalyticsConversationComputation: Sendable {
   let snapshot: ConversationUsageAnalyticsSnapshot
   let contextUsage: ConversationContextUsage?
+  let metrics: [MacAnalyticsMetric]
+  let providerDisplayNamesByID: [String: String]
+  let modelDisplayNamesByID: [String: String]
 }
 
 @MainActor
 @Observable
 final class MacAnalyticsModel {
   private(set) var conversations: [ChatConversation] = []
+  private(set) var conversationsByID: [String: ChatConversation] = [:]
+  private(set) var corpusRevision = 0
   private(set) var accounts: [ProviderAccount] = []
   private(set) var modelsByAccount: [ProviderAccountID: [AccountModelRecord]] = [:]
 
@@ -41,6 +51,9 @@ final class MacAnalyticsModel {
     modelBreakdown: []
   )
   private(set) var overviewConversationUsageByID: [ConversationID: ConversationUsageBreakdown] = [:]
+  private(set) var overviewMetrics: [MacAnalyticsMetric] = []
+  private(set) var providerDisplayNamesByID: [String: String] = [:]
+  private(set) var modelDisplayNamesByID: [String: String] = [:]
   private(set) var overviewTelemetryUnavailable = false
   private(set) var isLoading = false
   private(set) var hasLoaded = false
@@ -52,6 +65,9 @@ final class MacAnalyticsModel {
     performance: TelemetryPerformanceAggregate()
   )
   private(set) var selectedConversationContextUsage: ConversationContextUsage?
+  private(set) var selectedConversationMetrics: [MacAnalyticsMetric] = []
+  private(set) var selectedConversationProviderDisplayNames: [String: String] = [:]
+  private(set) var selectedConversationModelDisplayNames: [String: String] = [:]
   private(set) var selectedConversationTelemetryEvents: [TelemetryEvent] = []
   private(set) var selectedConversationIDLoaded: ConversationID?
   private(set) var conversationTelemetryUnavailable = false
@@ -60,6 +76,8 @@ final class MacAnalyticsModel {
 
   @ObservationIgnored private var overviewLoadGeneration = 0
   @ObservationIgnored private var conversationLoadGeneration = 0
+  @ObservationIgnored private var cachedBudgetRange: UsageAnalyticsRange?
+  @ObservationIgnored private var cachedModelNameIndex: [String: String] = [:]
 
   private let services: BYOKCoreServices
 
@@ -71,12 +89,14 @@ final class MacAnalyticsModel {
     range: UsageAnalyticsRange = .today,
     hasPro: Bool = true,
     retry: Bool = false,
+    reloadCorpus: Bool = true,
     reference: Date = .now
   ) async {
     overviewLoadGeneration &+= 1
     let generation = overviewLoadGeneration
     let effectiveRange = range.accessible(hasPro: hasPro)
     let budgetRange = UsageAnalyticsRange.month.accessible(hasPro: hasPro)
+    let shouldReloadCorpus = reloadCorpus || !hasLoaded
 
     isLoading = true
     defer {
@@ -93,22 +113,42 @@ final class MacAnalyticsModel {
     let providerWorkspace = services.providerWorkspace
     let telemetryRecorder = services.telemetryRecorder
 
-    async let conversationsTask = conversationStore.allConversations()
-    async let workspaceSnapshotTask = providerWorkspace.snapshot()
-    async let analyticsLoadTask = telemetryRecorder.loadAnalytics(
-      range: effectiveRange,
-      reference: reference,
-      limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
-    )
+    let loadedConversations: [ChatConversation]
+    let loadedAccounts: [ProviderAccount]
+    let loadedModelsByAccount: [ProviderAccountID: [AccountModelRecord]]
+    let analyticsLoadResult: TelemetryAnalyticsRangeLoadResult
 
-    let loadedConversations = await conversationsTask.sorted { lhs, rhs in
-      if lhs.updatedAt == rhs.updatedAt { return lhs.id.rawValue > rhs.id.rawValue }
-      return lhs.updatedAt > rhs.updatedAt
+    if shouldReloadCorpus {
+      async let conversationsTask = conversationStore.analyticsConversations()
+      async let workspaceSnapshotTask = providerWorkspace.snapshot()
+      async let analyticsLoadTask = telemetryRecorder.loadAnalytics(
+        range: effectiveRange,
+        reference: reference,
+        limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
+      )
+
+      let rawConversations = await conversationsTask
+      let workspaceSnapshot = await workspaceSnapshotTask
+      analyticsLoadResult = await analyticsLoadTask
+
+      guard !Task.isCancelled, generation == overviewLoadGeneration else { return }
+
+      loadedConversations = rawConversations
+      loadedAccounts = workspaceSnapshot.accounts
+      loadedModelsByAccount = Dictionary(grouping: workspaceSnapshot.modelRecords, by: \.accountID)
+    } else {
+      analyticsLoadResult = await telemetryRecorder.loadAnalytics(
+        range: effectiveRange,
+        reference: reference,
+        limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
+      )
+
+      guard !Task.isCancelled, generation == overviewLoadGeneration else { return }
+
+      loadedConversations = conversations
+      loadedAccounts = accounts
+      loadedModelsByAccount = modelsByAccount
     }
-    let workspaceSnapshot = await workspaceSnapshotTask
-    let analyticsLoadResult = await analyticsLoadTask
-
-    guard !Task.isCancelled, generation == overviewLoadGeneration else { return }
 
     let loadedEvents: [TelemetryEvent]
     let loadedRollups: [TelemetryDailyRollup]
@@ -131,6 +171,11 @@ final class MacAnalyticsModel {
       unavailable = true
     }
 
+    let existingBudgetRange = shouldReloadCorpus ? nil : cachedBudgetRange
+    let existingBudgetSnapshot = budgetSnapshot
+    let existingModelNameIndex = shouldReloadCorpus ? nil : cachedModelNameIndex
+    let existingConversationsByID = shouldReloadCorpus ? nil : conversationsByID
+
     let computed = await Task.detached(priority: .userInitiated) {
       let snapshot = UsageAnalytics.snapshot(
         conversations: loadedConversations,
@@ -143,6 +188,8 @@ final class MacAnalyticsModel {
       let budget: UsageAnalyticsSnapshot
       if budgetRange == effectiveRange {
         budget = snapshot
+      } else if existingBudgetRange == budgetRange {
+        budget = existingBudgetSnapshot
       } else {
         budget = UsageAnalytics.snapshot(
           conversations: loadedConversations,
@@ -154,18 +201,50 @@ final class MacAnalyticsModel {
       let usageByID = Dictionary(
         uniqueKeysWithValues: snapshot.conversationBreakdown.map { ($0.id, $0) }
       )
+      let byID = existingConversationsByID ?? Dictionary(
+        loadedConversations.map { ($0.id.rawValue, $0) },
+        uniquingKeysWith: { first, _ in first }
+      )
+      let modelIndex = existingModelNameIndex
+        ?? macBuildModelDisplayNameIndex(modelsByAccount: loadedModelsByAccount)
+
+      var providerNames: [String: String] = [:]
+      providerNames.reserveCapacity(snapshot.providerBreakdown.count)
+      for row in snapshot.providerBreakdown {
+        providerNames[row.id] = macUsageDisplayName(row.id, accounts: loadedAccounts)
+      }
+
+      var modelNames: [String: String] = [:]
+      modelNames.reserveCapacity(snapshot.modelBreakdown.count)
+      for row in snapshot.modelBreakdown {
+        let trimmed = row.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        modelNames[row.id] = modelIndex[trimmed] ?? row.id
+      }
+
+      let metrics = macAnalyticsOverviewMetrics(snapshot: snapshot)
+
       return MacAnalyticsOverviewComputation(
         snapshot: snapshot,
         budgetSnapshot: budget,
-        conversationUsageByID: usageByID
+        conversationUsageByID: usageByID,
+        conversationsByID: byID,
+        overviewMetrics: metrics,
+        modelNameIndex: modelIndex,
+        providerDisplayNamesByID: providerNames,
+        modelDisplayNamesByID: modelNames
       )
     }.value
 
     guard !Task.isCancelled, generation == overviewLoadGeneration else { return }
 
-    conversations = loadedConversations
-    accounts = workspaceSnapshot.accounts
-    modelsByAccount = Dictionary(grouping: workspaceSnapshot.modelRecords, by: \.accountID)
+    if shouldReloadCorpus {
+      conversations = loadedConversations
+      conversationsByID = computed.conversationsByID
+      accounts = loadedAccounts
+      modelsByAccount = loadedModelsByAccount
+      cachedModelNameIndex = computed.modelNameIndex
+      corpusRevision &+= 1
+    }
     telemetryEvents = loadedEvents
     dailyRollups = loadedRollups
     dailyErrorRollups = loadedErrorRollups
@@ -173,7 +252,11 @@ final class MacAnalyticsModel {
     overviewTelemetryUnavailable = unavailable
     overviewSnapshot = computed.snapshot
     budgetSnapshot = computed.budgetSnapshot
+    cachedBudgetRange = budgetRange
     overviewConversationUsageByID = computed.conversationUsageByID
+    overviewMetrics = computed.overviewMetrics
+    providerDisplayNamesByID = computed.providerDisplayNamesByID
+    modelDisplayNamesByID = computed.modelDisplayNamesByID
     loadedRange = effectiveRange
     hasLoaded = true
   }
@@ -221,6 +304,7 @@ final class MacAnalyticsModel {
 
     let accountsSnapshot = accounts
     let modelsSnapshot = modelsByAccount
+    let modelIndexSnapshot = cachedModelNameIndex
 
     let computed = await Task.detached(priority: .userInitiated) {
       let snapshot = UsageAnalytics.conversationSnapshot(
@@ -235,9 +319,31 @@ final class MacAnalyticsModel {
         accounts: accountsSnapshot,
         modelsByAccount: modelsSnapshot
       )
+      let metrics = macAnalyticsConversationMetrics(
+        messageCount: conversation.messages.count,
+        aggregate: snapshot.aggregate
+      )
+
+      var providerNames: [String: String] = [:]
+      providerNames.reserveCapacity(snapshot.providerBreakdown.count)
+      for row in snapshot.providerBreakdown {
+        providerNames[row.id] = macUsageDisplayName(row.id, accounts: accountsSnapshot)
+      }
+
+      var modelNames: [String: String] = [:]
+      modelNames.reserveCapacity(snapshot.modelBreakdown.count)
+      for row in snapshot.modelBreakdown {
+        let trimmed = row.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        modelNames[row.id] = modelIndexSnapshot[trimmed]
+          ?? macUsageModelDisplayName(row.id, modelsByAccount: modelsSnapshot)
+      }
+
       return MacAnalyticsConversationComputation(
         snapshot: snapshot,
-        contextUsage: contextUsage
+        contextUsage: contextUsage,
+        metrics: metrics,
+        providerDisplayNamesByID: providerNames,
+        modelDisplayNamesByID: modelNames
       )
     }.value
 
@@ -247,6 +353,9 @@ final class MacAnalyticsModel {
     conversationTelemetryUnavailable = unavailable
     selectedConversationSnapshot = computed.snapshot
     selectedConversationContextUsage = computed.contextUsage
+    selectedConversationMetrics = computed.metrics
+    selectedConversationProviderDisplayNames = computed.providerDisplayNamesByID
+    selectedConversationModelDisplayNames = computed.modelDisplayNamesByID
     selectedConversationIDLoaded = conversation.id
     hasLoadedConversation = true
   }
@@ -256,6 +365,9 @@ final class MacAnalyticsModel {
     selectedConversationIDLoaded = nil
     selectedConversationTelemetryEvents = []
     selectedConversationContextUsage = nil
+    selectedConversationMetrics = []
+    selectedConversationProviderDisplayNames = [:]
+    selectedConversationModelDisplayNames = [:]
     selectedConversationSnapshot = ConversationUsageAnalyticsSnapshot(
       aggregate: ChatUsageAggregate(),
       performance: TelemetryPerformanceAggregate()
@@ -270,11 +382,32 @@ final class MacAnalyticsModel {
     isClearingTelemetry = true
     defer { isClearingTelemetry = false }
     await services.telemetryRecorder.clearAllTelemetry()
-    await load(range: range, hasPro: hasPro, retry: true)
+    await load(range: range, hasPro: hasPro, retry: true, reloadCorpus: true)
+  }
+
+  func conversation(for id: String?) -> ChatConversation? {
+    guard let id else { return nil }
+    return conversationsByID[id]
   }
 
   func overviewAggregate(for conversationID: ConversationID) -> ChatUsageAggregate {
     overviewConversationUsageByID[conversationID]?.aggregate ?? ChatUsageAggregate()
+  }
+
+  func overviewProviderDisplayName(for id: String) -> String {
+    providerDisplayNamesByID[id] ?? macUsageDisplayName(id, accounts: accounts)
+  }
+
+  func overviewModelDisplayName(for id: String) -> String {
+    modelDisplayNamesByID[id] ?? id
+  }
+
+  func conversationProviderDisplayName(for id: String) -> String {
+    selectedConversationProviderDisplayNames[id] ?? macUsageDisplayName(id, accounts: accounts)
+  }
+
+  func conversationModelDisplayName(for id: String) -> String {
+    selectedConversationModelDisplayNames[id] ?? id
   }
 }
 
@@ -336,9 +469,19 @@ struct MacAnalyticsView: View {
     }
   }
 
+  private static let contentMaxWidth: CGFloat = 960
+  private static let contentPadding: CGFloat = 18
+  private static let detailGridColumns = [
+    GridItem(.flexible(), spacing: 12),
+    GridItem(.flexible(), spacing: 12),
+  ]
+
   private var selectedConversation: ChatConversation? {
-    guard let selectedConversationID else { return nil }
-    return analytics.conversations.first { $0.id.rawValue == selectedConversationID }
+    analytics.conversation(for: selectedConversationID)
+  }
+
+  private var showsRangeSwitchSkeleton: Bool {
+    analytics.hasLoaded && analytics.isLoading && analytics.loadedRange != accessibleRange
   }
 
   private var filteredConversations: [ChatConversation] {
@@ -355,23 +498,44 @@ struct MacAnalyticsView: View {
       workspaceControls
       Divider()
 
-      if analytics.isLoading && !analytics.hasLoaded {
-        loadingView
-      } else if let conversation = selectedConversation {
-        conversationDetail(conversation)
-      } else {
-        switch section {
-        case .overview:
-          overview
-        case .conversations:
-          conversations
+      Group {
+        if !analytics.hasLoaded {
+          initialSkeletonView
+        } else if let conversation = selectedConversation {
+          conversationDetail(conversation)
+        } else {
+          switch section {
+          case .overview:
+            if showsRangeSwitchSkeleton {
+              MacAnalyticsOverviewSkeleton(
+                subtitle: "Loading usage and spend for \(accessibleRange.label.lowercased())…"
+              )
+            } else {
+              overview
+            }
+          case .conversations:
+            conversations
+          }
         }
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .animation(
+        .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+        value: analytics.hasLoaded
+      )
+      .animation(
+        .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+        value: showsRangeSwitchSkeleton
+      )
     }
     .frame(minWidth: 920, minHeight: 620)
     .background(MacDesignTokens.Colors.canvas)
     .task(id: overviewReloadKey) {
-      await analytics.load(range: accessibleRange, hasPro: purchaseManager.hasPro)
+      await analytics.load(
+        range: accessibleRange,
+        hasPro: purchaseManager.hasPro,
+        reloadCorpus: !analytics.hasLoaded
+      )
     }
     .task(id: conversationLoadKey) {
       guard analytics.hasLoaded else { return }
@@ -388,9 +552,9 @@ struct MacAnalyticsView: View {
     .onChange(of: purchaseManager.hasPro) { _, hasPro in
       if !hasPro { range = .today }
     }
-    .onChange(of: analytics.conversations.map(\.id.rawValue)) { _, ids in
+    .onChange(of: analytics.corpusRevision) { _, _ in
       guard analytics.hasLoaded else { return }
-      if let selectedConversationID, !ids.contains(selectedConversationID) {
+      if let selectedConversationID, analytics.conversation(for: selectedConversationID) == nil {
         self.selectedConversationID = nil
       }
     }
@@ -418,44 +582,48 @@ struct MacAnalyticsView: View {
 
   private var workspaceControls: some View {
     HStack(spacing: 12) {
-      if selectedConversation != nil {
+      if selectedConversationID != nil {
         Button {
           selectedConversationID = nil
           section = .conversations
         } label: {
           Label("Conversations", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(MacDesignTokens.Colors.accent)
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
       } else {
-        Picker("Section", selection: $section) {
-          ForEach(MacAnalyticsWorkspaceSection.allCases) { value in
-            Text(value.rawValue).tag(value)
-          }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
+        MacSegmentedControl(
+          options: MacAnalyticsWorkspaceSection.allCases,
+          selection: $section,
+          title: \.rawValue
+        )
         .frame(width: 260)
       }
 
       Spacer()
 
-      if selectedConversation == nil {
+      if selectedConversationID == nil {
         Menu {
           ForEach(UsageAnalyticsRange.allCases) { value in
             rangeMenuButton(for: value)
           }
         } label: {
-          Text(accessibleRange.label)
+          MacMenuButtonLabel(title: accessibleRange.label)
         }
+        .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()
         .accessibilityLabel("Analytics date range, \(accessibleRange.label)")
         .accessibilityHint("Choose the analytics date range.")
       }
 
       Button {
         Task {
-          await analytics.load(range: accessibleRange, hasPro: purchaseManager.hasPro)
+          await analytics.load(
+            range: accessibleRange,
+            hasPro: purchaseManager.hasPro,
+            reloadCorpus: true
+          )
           if let conversation = selectedConversation {
             await analytics.loadConversation(conversation)
           }
@@ -466,6 +634,7 @@ struct MacAnalyticsView: View {
           systemImage: "arrow.clockwise"
         )
       }
+      .buttonStyle(MacActionButtonStyle(.secondary))
       .disabled(analytics.isLoading || analytics.isLoadingConversation || analytics.isClearingTelemetry)
     }
     .padding(.horizontal, 16)
@@ -495,14 +664,17 @@ struct MacAnalyticsView: View {
     .disabled(locked && purchaseManager.entitlementState == .checking)
   }
 
-  private var loadingView: some View {
-    VStack(spacing: 12) {
-      ProgressView()
-      Text("Loading local analytics…")
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+  @ViewBuilder
+  private var initialSkeletonView: some View {
+    if selectedConversationID != nil {
+      MacAnalyticsConversationDetailSkeleton(title: nil, subtitle: nil)
+    } else if section == .conversations {
+      MacAnalyticsConversationsSkeleton()
+    } else {
+      MacAnalyticsOverviewSkeleton(
+        subtitle: "Loading usage and spend for \(accessibleRange.label.lowercased())…"
+      )
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(MacDesignTokens.Colors.canvas)
   }
 
   private var overview: some View {
@@ -518,15 +690,16 @@ struct MacAnalyticsView: View {
         )
 
         MacAnalyticsMetricGrid(
-          metrics: overviewMetrics(snapshot: snapshot)
+          metrics: analytics.overviewMetrics
         )
 
         Label(macUsageHistoryFootnote(aggregate), systemImage: "info.circle")
           .font(.caption)
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
 
         LazyVGrid(
-          columns: [GridItem(.adaptive(minimum: 320, maximum: 520), spacing: 12, alignment: .top)],
+          columns: Self.detailGridColumns,
           alignment: .leading,
           spacing: 12
         ) {
@@ -538,7 +711,8 @@ struct MacAnalyticsView: View {
                 await analytics.load(
                   range: accessibleRange,
                   hasPro: purchaseManager.hasPro,
-                  retry: true
+                  retry: true,
+                  reloadCorpus: false
                 )
               }
             }
@@ -559,7 +733,7 @@ struct MacAnalyticsView: View {
             MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
               MacAnalyticsBreakdownList(
                 rows: snapshot.providerBreakdown,
-                displayName: { macUsageDisplayName($0, accounts: analytics.accounts) }
+                displayName: { analytics.overviewProviderDisplayName(for: $0) }
               )
             }
           }
@@ -568,7 +742,7 @@ struct MacAnalyticsView: View {
             MacAnalyticsSection(title: "Models", symbol: "cpu") {
               MacAnalyticsBreakdownList(
                 rows: snapshot.modelBreakdown,
-                displayName: { macUsageModelDisplayName($0, modelsByAccount: analytics.modelsByAccount) }
+                displayName: { analytics.overviewModelDisplayName(for: $0) }
               )
             }
           }
@@ -577,34 +751,11 @@ struct MacAnalyticsView: View {
           localAnalyticsCard
         }
       }
-      .frame(maxWidth: 980, alignment: .leading)
-      .padding(18)
+      .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
+      .padding(Self.contentPadding)
       .frame(maxWidth: .infinity, alignment: .top)
     }
     .background(MacDesignTokens.Colors.canvas)
-  }
-
-  private func overviewMetrics(snapshot: UsageAnalyticsSnapshot) -> [MacAnalyticsMetric] {
-    let aggregate = snapshot.aggregate
-    return [
-      .init(title: "Spend", value: macUsageAggregateCost(aggregate), symbol: "dollarsign.circle"),
-      .init(title: "Active Chats", value: snapshot.activeConversationCount.formatted(), symbol: "bubble.left.and.bubble.right"),
-      .init(title: "Model Requests", value: aggregate.modelRequestCount.formatted(), symbol: "arrow.up.arrow.down"),
-      .init(title: "Total Tokens", value: macUsageCompactTokens(aggregate.totalTokens), symbol: "sum"),
-      .init(title: "Input", value: macUsageCompactTokens(aggregate.inputTokens), symbol: "arrow.down.left"),
-      .init(title: "Output", value: macUsageCompactTokens(aggregate.outputTokens), symbol: "arrow.up.right"),
-      .init(
-        title: "Cached Input",
-        value: macUsageCachedTokensWithRate(
-          cached: aggregate.cachedInputTokens,
-          input: aggregate.inputTokens
-        ),
-        symbol: "bolt.horizontal.circle"
-      ),
-      .init(title: "Cache Write", value: macUsageCompactTokens(aggregate.cacheWriteTokens), symbol: "square.and.arrow.down"),
-      .init(title: "Reasoning", value: macUsageCompactTokens(aggregate.reasoningTokens), symbol: "brain"),
-      .init(title: "Tool Calls", value: aggregate.toolCallCount.formatted(), symbol: "wrench.and.screwdriver"),
-    ]
   }
 
   private func topChatsCard(_ rows: [ConversationUsageBreakdown]) -> some View {
@@ -612,25 +763,10 @@ struct MacAnalyticsView: View {
     return MacAnalyticsSection(title: "Top Chats", symbol: "bubble.left.and.bubble.right") {
       VStack(spacing: 0) {
         ForEach(topRows) { item in
-          Button {
+          MacAnalyticsTopChatRow(item: item) {
             section = .conversations
             selectedConversationID = item.id.rawValue
-          } label: {
-            HStack(alignment: .top, spacing: 12) {
-              MacAnalyticsBreakdownRowContent(
-                title: item.title,
-                aggregate: item.aggregate,
-                performance: item.performance
-              )
-              Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                .padding(.top, 2)
-            }
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
           }
-          .buttonStyle(.plain)
 
           if item.id != topRows.last?.id {
             Divider()
@@ -680,8 +816,8 @@ struct MacAnalyticsView: View {
           }
         }
       }
-      .frame(maxWidth: 860, alignment: .leading)
-      .padding(18)
+      .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
+      .padding(Self.contentPadding)
       .frame(maxWidth: .infinity, alignment: .top)
     }
     .background(MacDesignTokens.Colors.canvas)
@@ -720,14 +856,8 @@ struct MacAnalyticsView: View {
       }
       .padding(14)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-      .overlay {
-        RoundedRectangle(cornerRadius: 10)
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
-      }
-      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(MacCardButtonStyle(cornerRadius: 10))
   }
 
   private func conversationStat(_ value: String, label: String) -> some View {
@@ -754,117 +884,87 @@ struct MacAnalyticsView: View {
     let title = conversation.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? "New Chat"
       : conversation.title
-    let messageCount = conversation.messages.count
-    let replyCount = snapshot.aggregate.assistantMessageCount
-    let messagesSummary = replyCount > 0
-      ? "\(messageCount.formatted()) (\(replyCount.formatted()) \(replyCount == 1 ? "reply" : "replies"))"
-      : messageCount.formatted()
+    let subtitle = "All-time chat analytics · updated \(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))"
 
-    return ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        analyticsHeading(
-          title: title,
-          subtitle: "All-time chat analytics · updated \(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))"
-        )
+    return Group {
+      if !isCurrentConversationLoaded {
+        MacAnalyticsConversationDetailSkeleton(title: title, subtitle: subtitle)
+      } else {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 16) {
+            analyticsHeading(title: title, subtitle: subtitle)
 
-        if !isCurrentConversationLoaded {
-          HStack(spacing: 10) {
-            ProgressView()
-              .controlSize(.small)
-            Text("Loading conversation analytics…")
+            MacAnalyticsMetricGrid(
+              metrics: analytics.selectedConversationMetrics
+            )
+
+            Label(macUsageHistoryFootnote(snapshot.aggregate), systemImage: "info.circle")
+              .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-          .padding(14)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-          .overlay {
-            RoundedRectangle(cornerRadius: 10)
-              .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
-          }
-        } else {
-          MacAnalyticsMetricGrid(
-            metrics: [
-              .init(title: "Spend", value: macUsageAggregateCost(snapshot.aggregate), symbol: "dollarsign.circle"),
-              .init(title: "Messages", value: messagesSummary, symbol: "text.bubble"),
-              .init(title: "Model Requests", value: snapshot.aggregate.modelRequestCount.formatted(), symbol: "arrow.up.arrow.down"),
-              .init(title: "Total Tokens", value: macUsageCompactTokens(snapshot.aggregate.totalTokens), symbol: "sum"),
-              .init(title: "Input", value: macUsageCompactTokens(snapshot.aggregate.inputTokens), symbol: "arrow.down.left"),
-              .init(title: "Output", value: macUsageCompactTokens(snapshot.aggregate.outputTokens), symbol: "arrow.up.right"),
-              .init(
-                title: "Cached Input",
-                value: macUsageCachedTokensWithRate(
-                  cached: snapshot.aggregate.cachedInputTokens,
-                  input: snapshot.aggregate.inputTokens
-                ),
-                symbol: "bolt.horizontal.circle"
-              ),
-              .init(title: "Cache Write", value: macUsageCompactTokens(snapshot.aggregate.cacheWriteTokens), symbol: "square.and.arrow.down"),
-              .init(title: "Reasoning", value: macUsageCompactTokens(snapshot.aggregate.reasoningTokens), symbol: "brain"),
-              .init(title: "Tool Calls", value: snapshot.aggregate.toolCallCount.formatted(), symbol: "wrench.and.screwdriver"),
-            ]
-          )
+              .fixedSize(horizontal: false, vertical: true)
 
-          Label(macUsageHistoryFootnote(snapshot.aggregate), systemImage: "info.circle")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-
-          if let contextUsage {
-            contextWindowCard(contextUsage)
-          }
-
-          LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 320, maximum: 520), spacing: 12, alignment: .top)],
-            alignment: .leading,
-            spacing: 12
-          ) {
-            if analytics.conversationTelemetryUnavailable {
-              telemetryUnavailableCard(isDisabled: analytics.isLoadingConversation) {
-                Task { await analytics.loadConversation(conversation, retry: true) }
-              }
-            } else if !hasPerformance(snapshot.performance) && snapshot.failureBreakdown.isEmpty {
-              noConversationTelemetryCard(
-                hasSavedReplies: snapshot.aggregate.assistantMessageCount > 0
-              )
-            } else {
-              if snapshot.performance.hasLatencyOrSpeedMetrics {
-                performanceCard(snapshot.performance, singleRequestAware: true)
-              }
-              if snapshot.performance.providerRequestCount > 0 {
-                reliabilityCard(snapshot.performance, includeToolAndMCP: false)
-              }
-              if snapshot.performance.toolCallCount > 0 || snapshot.performance.mcpRequestCount > 0 {
-                toolsAndMCPCard(snapshot.performance)
-              }
-              if !snapshot.failureBreakdown.isEmpty {
-                errorsCard(snapshot.failureBreakdown)
-              }
+            if let contextUsage {
+              contextWindowCard(contextUsage)
             }
 
-            if !snapshot.providerBreakdown.isEmpty {
-              MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
-                MacAnalyticsBreakdownList(
-                  rows: snapshot.providerBreakdown,
-                  displayName: { macUsageDisplayName($0, accounts: analytics.accounts) }
+            LazyVGrid(
+              columns: Self.detailGridColumns,
+              alignment: .leading,
+              spacing: 12
+            ) {
+              if analytics.conversationTelemetryUnavailable {
+                telemetryUnavailableCard(isDisabled: analytics.isLoadingConversation) {
+                  Task { await analytics.loadConversation(conversation, retry: true) }
+                }
+              } else if !hasPerformance(snapshot.performance) && snapshot.failureBreakdown.isEmpty {
+                noConversationTelemetryCard(
+                  hasSavedReplies: snapshot.aggregate.assistantMessageCount > 0
                 )
+              } else {
+                if snapshot.performance.hasLatencyOrSpeedMetrics {
+                  performanceCard(snapshot.performance, singleRequestAware: true)
+                }
+                if snapshot.performance.providerRequestCount > 0 {
+                  reliabilityCard(snapshot.performance, includeToolAndMCP: false)
+                }
+                if snapshot.performance.toolCallCount > 0 || snapshot.performance.mcpRequestCount > 0 {
+                  toolsAndMCPCard(snapshot.performance)
+                }
+                if !snapshot.failureBreakdown.isEmpty {
+                  errorsCard(snapshot.failureBreakdown)
+                }
               }
-            }
 
-            if !snapshot.modelBreakdown.isEmpty {
-              MacAnalyticsSection(title: "Models", symbol: "cpu") {
-                MacAnalyticsBreakdownList(
-                  rows: snapshot.modelBreakdown,
-                  displayName: { macUsageModelDisplayName($0, modelsByAccount: analytics.modelsByAccount) }
-                )
+              if !snapshot.providerBreakdown.isEmpty {
+                MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
+                  MacAnalyticsBreakdownList(
+                    rows: snapshot.providerBreakdown,
+                    displayName: { analytics.conversationProviderDisplayName(for: $0) }
+                  )
+                }
+              }
+
+              if !snapshot.modelBreakdown.isEmpty {
+                MacAnalyticsSection(title: "Models", symbol: "cpu") {
+                  MacAnalyticsBreakdownList(
+                    rows: snapshot.modelBreakdown,
+                    displayName: { analytics.conversationModelDisplayName(for: $0) }
+                  )
+                }
               }
             }
           }
+          .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
+          .padding(Self.contentPadding)
+          .frame(maxWidth: .infinity, alignment: .top)
         }
+        .background(MacDesignTokens.Colors.canvas)
       }
-      .frame(maxWidth: 960, alignment: .leading)
-      .padding(18)
-      .frame(maxWidth: .infinity, alignment: .top)
     }
-    .background(MacDesignTokens.Colors.canvas)
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isCurrentConversationLoaded
+    )
   }
 
   private func contextWindowCard(_ contextUsage: ConversationContextUsage) -> some View {
@@ -915,7 +1015,7 @@ struct MacAnalyticsView: View {
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
         Button("Retry", action: retryAction)
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(MacActionButtonStyle(.primary))
           .disabled(isDisabled)
       }
     }
@@ -1080,26 +1180,39 @@ struct MacAnalyticsView: View {
 
   private func budgetCard(_ aggregate: ChatUsageAggregate) -> some View {
     MacAnalyticsSection(title: "Monthly Budget", symbol: "gauge.with.needle") {
-      VStack(spacing: 10) {
-        HStack {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 8) {
           Text("Budget")
+            .font(.system(size: 13))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
           Spacer()
           Text("$")
+            .font(.system(size: 13))
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
           TextField(
             "0",
             value: $monthlyBudgetUSD,
             format: .number.precision(.fractionLength(0...2))
           )
+          .textFieldStyle(.roundedBorder)
           .multilineTextAlignment(.trailing)
+          .monospacedDigit()
           .frame(width: 100)
         }
 
-        Picker("Warn at", selection: $budgetWarningFraction) {
-          Text("50%").tag(0.5)
-          Text("75%").tag(0.75)
-          Text("80%").tag(0.8)
-          Text("90%").tag(0.9)
+        HStack(spacing: 8) {
+          Text("Warn at")
+            .font(.system(size: 13))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          Spacer()
+          Picker("Warn at", selection: $budgetWarningFraction) {
+            Text("50%").tag(0.5)
+            Text("75%").tag(0.75)
+            Text("80%").tag(0.8)
+            Text("90%").tag(0.9)
+          }
+          .labelsHidden()
+          .frame(width: 100)
         }
 
         if monthlyBudgetUSD > 0 {
@@ -1152,6 +1265,7 @@ struct MacAnalyticsView: View {
           Button("Clear Local Telemetry", role: .destructive) {
             confirmClearTelemetry = true
           }
+          .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
           .disabled(analytics.isLoading || analytics.isClearingTelemetry)
           .padding(.top, 2)
         }
@@ -1202,7 +1316,7 @@ struct MacAnalyticsView: View {
   }
 }
 
-struct MacAnalyticsMetric: Identifiable {
+struct MacAnalyticsMetric: Identifiable, Sendable {
   let title: String
   let value: String
   let symbol: String
@@ -1213,17 +1327,19 @@ struct MacAnalyticsMetric: Identifiable {
 struct MacAnalyticsMetricGrid: View {
   let metrics: [MacAnalyticsMetric]
 
-  private let columns = [
-    GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 10, alignment: .top)
-  ]
+  private static let columns = Array(
+    repeating: GridItem(.flexible(), spacing: 10, alignment: .top),
+    count: 5
+  )
 
   var body: some View {
-    LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+    LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
       ForEach(metrics) { metric in
         VStack(alignment: .leading, spacing: 9) {
-          HStack(spacing: 6) {
+          HStack(spacing: 5) {
             Image(systemName: metric.symbol)
             Text(metric.title.uppercased())
+              .lineLimit(1)
           }
           .font(.caption2.weight(.semibold))
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
@@ -1233,17 +1349,16 @@ struct MacAnalyticsMetricGrid: View {
             .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .monospacedDigit()
             .lineLimit(1)
-            .minimumScaleFactor(0.75)
-            .textSelection(.enabled)
+            .minimumScaleFactor(0.72)
         }
-        .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
         .padding(13)
         .background(
           MacDesignTokens.Colors.surface,
-          in: RoundedRectangle(cornerRadius: 10)
+          in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .overlay {
-          RoundedRectangle(cornerRadius: 10)
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
             .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
         }
         .accessibilityElement(children: .ignore)
@@ -1276,15 +1391,315 @@ struct MacAnalyticsSection<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(
       MacDesignTokens.Colors.surface,
-      in: RoundedRectangle(cornerRadius: 10)
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
     )
     .overlay {
-      RoundedRectangle(cornerRadius: 10)
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
         .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
     }
+  }
+}
+
+private struct MacAnalyticsTopChatRow: View {
+  let item: ConversationUsageBreakdown
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(alignment: .top, spacing: 12) {
+        MacAnalyticsBreakdownRowContent(
+          title: item.title,
+          aggregate: item.aggregate,
+          performance: item.performance
+        )
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(
+            isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
+          .padding(.top, 2)
+      }
+      .padding(.horizontal, 6)
+      .padding(.vertical, 8)
+      .background(
+        Color.primary.opacity(isHovered ? MacDesignTokens.Control.hoverOpacity : 0),
+        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
+  }
+}
+
+// MARK: - Analytics Skeleton Loading Views
+
+private struct MacAnalyticsSkeletonPulse: ViewModifier {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isPulsing = false
+
+  func body(content: Content) -> some View {
+    content
+      .opacity(reduceMotion ? 0.72 : (isPulsing ? 0.88 : 0.48))
+      .onAppear {
+        guard !reduceMotion else { return }
+        withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) {
+          isPulsing = true
+        }
+      }
+  }
+}
+
+private struct MacAnalyticsSkeletonBar: View {
+  let width: CGFloat?
+  let height: CGFloat
+  var opacity: CGFloat = 0.08
+
+  init(width: CGFloat? = nil, height: CGFloat, opacity: CGFloat = 0.08) {
+    self.width = width
+    self.height = height
+    self.opacity = opacity
+  }
+
+  var body: some View {
+    Capsule(style: .continuous)
+      .fill(Color.primary.opacity(opacity))
+      .frame(maxWidth: width ?? .infinity, minHeight: height, maxHeight: height)
+  }
+}
+
+private struct MacAnalyticsMetricGridSkeleton: View {
+  private static let columns = Array(
+    repeating: GridItem(.flexible(), spacing: 10, alignment: .top),
+    count: 5
+  )
+
+  var body: some View {
+    LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 10) {
+      ForEach(0..<10, id: \.self) { index in
+        VStack(alignment: .leading, spacing: 12) {
+          MacAnalyticsSkeletonBar(width: index.isMultiple(of: 2) ? 74 : 90, height: 9, opacity: 0.075)
+          MacAnalyticsSkeletonBar(width: index.isMultiple(of: 3) ? 84 : 64, height: 18, opacity: 0.10)
+        }
+        .frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
+        .padding(13)
+        .background(
+          MacDesignTokens.Colors.surface,
+          in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
+        }
+      }
+    }
+  }
+}
+
+private struct MacAnalyticsSectionSkeleton: View {
+  let rowCount: Int
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      MacAnalyticsSkeletonBar(width: 124, height: 13, opacity: 0.10)
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(0..<rowCount, id: \.self) { index in
+          HStack {
+            MacAnalyticsSkeletonBar(
+              width: index.isMultiple(of: 2) ? 130 : 108,
+              height: 10,
+              opacity: 0.07
+            )
+            Spacer(minLength: 16)
+            MacAnalyticsSkeletonBar(
+              width: index.isMultiple(of: 2) ? 56 : 70,
+              height: 10,
+              opacity: 0.09
+            )
+          }
+        }
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(
+      MacDesignTokens.Colors.surface,
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
+    }
+  }
+}
+
+private struct MacAnalyticsOverviewSkeleton: View {
+  let subtitle: String
+
+  private static let columns = [
+    GridItem(.flexible(), spacing: 12),
+    GridItem(.flexible(), spacing: 12),
+  ]
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Usage")
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          Text(subtitle)
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+
+        VStack(alignment: .leading, spacing: 16) {
+          MacAnalyticsMetricGridSkeleton()
+
+          MacAnalyticsSkeletonBar(width: 520, height: 10, opacity: 0.065)
+
+          LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 12) {
+            MacAnalyticsSectionSkeleton(rowCount: 4)
+            MacAnalyticsSectionSkeleton(rowCount: 4)
+            MacAnalyticsSectionSkeleton(rowCount: 3)
+            MacAnalyticsSectionSkeleton(rowCount: 3)
+          }
+        }
+        .modifier(MacAnalyticsSkeletonPulse())
+      }
+      .frame(maxWidth: 960, alignment: .leading)
+      .padding(18)
+      .frame(maxWidth: .infinity, alignment: .top)
+    }
+    .background(MacDesignTokens.Colors.canvas)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Loading analytics overview")
+  }
+}
+
+private struct MacAnalyticsConversationsSkeleton: View {
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Conversations")
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          Text("Inspect usage, context window fill, and reliability for individual chats.")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(MacDesignTokens.Colors.surface)
+            .overlay {
+              RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
+            }
+            .frame(maxWidth: 420, minHeight: 32, maxHeight: 32)
+
+          MacAnalyticsSkeletonBar(width: 110, height: 10, opacity: 0.07)
+
+          VStack(spacing: 9) {
+            ForEach(0..<5, id: \.self) { index in
+              VStack(alignment: .leading, spacing: 11) {
+                MacAnalyticsSkeletonBar(
+                  width: index.isMultiple(of: 2) ? 240 : 190,
+                  height: 13,
+                  opacity: 0.095
+                )
+                MacAnalyticsSkeletonBar(width: 120, height: 9, opacity: 0.065)
+                HStack(spacing: 16) {
+                  MacAnalyticsSkeletonBar(width: 72, height: 10, opacity: 0.075)
+                  MacAnalyticsSkeletonBar(width: 82, height: 10, opacity: 0.075)
+                  MacAnalyticsSkeletonBar(width: 68, height: 10, opacity: 0.075)
+                }
+              }
+              .padding(14)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .background(
+                MacDesignTokens.Colors.surface,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+              )
+              .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                  .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
+              }
+            }
+          }
+        }
+        .modifier(MacAnalyticsSkeletonPulse())
+      }
+      .frame(maxWidth: 960, alignment: .leading)
+      .padding(18)
+      .frame(maxWidth: .infinity, alignment: .top)
+    }
+    .background(MacDesignTokens.Colors.canvas)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Loading conversations analytics")
+  }
+}
+
+private struct MacAnalyticsConversationDetailSkeleton: View {
+  let title: String?
+  let subtitle: String?
+
+  private static let columns = [
+    GridItem(.flexible(), spacing: 12),
+    GridItem(.flexible(), spacing: 12),
+  ]
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
+        if let title, let subtitle {
+          VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+              .font(.title3.weight(.semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            Text(subtitle)
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+        } else {
+          VStack(alignment: .leading, spacing: 6) {
+            MacAnalyticsSkeletonBar(width: 220, height: 16, opacity: 0.10)
+            MacAnalyticsSkeletonBar(width: 260, height: 10, opacity: 0.07)
+          }
+          .modifier(MacAnalyticsSkeletonPulse())
+        }
+
+        VStack(alignment: .leading, spacing: 16) {
+          MacAnalyticsMetricGridSkeleton()
+
+          MacAnalyticsSkeletonBar(width: 480, height: 10, opacity: 0.065)
+
+          MacAnalyticsSectionSkeleton(rowCount: 2)
+
+          LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 12) {
+            MacAnalyticsSectionSkeleton(rowCount: 4)
+            MacAnalyticsSectionSkeleton(rowCount: 4)
+          }
+        }
+        .modifier(MacAnalyticsSkeletonPulse())
+      }
+      .frame(maxWidth: 960, alignment: .leading)
+      .padding(18)
+      .frame(maxWidth: .infinity, alignment: .top)
+    }
+    .background(MacDesignTokens.Colors.canvas)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Loading conversation analytics")
   }
 }
 
@@ -1424,6 +1839,100 @@ struct MacAnalyticsSearchField: View {
 }
 
 // MARK: - Formatting & Context Window Helpers
+
+nonisolated private func macBuildModelDisplayNameIndex(
+  modelsByAccount: [ProviderAccountID: [AccountModelRecord]]
+) -> [String: String] {
+  var index: [String: String] = [:]
+  for kind in ProviderKind.catalog {
+    for seed in kind.seedModels {
+      let label = seed.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !label.isEmpty, index[seed.id.rawValue] == nil {
+        index[seed.id.rawValue] = label
+      }
+    }
+  }
+
+  let sortedAccountIDs = modelsByAccount.keys.sorted { $0.rawValue < $1.rawValue }
+  var manualFallbacks: [String: String] = [:]
+  var discoveredNames: [String: String] = [:]
+  for accountID in sortedAccountIDs {
+    guard let records = modelsByAccount[accountID] else { continue }
+    for record in records {
+      let label = record.model.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !label.isEmpty else { continue }
+      let rawID = record.model.id.rawValue
+      if !record.isManual {
+        if discoveredNames[rawID] == nil {
+          discoveredNames[rawID] = label
+        }
+      } else if manualFallbacks[rawID] == nil {
+        manualFallbacks[rawID] = label
+      }
+    }
+  }
+  for (id, label) in manualFallbacks {
+    index[id] = label
+  }
+  for (id, label) in discoveredNames {
+    index[id] = label
+  }
+  return index
+}
+
+nonisolated private func macAnalyticsOverviewMetrics(
+  snapshot: UsageAnalyticsSnapshot
+) -> [MacAnalyticsMetric] {
+  let aggregate = snapshot.aggregate
+  return [
+    .init(title: "Spend", value: macUsageAggregateCost(aggregate), symbol: "dollarsign.circle"),
+    .init(title: "Active Chats", value: snapshot.activeConversationCount.formatted(), symbol: "bubble.left.and.bubble.right"),
+    .init(title: "Model Requests", value: aggregate.modelRequestCount.formatted(), symbol: "arrow.up.arrow.down"),
+    .init(title: "Total Tokens", value: macUsageCompactTokens(aggregate.totalTokens), symbol: "sum"),
+    .init(title: "Input", value: macUsageCompactTokens(aggregate.inputTokens), symbol: "arrow.down.left"),
+    .init(title: "Output", value: macUsageCompactTokens(aggregate.outputTokens), symbol: "arrow.up.right"),
+    .init(
+      title: "Cached Input",
+      value: macUsageCachedTokensWithRate(
+        cached: aggregate.cachedInputTokens,
+        input: aggregate.inputTokens
+      ),
+      symbol: "bolt.horizontal.circle"
+    ),
+    .init(title: "Cache Write", value: macUsageCompactTokens(aggregate.cacheWriteTokens), symbol: "square.and.arrow.down"),
+    .init(title: "Reasoning", value: macUsageCompactTokens(aggregate.reasoningTokens), symbol: "brain"),
+    .init(title: "Tool Calls", value: aggregate.toolCallCount.formatted(), symbol: "wrench.and.screwdriver"),
+  ]
+}
+
+nonisolated private func macAnalyticsConversationMetrics(
+  messageCount: Int,
+  aggregate: ChatUsageAggregate
+) -> [MacAnalyticsMetric] {
+  let replyCount = aggregate.assistantMessageCount
+  let messagesSummary = replyCount > 0
+    ? "\(messageCount.formatted()) (\(replyCount.formatted()) \(replyCount == 1 ? "reply" : "replies"))"
+    : messageCount.formatted()
+  return [
+    .init(title: "Spend", value: macUsageAggregateCost(aggregate), symbol: "dollarsign.circle"),
+    .init(title: "Messages", value: messagesSummary, symbol: "text.bubble"),
+    .init(title: "Model Requests", value: aggregate.modelRequestCount.formatted(), symbol: "arrow.up.arrow.down"),
+    .init(title: "Total Tokens", value: macUsageCompactTokens(aggregate.totalTokens), symbol: "sum"),
+    .init(title: "Input", value: macUsageCompactTokens(aggregate.inputTokens), symbol: "arrow.down.left"),
+    .init(title: "Output", value: macUsageCompactTokens(aggregate.outputTokens), symbol: "arrow.up.right"),
+    .init(
+      title: "Cached Input",
+      value: macUsageCachedTokensWithRate(
+        cached: aggregate.cachedInputTokens,
+        input: aggregate.inputTokens
+      ),
+      symbol: "bolt.horizontal.circle"
+    ),
+    .init(title: "Cache Write", value: macUsageCompactTokens(aggregate.cacheWriteTokens), symbol: "square.and.arrow.down"),
+    .init(title: "Reasoning", value: macUsageCompactTokens(aggregate.reasoningTokens), symbol: "brain"),
+    .init(title: "Tool Calls", value: aggregate.toolCallCount.formatted(), symbol: "wrench.and.screwdriver"),
+  ]
+}
 
 nonisolated func macUsageDisplayName(
   _ raw: String,

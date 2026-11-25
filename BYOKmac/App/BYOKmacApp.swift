@@ -319,12 +319,14 @@ private struct MacBYOKOnboardingView: View {
               onboarding.goBack()
             }
           }
+          .buttonStyle(MacActionButtonStyle(.secondary))
         }
 
         if !onboarding.isLastStep {
           Button("Skip") {
             completeOnboarding()
           }
+          .buttonStyle(MacActionButtonStyle(.subtle))
         }
       }
     } message: {
@@ -337,7 +339,7 @@ private struct MacBYOKOnboardingView: View {
       Button(onboarding.isLastStep ? "Get Started" : "Continue") {
         continueFlow()
       }
-      .buttonStyle(.borderedProminent)
+      .buttonStyle(MacActionButtonStyle(.primary))
     }
     .frame(width: 720, height: 590)
     .background(MacDesignTokens.Colors.canvas)

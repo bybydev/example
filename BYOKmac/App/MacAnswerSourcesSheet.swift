@@ -85,6 +85,7 @@ struct MacAnswerSourcesSheet: View {
       }
 
       Button("Done") { dismiss() }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .keyboardShortcut(.cancelAction)
     }
     .padding(.horizontal, 16)

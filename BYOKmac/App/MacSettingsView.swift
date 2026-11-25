@@ -167,6 +167,7 @@ private struct MacGeneralSettingsView: View {
               Button("Clear Prompt", role: .destructive) {
                 confirmClearPrompt = true
               }
+              .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
               .disabled(trimmedPrompt.isEmpty)
             }
           }

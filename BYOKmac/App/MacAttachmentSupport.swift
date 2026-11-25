@@ -639,8 +639,7 @@ struct MacAttachmentPreviewSheet: View {
               .font(.caption.monospacedDigit())
               .frame(minWidth: 42)
           }
-          .buttonStyle(.bordered)
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(abs(zoomScale - Self.minZoom) < 0.01)
           .help("Reset Zoom")
           .accessibilityLabel("Reset zoom")
@@ -661,13 +660,13 @@ struct MacAttachmentPreviewSheet: View {
 
       if let saveToLibrary {
         Button("Save to Library", systemImage: "books.vertical", action: saveToLibrary)
-          .buttonStyle(.bordered)
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       }
 
       Button("Done") {
         dismiss()
       }
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       .keyboardShortcut(.cancelAction)
     }
     .padding(.horizontal, 16)

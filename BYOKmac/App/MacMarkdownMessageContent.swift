@@ -1018,6 +1018,7 @@ struct MacFullScreenTableView: View {
         .accessibilityLabel("Copy Table")
 
         Button("Done") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .keyboardShortcut(.cancelAction)
       }
       .padding(14)
@@ -1490,6 +1491,7 @@ struct MacZoomableImageSheet: View {
         .help("Share image")
 
         Button("Done") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .keyboardShortcut(.cancelAction)
       }
       .padding(14)
@@ -2073,6 +2075,7 @@ private struct MacFullScreenCodeView: View {
         .buttonStyle(MacIconButtonStyle())
         .help("Copy code")
         Button("Done") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .keyboardShortcut(.cancelAction)
       }
       .padding(14)
@@ -3003,7 +3006,7 @@ private struct MacFullScreenMermaidView: View {
               Button("View Mermaid Source") {
                 viewMode = .source
               }
-              .buttonStyle(.borderedProminent)
+              .buttonStyle(MacActionButtonStyle(.primary))
             }
             .padding()
           } else if isRendering {
@@ -3170,6 +3173,7 @@ private struct MacFullScreenMermaidView: View {
       .accessibilityLabel("Share or Copy Diagram")
 
       Button("Done") { dismiss() }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .keyboardShortcut(.cancelAction)
     }
     .padding(14)

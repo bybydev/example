@@ -230,16 +230,19 @@ private struct MacCatalogInspectorTab: View {
               Button("Force Refresh Catalog", systemImage: "arrow.clockwise") {
                 Task { await refreshCatalog(force: true) }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(isWorking || providers == nil || providers?.isRefreshingModelCatalog == true)
 
               Button("Check If Stale (TTL)", systemImage: "clock.arrow.circlepath") {
                 Task { await refreshCatalog(force: false) }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(isWorking || providers == nil || providers?.isRefreshingModelCatalog == true)
 
               Button("Clear Catalog Cache", systemImage: "trash", role: .destructive) {
                 Task { await clearCache() }
               }
+              .buttonStyle(MacActionButtonStyle(.destructive))
               .disabled(
                 isWorking || providers == nil || providers?.isRefreshingModelCatalog == true
                   || (status?.cachedRevision == nil && status?.etag == nil && cachedFileBytes == nil)
@@ -515,21 +518,25 @@ private struct MacFTS5InspectorTab: View {
               Button("Reconcile Index", systemImage: "arrow.triangle.2.circlepath") {
                 Task { await reconcileIndex() }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(isWorking || model.coreServices == nil)
 
               Button("Rebuild Index", systemImage: "arrow.clockwise") {
                 Task { await rebuildIndex() }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(isWorking || model.coreServices == nil)
 
               Button("Clear Index", systemImage: "trash", role: .destructive) {
                 confirmClear = true
               }
+              .buttonStyle(MacActionButtonStyle(.destructive))
               .disabled(isWorking || status?.statistics.databaseExists != true)
 
               Button("Refresh Status", systemImage: "arrow.clockwise.circle") {
                 Task { await reloadStatus() }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(isWorking)
 
               if isWorking {
@@ -565,6 +572,7 @@ private struct MacFTS5InspectorTab: View {
               Button("Run Query", systemImage: "play.fill") {
                 Task { await runTestQuery() }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(
                 isRunningQuery
                   || model.coreServices == nil
@@ -779,7 +787,7 @@ private struct MacSeedDataTab: View {
               Button("Seed Sample Data", systemImage: "tray.and.arrow.down.fill") {
                 Task { await seedSampleData() }
               }
-              .buttonStyle(.borderedProminent)
+              .buttonStyle(MacActionButtonStyle(.primary))
               .disabled(
                 isWorking
                   || model.coreServices == nil
@@ -789,6 +797,7 @@ private struct MacSeedDataTab: View {
               Button("Reload Workspace", systemImage: "arrow.clockwise") {
                 Task { await reloadWorkspace() }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               .disabled(isWorking || model.coreServices == nil)
 
               if isWorking {
@@ -1178,11 +1187,13 @@ private struct MacProviderConsoleTab: View {
                   Button("Test Connection", systemImage: "checkmark.shield") {
                     Task { await runConnectionTest() }
                   }
+                  .buttonStyle(MacActionButtonStyle(.secondary))
                   .disabled(isTesting || selectedAccountID == nil)
 
                   Button("Refresh Models", systemImage: "arrow.clockwise") {
                     Task { await runModelDiscovery() }
                   }
+                  .buttonStyle(MacActionButtonStyle(.secondary))
                   .disabled(isTesting || selectedAccountID == nil || definition.modelsPath == nil)
 
                   if isTesting {
@@ -1220,7 +1231,7 @@ private struct MacProviderConsoleTab: View {
               Button("Stream", systemImage: "paperplane.fill") {
                 startStream()
               }
-              .buttonStyle(.borderedProminent)
+              .buttonStyle(MacActionButtonStyle(.primary))
               .disabled(
                 selectedAccountID == nil
                   || selectedModelID == nil
@@ -1231,6 +1242,7 @@ private struct MacProviderConsoleTab: View {
               Button("Stop", systemImage: "stop.fill", role: .destructive) {
                 stopStream()
               }
+              .buttonStyle(MacActionButtonStyle(.destructive))
               .disabled(streamTask == nil)
             }
 
@@ -1438,6 +1450,7 @@ private struct MacUpsellReplaysTab: View {
                   Label(featureTitle(feature), systemImage: featureSymbol(feature))
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(MacActionButtonStyle(.secondary))
               }
             }
 
@@ -1447,11 +1460,13 @@ private struct MacUpsellReplaysTab: View {
               Button("Open Pro Paywall", systemImage: "crown.fill") {
                 openWindow(id: MacWindowID.proPaywall)
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
 
               Button("Replay Onboarding", systemImage: "rectangle.stack.fill") {
                 onboarding.restart()
                 openWindow(id: BYOKmacWindowID.onboarding)
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
 
               Spacer()
             }
@@ -1466,11 +1481,13 @@ private struct MacUpsellReplaysTab: View {
                 UserDefaults.standard.set(true, forKey: MacPurchaseStore.simulatedModeKey)
                 Task { await purchases.setSimulatedPurchasesEnabled(true) }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
 
               Button("Use StoreKit", systemImage: "bag") {
                 UserDefaults.standard.set(false, forKey: MacPurchaseStore.simulatedModeKey)
                 Task { await purchases.setSimulatedPurchasesEnabled(false) }
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
 
               Button("Reset Simulated Purchases", systemImage: "arrow.counterclockwise", role: .destructive) {
                 UserDefaults.standard.set(true, forKey: MacPurchaseStore.simulatedModeKey)
@@ -1479,6 +1496,7 @@ private struct MacUpsellReplaysTab: View {
                   await purchases.resetSimulatedPurchases()
                 }
               }
+              .buttonStyle(MacActionButtonStyle(.destructive))
               Spacer()
             }
 

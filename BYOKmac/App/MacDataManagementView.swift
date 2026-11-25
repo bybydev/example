@@ -56,13 +56,15 @@ struct MacDataManagementView: View {
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
-            HStack {
+            HStack(spacing: 8) {
               Button("Export Full Backup…", systemImage: "archivebox") {
                 exportBackup()
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               Button("Import Full Backup…", systemImage: "square.and.arrow.down") {
                 chooseImport(kind: .backup)
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
             }
             .disabled(data.isBusy)
           }
@@ -76,13 +78,15 @@ struct MacDataManagementView: View {
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
-            HStack {
+            HStack(spacing: 8) {
               Button("Export Connections…", systemImage: "key.viewfinder") {
                 exportProviderConfiguration()
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               Button("Import Connections…", systemImage: "key.radiowaves.forward") {
                 chooseImport(kind: .providers)
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
             }
             .disabled(data.isBusy)
           }
@@ -100,14 +104,16 @@ struct MacDataManagementView: View {
                 .truncationMode(.middle)
             }
 
-            HStack {
+            HStack(spacing: 8) {
               Button("Show Data in Finder", systemImage: "folder") {
                 app.revealDataDirectory()
               }
+              .buttonStyle(MacActionButtonStyle(.secondary))
               if app.lastRecoveryBackupURL != nil {
                 Button("Show Last Recovery Backup", systemImage: "clock.arrow.circlepath") {
                   app.revealRecoveryBackup()
                 }
+                .buttonStyle(MacActionButtonStyle(.secondary))
               }
             }
 
@@ -124,16 +130,19 @@ struct MacDataManagementView: View {
             Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
               confirmDeleteConversations = true
             }
+            .buttonStyle(MacActionButtonStyle(.destructive))
 
             Button("Delete All Credentials", systemImage: "key.slash", role: .destructive) {
               confirmDeleteCredentials = true
             }
+            .buttonStyle(MacActionButtonStyle(.destructive))
 
             Divider()
 
             Button("Reset All Application Data…", systemImage: "arrow.counterclockwise.circle", role: .destructive) {
               confirmResetApplication = true
             }
+            .buttonStyle(MacActionButtonStyle(.destructive))
 
             Text("Reset moves the workspace to a recovery folder first, then removes provider/MCP credentials and telemetry. Keychain credentials cannot be recovered from the workspace backup.")
               .font(.caption)
@@ -293,7 +302,7 @@ struct MacDataManagementView: View {
           Button("Refresh", systemImage: "arrow.clockwise") {
             Task { await data.refreshStorageUsage() }
           }
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(data.isMeasuringStorage || data.isBusy)
         }
 
@@ -367,11 +376,13 @@ struct MacDataManagementView: View {
           Button("Clear Cached Thumbnails…", systemImage: "photo.on.rectangle.angled") {
             confirmClearThumbnails = true
           }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(data.isBusy || (report?.thumbnailCacheBytes ?? 0) == 0)
 
           Button("Clear Search Index…", systemImage: "magnifyingglass") {
             confirmClearSearchIndex = true
           }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(data.isBusy || (report?.searchIndexBytes ?? 0) == 0)
 
           if quarantinedCount > 0 {
@@ -382,6 +393,7 @@ struct MacDataManagementView: View {
             ) {
               confirmPurgeQuarantined = true
             }
+            .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
             .disabled(data.isBusy)
           }
         }
