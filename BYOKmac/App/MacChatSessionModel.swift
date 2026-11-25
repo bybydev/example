@@ -1523,7 +1523,7 @@ final class MacChatSessionModel {
 struct MacPreparedConversation: Identifiable, Sendable {
   let id: ConversationID?
   let conversation: ChatConversation?
-  let answers: [String: MacPreparedAnswer]
+  let answers: [MacAnswerCacheKey: MacPreparedAnswer]
 
   static var newChat: Self { Self(id: nil, conversation: nil, answers: [:]) }
 }

@@ -2418,10 +2418,15 @@ private struct MacAssistantMessageActions: View {
   @State private var copied = false
   @State private var resolvedAnswer: MacPreparedAnswer?
 
+  private var contentCacheKey: MacAnswerCacheKey {
+    MacAnswerCacheKey(source: message.content)
+  }
+
   private var preparedAnswer: MacPreparedAnswer? {
-    if let resolvedAnswer, resolvedAnswer.source == message.content { return resolvedAnswer }
-    return preparedAnswers[message.content]
-      ?? MacAnswerContentParseCache.shared.cachedAnswer(for: message.content)
+    let key = contentCacheKey
+    if let resolvedAnswer, resolvedAnswer.cacheKey == key { return resolvedAnswer }
+    return preparedAnswers[key]
+      ?? MacAnswerContentParseCache.shared.cachedAnswer(forKey: key)
   }
 
   private var canRetry: Bool {
@@ -2550,16 +2555,17 @@ private struct MacAssistantMessageActions: View {
     // Pulls the leading glyph back over its centered frame's inset so the
     // first icon's visual edge lines up with the message text above.
     .padding(.leading, -7)
-    .task(id: message.content) {
+    .task(id: contentCacheKey) {
       guard isTranscriptActive, showContentActions, !message.content.isEmpty else { return }
       if let cached = preparedAnswer {
         resolvedAnswer = cached
         return
       }
       let source = message.content
+      let key = contentCacheKey
       if let prepared = try? await MacAnswerContentParseCache.shared.answer(for: source),
         !Task.isCancelled,
-        source == message.content
+        key == contentCacheKey
       {
         resolvedAnswer = prepared
       }
@@ -2585,7 +2591,7 @@ private struct MacTranscriptActivityKey: EnvironmentKey {
 }
 
 private struct MacPreparedAnswersKey: EnvironmentKey {
-  static let defaultValue: [String: MacPreparedAnswer] = [:]
+  static let defaultValue: [MacAnswerCacheKey: MacPreparedAnswer] = [:]
 }
 
 extension EnvironmentValues {
@@ -2594,7 +2600,7 @@ extension EnvironmentValues {
     set { self[MacTranscriptActivityKey.self] = newValue }
   }
 
-  var macPreparedAnswers: [String: MacPreparedAnswer] {
+  var macPreparedAnswers: [MacAnswerCacheKey: MacPreparedAnswer] {
     get { self[MacPreparedAnswersKey.self] }
     set { self[MacPreparedAnswersKey.self] = newValue }
   }

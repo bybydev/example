@@ -27,17 +27,18 @@ struct MacScannedResponseImage: Equatable, Sendable {
 }
 
 enum MacResponseImageScanner {
-  private static let markdownImageRegex = try? NSRegularExpression(
-    pattern: #"!\[([^\]]*)\]\(((?:[^\s()]+|\([^\s()]*\))+)[^)]*\)"#
-  )
-
   /// Fast presence check used to decide whether to show "Save Images…" in a
   /// message menu without base64-decoding or hashing inline image payloads.
   static func hasImageCandidates(in content: String) -> Bool {
-    guard !content.isEmpty, content.contains("!["), let regex = markdownImageRegex else {
+    guard !content.isEmpty, content.contains("![") else {
       return false
     }
-    for block in MacAnswerContentParser.parse(content) {
+    return hasImageCandidates(in: MacAnswerContentParser.parse(content))
+  }
+
+  /// Reuses already-parsed answer blocks to avoid parsing large responses twice.
+  static func hasImageCandidates(in blocks: [MacAnswerContentBlock]) -> Bool {
+    for block in blocks {
       let rawMarkdown: String
       switch block {
       case .markdown(let text):
@@ -47,21 +48,25 @@ enum MacResponseImageScanner {
       case .code, .math:
         continue
       }
+      guard rawMarkdown.contains("![") else { continue }
       let markdown = MacAnswerContentParser.stripInlineCodeSpans(from: rawMarkdown)
       guard markdown.contains("![") else { continue }
-      let range = NSRange(markdown.startIndex..., in: markdown)
-      for match in regex.matches(in: markdown, range: range) {
-        guard match.numberOfRanges >= 3,
-          let urlRange = Range(match.range(at: 2), in: markdown)
-        else { continue }
-        let rawURL = String(markdown[urlRange])
-        if let url = URL(string: rawURL), MacAnswerContentParser.isValidBrowsableURL(url) {
-          return true
-        }
+      var found = false
+      forEachMarkdownImage(in: markdown) { _, rawURL in
         if hasValidDataURIHeader(rawURL) {
-          return true
+          found = true
+          return false
         }
+        if rawURL.utf8.count <= 4_096,
+          let url = URL(string: String(rawURL)),
+          MacAnswerContentParser.isValidBrowsableURL(url)
+        {
+          found = true
+          return false
+        }
+        return true
       }
+      if found { return true }
     }
     return false
   }
@@ -71,7 +76,7 @@ enum MacResponseImageScanner {
   /// display math blocks. Results are deduplicated by source location so the
   /// same image linked twice is offered once.
   static func imageCandidates(in content: String) -> [MacResponseImageCandidate] {
-    guard !content.isEmpty, content.contains("!["), let regex = markdownImageRegex else {
+    guard !content.isEmpty, content.contains("![") else {
       return []
     }
 
@@ -88,21 +93,30 @@ enum MacResponseImageScanner {
       case .code, .math:
         continue
       }
+      guard rawMarkdown.contains("![") else { continue }
       let markdown = MacAnswerContentParser.stripInlineCodeSpans(from: rawMarkdown)
       guard markdown.contains("![") else { continue }
-      let range = NSRange(markdown.startIndex..., in: markdown)
-      for match in regex.matches(in: markdown, range: range) {
-        guard
-          match.numberOfRanges >= 3,
-          let altRange = Range(match.range(at: 1), in: markdown),
-          let urlRange = Range(match.range(at: 2), in: markdown)
-        else { continue }
-        let alt = String(markdown[altRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawURL = String(markdown[urlRange])
+      forEachMarkdownImage(in: markdown) { altSlice, urlSlice in
+        let alt = altSlice.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawURL = String(urlSlice)
 
-        guard seen.insert(rawURL).inserted else { continue }
+        guard seen.insert(rawURL).inserted else { return true }
 
-        if let url = URL(string: rawURL), MacAnswerContentParser.isValidBrowsableURL(url) {
+        if hasValidDataURIHeader(urlSlice) {
+          if let decoded = decodeDataURI(rawURL) {
+            let digest = SHA256.hash(data: Data(rawURL.utf8))
+              .prefix(16)
+              .map { String(format: "%02x", $0) }
+              .joined()
+            candidates.append(
+              MacResponseImageCandidate(
+                id: "data::\(digest)",
+                label: alt.isEmpty ? "image-\(candidates.count + 1).\(decoded.extension)" : alt,
+                source: .data(decoded.data, fileExtension: decoded.extension)
+              )
+            )
+          }
+        } else if let url = URL(string: rawURL), MacAnswerContentParser.isValidBrowsableURL(url) {
           let derived = sanitizeFilename(url.lastPathComponent)
           candidates.append(
             MacResponseImageCandidate(
@@ -111,22 +125,69 @@ enum MacResponseImageScanner {
               source: .url(url)
             )
           )
-        } else if let decoded = decodeDataURI(rawURL) {
-          let digest = SHA256.hash(data: Data(rawURL.utf8))
-            .prefix(16)
-            .map { String(format: "%02x", $0) }
-            .joined()
-          candidates.append(
-            MacResponseImageCandidate(
-              id: "data::\(digest)",
-              label: alt.isEmpty ? "image-\(candidates.count + 1).\(decoded.extension)" : alt,
-              source: .data(decoded.data, fileExtension: decoded.extension)
-            )
-          )
         }
+        return true
       }
     }
     return candidates
+  }
+
+  /// Linear-time scanner for `![alt](url ...)` markdown image syntax that avoids
+  /// regex backtracking on multi-megabyte `data:image/...;base64,...` strings.
+  private static func forEachMarkdownImage(
+    in markdown: String,
+    _ visit: (_ alt: Substring, _ url: Substring) -> Bool
+  ) {
+    var cursor = markdown.startIndex
+    while let openRange = markdown.range(of: "![", range: cursor..<markdown.endIndex) {
+      let altStart = openRange.upperBound
+      guard let closeBracket = markdown[altStart...].firstIndex(of: "]") else {
+        break
+      }
+      let afterBracket = markdown.index(after: closeBracket)
+      guard afterBracket < markdown.endIndex, markdown[afterBracket] == "(" else {
+        cursor = afterBracket
+        continue
+      }
+      let urlStart = markdown.index(after: afterBracket)
+      var idx = urlStart
+      var parenDepth = 0
+      var urlEnd: String.Index?
+      var closingParen: String.Index?
+
+      while idx < markdown.endIndex {
+        let ch = markdown[idx]
+        if ch == "(" {
+          parenDepth += 1
+        } else if ch == ")" {
+          if parenDepth == 0 {
+            if urlEnd == nil { urlEnd = idx }
+            closingParen = idx
+            break
+          }
+          parenDepth -= 1
+        } else if ch == "\n" || ch == "\r" {
+          break
+        } else if ch.isWhitespace {
+          if urlEnd == nil {
+            urlEnd = idx
+          }
+        }
+        idx = markdown.index(after: idx)
+      }
+
+      guard let closingParen, let urlEnd, urlEnd > urlStart else {
+        cursor = urlStart
+        continue
+      }
+
+      let alt = markdown[altStart..<closeBracket]
+      let url = markdown[urlStart..<urlEnd]
+      if !visit(alt, url) {
+        return
+      }
+      cursor = markdown.index(after: closingParen)
+    }
   }
 
   /// Fetches bytes for a candidate. Returns nil on failure, empty payload, or
@@ -316,22 +377,28 @@ enum MacResponseImageScanner {
     }
   }
 
-  private static func hasValidDataURIHeader(_ value: String) -> Bool {
-    guard value.lowercased().hasPrefix("data:image/"),
+  private static func hasValidDataURIHeader<S: StringProtocol>(_ value: S) -> Bool {
+    guard value.range(of: "data:image/", options: [.anchored, .caseInsensitive]) != nil,
       let semicolon = value.firstIndex(of: ";")
     else { return false }
     let payload = value[value.index(after: semicolon)...]
-    guard payload.lowercased().hasPrefix("base64,") else { return false }
+    guard payload.range(of: "base64,", options: [.anchored, .caseInsensitive]) != nil else {
+      return false
+    }
     let encoded = payload.dropFirst("base64,".count)
     return !encoded.isEmpty
   }
 
   private static func decodeDataURI(_ value: String) -> (data: Data, extension: String)? {
-    guard value.lowercased().hasPrefix("data:image/") else { return nil }
+    guard value.range(of: "data:image/", options: [.anchored, .caseInsensitive]) != nil else {
+      return nil
+    }
     guard let semicolon = value.firstIndex(of: ";") else { return nil }
     let mimeType = String(value[value.index(value.startIndex, offsetBy: 5)..<semicolon]).lowercased()
-    let payload = String(value[value.index(after: semicolon)...])
-    guard payload.lowercased().hasPrefix("base64,") else { return nil }
+    let payload = value[value.index(after: semicolon)...]
+    guard payload.range(of: "base64,", options: [.anchored, .caseInsensitive]) != nil else {
+      return nil
+    }
     let encoded = String(payload.dropFirst("base64,".count))
     guard !encoded.isEmpty, encoded.count <= (MacMarkdownImageSupport.maxByteCount * 4) / 3 + 4 else {
       return nil

@@ -22,13 +22,18 @@ struct MacMarkdownMessageContent: View {
   @Environment(\.macPreparedAnswers) private var preparedAnswers
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
 
+  private var textCacheKey: MacAnswerCacheKey {
+    MacAnswerCacheKey(source: text)
+  }
+
   private var preparedAnswer: MacPreparedAnswer? {
-    if let completedAnswer, completedAnswer.source == text { return completedAnswer }
-    return preparedAnswers[text] ?? MacAnswerContentParseCache.shared.cachedAnswer(for: text)
+    let key = textCacheKey
+    if let completedAnswer, completedAnswer.cacheKey == key { return completedAnswer }
+    return preparedAnswers[key] ?? MacAnswerContentParseCache.shared.cachedAnswer(forKey: key)
   }
 
   private struct RenderRequest: Equatable {
-    let text: String
+    let cacheKey: MacAnswerCacheKey
     let isStreaming: Bool
     let isActive: Bool
   }
@@ -39,6 +44,7 @@ struct MacMarkdownMessageContent: View {
   )
 
   var body: some View {
+    let cacheKey = textCacheKey
     Group {
       if isStreaming {
         renderedBlocks(parsedStreamingBlocks())
@@ -65,7 +71,7 @@ struct MacMarkdownMessageContent: View {
         return .handled
       }
     )
-    .task(id: RenderRequest(text: text, isStreaming: isStreaming, isActive: isTranscriptActive)) {
+    .task(id: RenderRequest(cacheKey: cacheKey, isStreaming: isStreaming, isActive: isTranscriptActive)) {
       guard !isStreaming, isTranscriptActive else { return }
       if let preparedAnswer {
         completedAnswer = preparedAnswer
@@ -74,7 +80,7 @@ struct MacMarkdownMessageContent: View {
       let source = text
       do {
         let prepared = try await MacAnswerContentParseCache.shared.answer(for: source)
-        guard !Task.isCancelled, source == text else { return }
+        guard !Task.isCancelled, cacheKey == textCacheKey else { return }
         completedAnswer = prepared
       } catch {
         // A recycled or inactive row no longer needs this preparation.
@@ -1085,23 +1091,209 @@ struct MacFullScreenTableView: View {
 
 // MARK: - Inline Response Image Provider
 
-enum MacMarkdownImageSupport {
+/// Limits concurrent chat image fetches and ImageIO decodes so opening a
+/// conversation with dozens of images stays responsive instead of saturating
+/// CPU and memory all at once.
+actor MacImageWorkLimiter {
+  static let shared = MacImageWorkLimiter(
+    maxConcurrent: max(2, min(4, ProcessInfo.processInfo.activeProcessorCount - 1))
+  )
+
+  private let maxConcurrent: Int
+  private var activeCount = 0
+  private var waiters: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
+
+  init(maxConcurrent: Int) {
+    self.maxConcurrent = max(1, maxConcurrent)
+  }
+
+  func run<T: Sendable>(
+    _ operation: @Sendable () async -> T?
+  ) async -> T? {
+    guard await acquirePermit() else { return nil }
+    defer { releasePermit() }
+    guard !Task.isCancelled else { return nil }
+    return await operation()
+  }
+
+  func acquirePermit() async -> Bool {
+    if Task.isCancelled { return false }
+    if activeCount < maxConcurrent {
+      activeCount += 1
+      return true
+    }
+    let waiterID = UUID()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        if Task.isCancelled {
+          continuation.resume(returning: false)
+        } else {
+          waiters.append((id: waiterID, continuation: continuation))
+        }
+      }
+    } onCancel: {
+      Task { await self.cancelWaiter(id: waiterID) }
+    }
+  }
+
+  private func cancelWaiter(id: UUID) {
+    if let index = waiters.firstIndex(where: { $0.id == id }) {
+      let waiter = waiters.remove(at: index)
+      waiter.continuation.resume(returning: false)
+    }
+  }
+
+  func releasePermit() {
+    if !waiters.isEmpty {
+      let next = waiters.removeFirst()
+      next.continuation.resume(returning: true)
+      return
+    }
+    activeCount = max(0, activeCount - 1)
+  }
+}
+
+private struct MacLoadedMarkdownImage: Sendable {
+  let data: Data
+  let filename: String
+  let mimeType: String
+}
+
+private actor MacMarkdownImageLoadCoordinator {
+  static let shared = MacMarkdownImageLoadCoordinator()
+
+  private var inFlight: [String: Task<MacLoadedMarkdownImage?, Never>] = [:]
+
+  func load(
+    key: String,
+    operation: @escaping @Sendable () async -> MacLoadedMarkdownImage?
+  ) async -> MacLoadedMarkdownImage? {
+    if let existing = inFlight[key] {
+      return await existing.value
+    }
+    let task = Task(priority: .utility) {
+      await operation()
+    }
+    inFlight[key] = task
+    let result = await task.value
+    inFlight.removeValue(forKey: key)
+    return result
+  }
+}
+
+private nonisolated enum MacMarkdownImageDiskCache {
+  private static let maxFileCount = 150
+  private static let maxTotalBytes = 64 * 1_024 * 1_024
+  private static let pruneWriteInterval = 32
+  private static let writeCounter = OSAllocatedUnfairLock(initialState: 0)
+
+  private static var directoryURL: URL? {
+    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+      .first?
+      .appendingPathComponent("BYOKchat-MarkdownImages", isDirectory: true)
+  }
+
+  private static func fileURL(for key: String) -> URL? {
+    guard let directory = directoryURL else { return nil }
+    let digest = key.hasPrefix("mdimg::") ? String(key.dropFirst("mdimg::".count)) : key
+    guard !digest.isEmpty,
+      digest.unicodeScalars.allSatisfy({
+        ($0.value >= 48 && $0.value <= 57) || ($0.value >= 97 && $0.value <= 102)
+      })
+    else {
+      return nil
+    }
+    return directory.appendingPathComponent(digest, isDirectory: false)
+  }
+
+  static func read(for key: String) -> Data? {
+    guard let url = fileURL(for: key),
+      let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+      !data.isEmpty
+    else {
+      return nil
+    }
+    return data
+  }
+
+  static func write(_ data: Data, for key: String) {
+    guard !data.isEmpty, data.count <= MacMarkdownImageSupport.maxByteCount,
+      let directory = directoryURL,
+      let url = fileURL(for: key)
+    else {
+      return
+    }
+    let shouldPrune = writeCounter.withLock { count -> Bool in
+      count += 1
+      if count >= pruneWriteInterval {
+        count = 0
+        return true
+      }
+      return false
+    }
+    Task.detached(priority: .background) {
+      let fm = FileManager.default
+      try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+      try? data.write(to: url, options: .atomic)
+      if shouldPrune {
+        prune(in: directory)
+      }
+    }
+  }
+
+  private static func prune(in directory: URL) {
+    let fm = FileManager.default
+    let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+    guard let urls = try? fm.contentsOfDirectory(
+      at: directory,
+      includingPropertiesForKeys: keys,
+      options: [.skipsHiddenFiles]
+    ) else {
+      return
+    }
+    var entries: [(url: URL, date: Date, size: Int)] = []
+    var totalBytes = 0
+    for url in urls {
+      guard let values = try? url.resourceValues(forKeys: Set(keys)),
+        values.isRegularFile == true
+      else { continue }
+      let size = values.fileSize ?? 0
+      totalBytes += size
+      entries.append((url, values.contentModificationDate ?? .distantPast, size))
+    }
+    guard entries.count > maxFileCount || totalBytes > maxTotalBytes else { return }
+    entries.sort { $0.date < $1.date }
+    var remainingCount = entries.count
+    for entry in entries {
+      guard remainingCount > maxFileCount || totalBytes > maxTotalBytes else { break }
+      try? fm.removeItem(at: entry.url)
+      remainingCount -= 1
+      totalBytes -= entry.size
+    }
+  }
+}
+
+nonisolated enum MacMarkdownImageSupport {
   static let maxByteCount = 20 * 1_024 * 1_024
 
   private final class RawByteCache: @unchecked Sendable {
     let storage: NSCache<NSString, NSData> = {
       let cache = NSCache<NSString, NSData>()
-      cache.countLimit = 48
-      cache.totalCostLimit = 24 * 1_024 * 1_024
+      cache.countLimit = 64
+      cache.totalCostLimit = 48 * 1_024 * 1_024
       return cache
     }()
   }
 
   private static let rawByteCache = RawByteCache()
 
+  static func hasDataImagePrefix(_ raw: String) -> Bool {
+    raw.range(of: "data:image/", options: [.anchored, .caseInsensitive]) != nil
+  }
+
   static func isSupportedURL(_ url: URL) -> Bool {
     if MacAnswerContentParser.isValidBrowsableURL(url) { return true }
-    return url.absoluteString.lowercased().hasPrefix("data:image/")
+    return hasDataImagePrefix(url.absoluteString)
   }
 
   static func cacheKey(for url: URL) -> String {
@@ -1136,7 +1328,7 @@ enum MacMarkdownImageSupport {
 
   static func dataURIMetadata(for url: URL) -> (filename: String, mimeType: String)? {
     let raw = url.absoluteString
-    guard raw.lowercased().hasPrefix("data:image/"),
+    guard hasDataImagePrefix(raw),
       let semicolon = raw.firstIndex(of: ";")
     else { return nil }
     let mimeType = String(raw[raw.index(raw.startIndex, offsetBy: 5)..<semicolon]).lowercased()
@@ -1151,7 +1343,9 @@ enum MacMarkdownImageSupport {
       let semicolon = raw.firstIndex(of: ";")
     else { return nil }
     let payload = raw[raw.index(after: semicolon)...]
-    guard payload.lowercased().hasPrefix("base64,") else { return nil }
+    guard payload.range(of: "base64,", options: [.anchored, .caseInsensitive]) != nil else {
+      return nil
+    }
     let encoded = String(payload.dropFirst("base64,".count))
     guard !encoded.isEmpty, encoded.count <= (maxByteCount * 4) / 3 + 4 else { return nil }
     guard let data = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters),
@@ -1191,32 +1385,55 @@ enum MacMarkdownImageSupport {
       return (cached, meta.filename, meta.mimeType)
     }
 
-    if url.absoluteString.lowercased().hasPrefix("data:image/") {
-      let decoded = await Task.detached(priority: .utility) {
-        decodeDataURI(url)
-      }.value
-      guard let decoded else { return nil }
-      rawByteCache.storage.setObject(
-        decoded.data as NSData,
-        forKey: key as NSString,
-        cost: decoded.data.count
-      )
-      return decoded
+    let isDataURI = hasDataImagePrefix(url.absoluteString)
+    let loaded = await MacMarkdownImageLoadCoordinator.shared.load(key: key) {
+      if let cached = cachedRawBytes(for: key) {
+        let meta = metadata(for: url)
+        return MacLoadedMarkdownImage(data: cached, filename: meta.filename, mimeType: meta.mimeType)
+      }
+
+      if isDataURI {
+        guard let decoded = decodeDataURI(url) else { return nil }
+        rawByteCache.storage.setObject(
+          decoded.data as NSData,
+          forKey: key as NSString,
+          cost: decoded.data.count
+        )
+        return MacLoadedMarkdownImage(
+          data: decoded.data,
+          filename: decoded.filename,
+          mimeType: decoded.mimeType
+        )
+      }
+
+      if let diskCached = MacMarkdownImageDiskCache.read(for: key) {
+        rawByteCache.storage.setObject(
+          diskCached as NSData,
+          forKey: key as NSString,
+          cost: diskCached.count
+        )
+        let meta = metadata(for: url)
+        return MacLoadedMarkdownImage(data: diskCached, filename: meta.filename, mimeType: meta.mimeType)
+      }
+
+      guard MacAnswerContentParser.isValidBrowsableURL(url) else { return nil }
+      var request = URLRequest(url: url)
+      request.timeoutInterval = 15
+      guard let (data, response) = try? await URLSession.shared.data(for: request),
+        let http = response as? HTTPURLResponse,
+        (200..<300).contains(http.statusCode),
+        !data.isEmpty,
+        data.count <= maxByteCount
+      else { return nil }
+
+      rawByteCache.storage.setObject(data as NSData, forKey: key as NSString, cost: data.count)
+      MacMarkdownImageDiskCache.write(data, for: key)
+      let meta = metadata(for: url)
+      return MacLoadedMarkdownImage(data: data, filename: meta.filename, mimeType: meta.mimeType)
     }
 
-    guard MacAnswerContentParser.isValidBrowsableURL(url) else { return nil }
-    var request = URLRequest(url: url)
-    request.timeoutInterval = 15
-    guard let (data, response) = try? await URLSession.shared.data(for: request),
-      let http = response as? HTTPURLResponse,
-      (200..<300).contains(http.statusCode),
-      !data.isEmpty,
-      data.count <= maxByteCount
-    else { return nil }
-
-    rawByteCache.storage.setObject(data as NSData, forKey: key as NSString, cost: data.count)
-    let meta = metadata(for: url)
-    return (data, meta.filename, meta.mimeType)
+    guard let loaded else { return nil }
+    return (loaded.data, loaded.filename, loaded.mimeType)
   }
 
   static func decodeCGImage(from data: Data, maxPixelSize: CGFloat?) async -> CGImage? {
@@ -1233,7 +1450,11 @@ enum MacMarkdownImageSupport {
           return thumb
         }
       }
-      return CGImageSourceCreateImageAtIndex(source, 0, nil)
+      return CGImageSourceCreateImageAtIndex(
+        source,
+        0,
+        [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+      )
     }.value
   }
 }
@@ -1244,8 +1465,8 @@ private final class MacDecodedImageCache {
 
   private let storage: NSCache<NSString, NSImage> = {
     let cache = NSCache<NSString, NSImage>()
-    cache.countLimit = 36
-    cache.totalCostLimit = 48 * 1_024 * 1_024
+    cache.countLimit = 96
+    cache.totalCostLimit = 96 * 1_024 * 1_024
     return cache
   }()
 
@@ -1257,6 +1478,39 @@ private final class MacDecodedImageCache {
     let cost = byteCost ?? max(1, Int(image.size.width * image.size.height * 4))
     storage.setObject(image, forKey: key as NSString, cost: max(1, cost))
   }
+}
+
+/// Remembers decoded image dimensions so placeholders keep their final height
+/// when revisiting a conversation or scrolling back after cache eviction.
+@MainActor
+private final class MacImageGeometryCache {
+  static let shared = MacImageGeometryCache()
+
+  private var sizes: [String: CGSize] = [:]
+  private var order: [String] = []
+  private let limit = 512
+
+  func size(forKey key: String) -> CGSize? {
+    sizes[key]
+  }
+
+  func insert(_ size: CGSize, forKey key: String) {
+    guard size.width > 0, size.height > 0 else { return }
+    if sizes[key] == nil {
+      order.append(key)
+      if order.count > limit {
+        sizes.removeValue(forKey: order.removeFirst())
+      }
+    }
+    sizes[key] = size
+  }
+}
+
+private struct MacDecodedResponseBitmap: @unchecked Sendable {
+  let cgImage: CGImage?
+  let pointSize: NSSize
+  let byteCost: Int
+  let fallbackData: Data?
 }
 
 struct MacMarkdownResponseImageProvider: ImageProvider {
@@ -1273,9 +1527,16 @@ private struct MacImageViewerPayload: Identifiable {
 }
 
 struct MacMarkdownResponseImageView: View {
+  private struct LoadTaskKey: Equatable {
+    let cacheKey: String?
+    let isActive: Bool
+  }
+
   let url: URL?
+  private let baseCacheKey: String?
 
   @Environment(\.displayScale) private var displayScale
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @State private var image: NSImage?
   @State private var isFailed = false
   @State private var isOpeningPreview = false
@@ -1283,6 +1544,7 @@ struct MacMarkdownResponseImageView: View {
 
   nonisolated init(url: URL?) {
     self.url = url
+    self.baseCacheKey = url.map(MacMarkdownImageSupport.cacheKey(for:))
   }
 
   private static let maxDisplayHeight: CGFloat = 360
@@ -1295,8 +1557,7 @@ struct MacMarkdownResponseImageView: View {
     "\(baseKey)@\(Int(displayPixelSize.rounded()))"
   }
 
-  private func fittedMaxWidth(for image: NSImage) -> CGFloat? {
-    let size = image.size
+  private func fittedMaxWidth(forSize size: CGSize) -> CGFloat? {
     guard size.width > 0, size.height > 0 else { return nil }
     let aspectRatio = size.width / size.height
     let widthAtMaxHeight = Self.maxDisplayHeight * aspectRatio
@@ -1307,9 +1568,25 @@ struct MacMarkdownResponseImageView: View {
     return min(size.width, widthAtMaxHeight)
   }
 
+  private func fittedMaxWidth(for image: NSImage) -> CGFloat? {
+    fittedMaxWidth(forSize: image.size)
+  }
+
+  private var placeholderDimensions: (maxWidth: CGFloat, height: CGFloat) {
+    guard let baseCacheKey,
+      let knownSize = MacImageGeometryCache.shared.size(forKey: baseCacheKey),
+      let width = fittedMaxWidth(forSize: knownSize),
+      width > 0
+    else {
+      return (320, 180)
+    }
+    let aspectRatio = knownSize.width / knownSize.height
+    let height = min(Self.maxDisplayHeight, max(60, width / aspectRatio))
+    return (width, height)
+  }
+
   var body: some View {
-    let cacheKey = url.map(MacMarkdownImageSupport.cacheKey(for:))
-    let resolvedImage = image ?? cacheKey.flatMap {
+    let resolvedImage = image ?? baseCacheKey.flatMap {
       MacDecodedImageCache.shared.image(forKey: decodedCacheKey(for: $0))
     }
 
@@ -1349,10 +1626,11 @@ struct MacMarkdownResponseImageView: View {
             .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 0.85)
         }
       } else {
+        let placeholder = placeholderDimensions
         RoundedRectangle(cornerRadius: 10, style: .continuous)
           .fill(MacDesignTokens.Colors.surface)
-          .frame(maxWidth: 320)
-          .frame(height: 180)
+          .frame(maxWidth: placeholder.maxWidth)
+          .frame(height: placeholder.height)
           .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
               .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 0.85)
@@ -1368,8 +1646,16 @@ struct MacMarkdownResponseImageView: View {
           }
       }
     }
-    .task(id: url) {
+    .task(id: LoadTaskKey(cacheKey: baseCacheKey, isActive: isTranscriptActive)) {
+      guard isTranscriptActive else { return }
       await loadImage()
+    }
+    .onChange(of: isTranscriptActive) { _, active in
+      // Release strong @State bitmap reference while hidden so NSCache can
+      // evict under memory pressure; active switch-back hits cache synchronously.
+      if !active {
+        image = nil
+      }
     }
     .sheet(item: $preview) { item in
       MacZoomableImageSheet(
@@ -1381,12 +1667,13 @@ struct MacMarkdownResponseImageView: View {
   }
 
   private func loadImage() async {
-    guard let url, MacMarkdownImageSupport.isSupportedURL(url) else {
+    guard let url, let baseCacheKey, MacMarkdownImageSupport.isSupportedURL(url) else {
       isFailed = true
       return
     }
-    let key = decodedCacheKey(for: MacMarkdownImageSupport.cacheKey(for: url))
+    let key = decodedCacheKey(for: baseCacheKey)
     if let cached = MacDecodedImageCache.shared.image(forKey: key) {
+      MacImageGeometryCache.shared.insert(cached.size, forKey: baseCacheKey)
       image = cached
       isFailed = false
       return
@@ -1394,32 +1681,53 @@ struct MacMarkdownResponseImageView: View {
     image = nil
     isFailed = false
 
-    guard let loaded = await MacMarkdownImageSupport.loadBytes(for: url) else {
-      if !Task.isCancelled { isFailed = true }
+    let targetPixelSize = displayPixelSize
+    let decodedBitmap = await MacImageWorkLimiter.shared.run { () async -> MacDecodedResponseBitmap? in
+      guard let loaded = await MacMarkdownImageSupport.loadBytes(for: url) else {
+        return nil
+      }
+      guard !Task.isCancelled else { return nil }
+      if let cgImage = await MacMarkdownImageSupport.decodeCGImage(
+        from: loaded.data,
+        maxPixelSize: targetPixelSize
+      ) {
+        return MacDecodedResponseBitmap(
+          cgImage: cgImage,
+          pointSize: NSSize(width: cgImage.width, height: cgImage.height),
+          byteCost: cgImage.bytesPerRow * cgImage.height,
+          fallbackData: nil
+        )
+      }
+      return MacDecodedResponseBitmap(
+        cgImage: nil,
+        pointSize: .zero,
+        byteCost: loaded.data.count,
+        fallbackData: loaded.data
+      )
+    }
+
+    guard !Task.isCancelled else { return }
+    guard let decodedBitmap else {
+      isFailed = true
       return
     }
-    guard !Task.isCancelled else { return }
 
-    if let cgImage = await MacMarkdownImageSupport.decodeCGImage(
-      from: loaded.data,
-      maxPixelSize: displayPixelSize
-    ) {
-      guard !Task.isCancelled else { return }
-      let decoded = NSImage(
-        cgImage: cgImage,
-        size: NSSize(width: cgImage.width, height: cgImage.height)
-      )
+    if let cgImage = decodedBitmap.cgImage {
+      let decoded = NSImage(cgImage: cgImage, size: decodedBitmap.pointSize)
       MacDecodedImageCache.shared.insert(
         decoded,
         forKey: key,
-        byteCost: cgImage.bytesPerRow * cgImage.height
+        byteCost: decodedBitmap.byteCost
       )
+      MacImageGeometryCache.shared.insert(decoded.size, forKey: baseCacheKey)
       image = decoded
-    } else if let direct = NSImage(data: loaded.data) {
-      guard !Task.isCancelled else { return }
+    } else if let fallbackData = decodedBitmap.fallbackData,
+      let direct = NSImage(data: fallbackData)
+    {
       MacDecodedImageCache.shared.insert(direct, forKey: key)
+      MacImageGeometryCache.shared.insert(direct.size, forKey: baseCacheKey)
       image = direct
-    } else if !Task.isCancelled {
+    } else {
       isFailed = true
     }
   }

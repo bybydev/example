@@ -204,19 +204,31 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     guard Self.isValidID(id), maxPixelSize > 0 else { return nil }
     let clamped = Int(maxPixelSize.rounded(.up))
     let derivedURL = derivedURL(for: id, maxPixelSize: clamped)
-    if let cached = try? Data(contentsOf: derivedURL, options: .mappedIfSafe), !cached.isEmpty {
-      return cached
-    }
-    guard let original = try await loadData(id), !original.isEmpty else { return nil }
-    // Run CPU-heavy ImageIO downsampling and encoding off the actor so multiple
-    // thumbnails can generate concurrently without serializing behind one slow photo.
-    let thumbnail = await Task.detached(priority: .utility) {
-      Self.downsampledThumbnail(from: original, maxPixelSize: CGFloat(clamped))
+    let originalURL = url(for: id)
+
+    // Run both derived cache reads and ImageIO downsampling off the actor so
+    // concurrent thumbnail tiles never serialize behind one disk read or slow photo.
+    let result = await Task.detached(priority: .utility) { () -> (data: Data, shouldPersist: Bool)? in
+      if let cached = try? Data(contentsOf: derivedURL, options: .mappedIfSafe), !cached.isEmpty {
+        return (cached, false)
+      }
+      guard let original = try? Data(contentsOf: originalURL, options: .mappedIfSafe),
+        !original.isEmpty
+      else {
+        return nil
+      }
+      guard let thumbnail = Self.downsampledThumbnail(from: original, maxPixelSize: CGFloat(clamped)) else {
+        return nil
+      }
+      return (thumbnail, true)
     }.value
-    guard let thumbnail else { return nil }
-    try? ensureDerivedDirectory()
-    try? thumbnail.write(to: derivedURL, options: .atomic)
-    return thumbnail
+
+    guard let result else { return nil }
+    if result.shouldPersist {
+      try? ensureDerivedDirectory()
+      try? result.data.write(to: derivedURL, options: .atomic)
+    }
+    return result.data
   }
 
   public func deleteIDs(_ ids: Set<String>) async throws {

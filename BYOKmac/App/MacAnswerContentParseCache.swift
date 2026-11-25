@@ -1,6 +1,37 @@
+import CryptoKit
 import Foundation
 import MarkdownUI
 import os
+
+/// Compact cache key that avoids hashing or comparing multi-megabyte strings
+/// (such as inline `data:image/...;base64,...` responses) on the main thread.
+nonisolated struct MacAnswerCacheKey: Hashable, Sendable {
+  private enum Backing: Hashable, Sendable {
+    case exact(String)
+    case sampled(utf8Count: Int, digest: Data)
+  }
+
+  private let backing: Backing
+
+  init(source: String) {
+    let utf8 = source.utf8
+    let count = utf8.count
+    if count <= 2_048 {
+      backing = .exact(source)
+    } else {
+      var sample = Data()
+      sample.reserveCapacity(800)
+      sample.append(contentsOf: "\(count):".utf8)
+      sample.append(contentsOf: utf8.prefix(256))
+      let midStart = utf8.index(utf8.startIndex, offsetBy: max(0, (count / 2) - 128))
+      let midEnd = utf8.index(midStart, offsetBy: min(256, count - (count / 2) + 128))
+      sample.append(contentsOf: utf8[midStart..<midEnd])
+      sample.append(contentsOf: utf8.suffix(256))
+      let digest = Data(SHA256.hash(data: sample).prefix(16))
+      backing = .sampled(utf8Count: count, digest: digest)
+    }
+  }
+}
 
 /// MarkdownUI's parsed tree consists of immutable value types, but its public
 /// MarkdownContent type predates Sendable. This wrapper publishes only immutable
@@ -13,6 +44,7 @@ final class MacPreparedAnswer: @unchecked Sendable {
     let columnAlignments: [MacTableColumnAlignment]
   }
 
+  let cacheKey: MacAnswerCacheKey
   let source: String
   let blocks: [MacAnswerContentBlock]
   let markdown: [String: MarkdownContent]
@@ -22,6 +54,7 @@ final class MacPreparedAnswer: @unchecked Sendable {
   let hasSavableImages: Bool
 
   init(source: String) {
+    self.cacheKey = MacAnswerCacheKey(source: source)
     self.source = source
     let blocks = MacAnswerContentParser.parse(source)
     self.blocks = blocks
@@ -69,7 +102,7 @@ final class MacPreparedAnswer: @unchecked Sendable {
     self.markdownSegments = markdownSegments
     self.inlineMathSources = inlineMathSources
     self.sources = MacAnswerContentParser.sources(in: blocks)
-    self.hasSavableImages = MacResponseImageScanner.hasImageCandidates(in: source)
+    self.hasSavableImages = MacResponseImageScanner.hasImageCandidates(in: blocks)
   }
 
   static func shouldUseInlineMathRenderer(_ markdown: String) -> Bool {
@@ -82,8 +115,8 @@ final class MacPreparedAnswer: @unchecked Sendable {
 /// their first frame. The lock protects bookkeeping only, never parsing or UI work.
 private final class MacPreparedAnswerStorage: @unchecked Sendable {
   private let lock = NSLock()
-  private var values: [String: MacPreparedAnswer] = [:]
-  private var order: [String] = []
+  private var values: [MacAnswerCacheKey: MacPreparedAnswer] = [:]
+  private var order: [MacAnswerCacheKey] = []
   private var sourceBytes = 0
   private let limit: Int
   private let byteLimit: Int
@@ -94,11 +127,15 @@ private final class MacPreparedAnswerStorage: @unchecked Sendable {
   }
 
   func value(for source: String) -> MacPreparedAnswer? {
+    value(forKey: MacAnswerCacheKey(source: source))
+  }
+
+  func value(forKey key: MacAnswerCacheKey) -> MacPreparedAnswer? {
     lock.lock()
     defer { lock.unlock() }
-    guard let value = values[source] else { return nil }
-    order.removeAll { $0 == source }
-    order.append(source)
+    guard let value = values[key] else { return nil }
+    order.removeAll { $0 == key }
+    order.append(key)
     return value
   }
 
@@ -107,14 +144,19 @@ private final class MacPreparedAnswerStorage: @unchecked Sendable {
     defer { lock.unlock() }
     let cost = value.source.utf8.count
     guard cost <= byteLimit else { return }
-    if values[value.source] == nil { sourceBytes += cost }
-    values[value.source] = value
-    order.removeAll { $0 == value.source }
-    order.append(value.source)
+    let key = value.cacheKey
+    if let existing = values[key] {
+      sourceBytes -= existing.source.utf8.count
+    }
+    sourceBytes += cost
+    values[key] = value
+    order.removeAll { $0 == key }
+    order.append(key)
     while order.count > limit || sourceBytes > byteLimit {
-      let source = order.removeFirst()
-      sourceBytes -= source.utf8.count
-      values.removeValue(forKey: source)
+      let evictedKey = order.removeFirst()
+      if let evicted = values.removeValue(forKey: evictedKey) {
+        sourceBytes -= evicted.source.utf8.count
+      }
     }
   }
 }
@@ -126,12 +168,16 @@ actor MacAnswerContentParseCache {
   private static let log = OSLog(subsystem: "pro.byok.BYOKchat", category: "ChatSwitch")
   private nonisolated let storage: MacPreparedAnswerStorage
 
-  init(limit: Int = 64, byteLimit: Int = 8 * 1_024 * 1_024) {
+  init(limit: Int = 64, byteLimit: Int = 32 * 1_024 * 1_024) {
     storage = MacPreparedAnswerStorage(limit: limit, byteLimit: byteLimit)
   }
 
   nonisolated func cachedAnswer(for source: String) -> MacPreparedAnswer? {
     storage.value(for: source)
+  }
+
+  nonisolated func cachedAnswer(forKey key: MacAnswerCacheKey) -> MacPreparedAnswer? {
+    storage.value(forKey: key)
   }
 
   func answer(for source: String) throws -> MacPreparedAnswer {
@@ -153,26 +199,28 @@ actor MacAnswerContentParseCache {
   /// Prepares multiple unique assistant responses concurrently off the main actor
   /// so opening a conversation doesn't serialize parsing or trigger cascading
   /// row relayouts after mount.
-  nonisolated func prepareBatch(_ sources: [String]) async throws -> [String: MacPreparedAnswer] {
+  nonisolated func prepareBatch(_ sources: [String]) async throws -> [MacAnswerCacheKey: MacPreparedAnswer] {
     try Task.checkCancellation()
-    var results: [String: MacPreparedAnswer] = [:]
-    var uncached: [String] = []
-    var seen: Set<String> = []
+    var results: [MacAnswerCacheKey: MacPreparedAnswer] = [:]
+    var uncached: [(key: MacAnswerCacheKey, source: String)] = []
+    var seen: Set<MacAnswerCacheKey> = []
     results.reserveCapacity(sources.count)
 
-    for source in sources where !source.isEmpty && seen.insert(source).inserted {
-      if let cached = storage.value(for: source) {
-        results[source] = cached
+    for source in sources where !source.isEmpty {
+      let key = MacAnswerCacheKey(source: source)
+      guard seen.insert(key).inserted else { continue }
+      if let cached = storage.value(forKey: key) {
+        results[key] = cached
       } else {
-        uncached.append(source)
+        uncached.append((key: key, source: source))
       }
     }
 
     guard !uncached.isEmpty else { return results }
 
     let parsedPairs = try await withThrowingTaskGroup(
-      of: (String, MacPreparedAnswer).self,
-      returning: [(String, MacPreparedAnswer)].self
+      of: (MacAnswerCacheKey, MacPreparedAnswer).self,
+      returning: [(MacAnswerCacheKey, MacPreparedAnswer)].self
     ) { group in
       // Keep at least one core free for the main thread on low-core Macs.
       let maxConcurrency = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount - 1))
@@ -180,21 +228,21 @@ actor MacAnswerContentParseCache {
 
       func enqueueNext() {
         guard nextIndex < uncached.count else { return }
-        let source = uncached[nextIndex]
+        let item = uncached[nextIndex]
         nextIndex += 1
         let storage = self.storage
         group.addTask(priority: .userInitiated) {
           try Task.checkCancellation()
-          if let cached = storage.value(for: source) {
-            return (source, cached)
+          if let cached = storage.value(forKey: item.key) {
+            return (item.key, cached)
           }
           let signpostID = OSSignpostID(log: Self.log)
           os_signpost(.begin, log: Self.log, name: "Prepare Markdown", signpostID: signpostID)
           defer { os_signpost(.end, log: Self.log, name: "Prepare Markdown", signpostID: signpostID) }
-          let prepared = MacPreparedAnswer(source: source)
+          let prepared = MacPreparedAnswer(source: item.source)
           try Task.checkCancellation()
           storage.insert(prepared)
-          return (source, prepared)
+          return (item.key, prepared)
         }
       }
 
@@ -202,7 +250,7 @@ actor MacAnswerContentParseCache {
         enqueueNext()
       }
 
-      var collected: [(String, MacPreparedAnswer)] = []
+      var collected: [(MacAnswerCacheKey, MacPreparedAnswer)] = []
       collected.reserveCapacity(uncached.count)
       while let pair = try await group.next() {
         collected.append(pair)
@@ -211,8 +259,8 @@ actor MacAnswerContentParseCache {
       return collected
     }
 
-    for (source, prepared) in parsedPairs {
-      results[source] = prepared
+    for (key, prepared) in parsedPairs {
+      results[key] = prepared
     }
     return results
   }

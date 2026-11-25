@@ -329,8 +329,8 @@ private final class MacAttachmentThumbnailCache {
 
   private let storage: NSCache<NSString, NSImage> = {
     let cache = NSCache<NSString, NSImage>()
-    cache.countLimit = 96
-    cache.totalCostLimit = 24 * 1_024 * 1_024
+    cache.countLimit = 160
+    cache.totalCostLimit = 48 * 1_024 * 1_024
     return cache
   }()
 
@@ -350,6 +350,11 @@ private struct MacDecodedAttachmentBitmap: @unchecked Sendable {
 }
 
 private struct MacAttachmentTile: View {
+  private struct LoadTaskKey: Equatable {
+    let attachmentID: String
+    let isActive: Bool
+  }
+
   let attachment: ChatAttachment
   let presentation: MacAttachmentPresentation
   let remove: ((String) -> Void)?
@@ -358,6 +363,7 @@ private struct MacAttachmentTile: View {
   let loadThumbnail: ((String, CGFloat) async -> Data?)?
 
   @Environment(\.displayScale) private var displayScale
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @State private var image: NSImage?
   @State private var unavailable = false
 
@@ -410,8 +416,14 @@ private struct MacAttachmentTile: View {
         .accessibilityLabel("Remove \(attachment.filename)")
       }
     }
-    .task(id: attachment.id) {
+    .task(id: LoadTaskKey(attachmentID: attachment.id, isActive: isTranscriptActive)) {
+      guard isTranscriptActive else { return }
       await loadImageIfNeeded()
+    }
+    .onChange(of: isTranscriptActive) { _, active in
+      if !active {
+        image = nil
+      }
     }
 
     if hasContextMenu {
@@ -525,14 +537,30 @@ private struct MacAttachmentTile: View {
       return
     }
 
+    guard await MacImageWorkLimiter.shared.acquirePermit() else { return }
+    defer {
+      Task { await MacImageWorkLimiter.shared.releasePermit() }
+    }
+    guard !Task.isCancelled else { return }
+
+    if let cached = MacAttachmentThumbnailCache.shared.image(forKey: key) {
+      image = cached
+      unavailable = false
+      return
+    }
+
     let maxPixelSize = targetMaxPixelSize
     let sourceData: Data?
+    let alreadyDownsampled: Bool
     if !attachment.data.isEmpty {
       sourceData = attachment.data
+      alreadyDownsampled = false
     } else if let loadThumbnail {
       sourceData = await loadThumbnail(attachment.id, maxPixelSize)
+      alreadyDownsampled = true
     } else {
       sourceData = nil
+      alreadyDownsampled = false
     }
 
     guard !Task.isCancelled else { return }
@@ -542,7 +570,11 @@ private struct MacAttachmentTile: View {
     }
 
     let bitmap = await Task.detached(priority: .utility) {
-      Self.decodeDownsampledBitmap(from: sourceData, maxPixelSize: maxPixelSize)
+      Self.decodeBitmap(
+        from: sourceData,
+        maxPixelSize: maxPixelSize,
+        alreadyDownsampled: alreadyDownsampled
+      )
     }.value
 
     guard !Task.isCancelled else { return }
@@ -556,20 +588,44 @@ private struct MacAttachmentTile: View {
     }
   }
 
-  private nonisolated static func decodeDownsampledBitmap(
+  private nonisolated static func decodeBitmap(
     from data: Data,
-    maxPixelSize: CGFloat
+    maxPixelSize: CGFloat,
+    alreadyDownsampled: Bool
   ) -> MacDecodedAttachmentBitmap? {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-    let options: [CFString: Any] = [
-      kCGImageSourceCreateThumbnailFromImageAlways: true,
-      kCGImageSourceCreateThumbnailWithTransform: true,
-      kCGImageSourceThumbnailMaxPixelSize: max(64, Int(maxPixelSize.rounded())),
-      kCGImageSourceShouldCacheImmediately: true,
-    ]
-    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-      ?? CGImageSourceCreateImageAtIndex(source, 0, nil)
-    else { return nil }
+    let cgImage: CGImage?
+    if alreadyDownsampled {
+      // Derived thumbnails from AttachmentBlobStore are already oriented and
+      // downsampled to maxPixelSize; decode directly instead of re-thumbnailing.
+      let directOptions: [CFString: Any] = [
+        kCGImageSourceShouldCacheImmediately: true,
+      ]
+      if let direct = CGImageSourceCreateImageAtIndex(source, 0, directOptions as CFDictionary),
+        CGFloat(max(direct.width, direct.height)) <= max(64, maxPixelSize * 1.5)
+      {
+        cgImage = direct
+      } else {
+        let options: [CFString: Any] = [
+          kCGImageSourceCreateThumbnailFromImageAlways: true,
+          kCGImageSourceCreateThumbnailWithTransform: true,
+          kCGImageSourceThumbnailMaxPixelSize: max(64, Int(maxPixelSize.rounded())),
+          kCGImageSourceShouldCacheImmediately: true,
+        ]
+        cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+          ?? CGImageSourceCreateImageAtIndex(source, 0, directOptions as CFDictionary)
+      }
+    } else {
+      let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: max(64, Int(maxPixelSize.rounded())),
+        kCGImageSourceShouldCacheImmediately: true,
+      ]
+      cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        ?? CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+    guard let cgImage else { return nil }
     let byteCost = max(1, cgImage.bytesPerRow * cgImage.height)
     return MacDecodedAttachmentBitmap(
       cgImage: cgImage,

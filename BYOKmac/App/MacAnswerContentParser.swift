@@ -300,9 +300,6 @@ enum MacAnswerContentParser {
   private static let markdownLinkRegex = try? NSRegularExpression(
     pattern: #"(?<!!)\[([^\]]+)\]\((https?://(?:[^\s()]+|\([^\s()]*\))+)\)"#
   )
-  private static let markdownImageRegex = try? NSRegularExpression(
-    pattern: #"!\[[^\]]*\]\((?:[^\s()]+|\([^\s()]*\))+(?:\s+(?:"[^"]*"|'[^']*'))?\)"#
-  )
   private static let orderedListRegex = try? NSRegularExpression(pattern: #"^\d+[.)]\s"#)
   private static let inlineMarkdownFormattingRegex = try? NSRegularExpression(
     pattern: #"(?:`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|!?\[[^\]]+\]\([^)]+\))"#
@@ -581,8 +578,10 @@ enum MacAnswerContentParser {
   static func containsInlineMath(_ text: String) -> Bool {
     guard text.contains("$") || text.contains("\\(") else { return false }
     guard let inlineMathRegex else { return false }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return inlineMathRegex.firstMatch(in: text, range: range) != nil
+    let target = text.contains("data:image/") ? stripMarkdownImages(from: text) : text
+    guard target.contains("$") || target.contains("\\(") else { return false }
+    let range = NSRange(target.startIndex..<target.endIndex, in: target)
+    return inlineMathRegex.firstMatch(in: target, range: range) != nil
   }
 
   /// Splits a markdown block by blank-line paragraphs so plain inline-math
@@ -1272,58 +1271,122 @@ enum MacAnswerContentParser {
   /// markdown inside inline code are ignored during extraction.
   static func stripInlineCodeSpans(from text: String) -> String {
     guard text.contains("`") else { return text }
-    let chars = Array(text)
     var output = ""
-    output.reserveCapacity(chars.count)
-    var index = 0
+    output.reserveCapacity(min(text.utf8.count, 64 * 1_024))
+    var cursor = text.startIndex
 
-    while index < chars.count {
-      if chars[index] == "`" {
-        var runLength = 0
-        while index + runLength < chars.count, chars[index + runLength] == "`" {
-          runLength += 1
-        }
-        if let closeStart = findMatchingBacktickRun(in: chars, from: index + runLength, length: runLength) {
-          output.append(" ")
-          index = closeStart + runLength
-          continue
-        }
-        output.append(contentsOf: repeatElement("`", count: runLength))
-        index += runLength
-        continue
+    while let tickRange = text.range(of: "`", range: cursor..<text.endIndex) {
+      if tickRange.lowerBound > cursor {
+        output.append(contentsOf: text[cursor..<tickRange.lowerBound])
       }
-      output.append(chars[index])
-      index += 1
+      var runEnd = tickRange.upperBound
+      var runLength = 1
+      while runEnd < text.endIndex, text[runEnd] == "`" {
+        runLength += 1
+        runEnd = text.index(after: runEnd)
+      }
+      if let closeEnd = findMatchingBacktickRunEnd(in: text, from: runEnd, length: runLength) {
+        output.append(" ")
+        cursor = closeEnd
+      } else {
+        output.append(contentsOf: text[tickRange.lowerBound..<runEnd])
+        cursor = runEnd
+      }
+    }
+
+    if cursor < text.endIndex {
+      output.append(contentsOf: text[cursor..<text.endIndex])
     }
 
     return output
   }
 
-  private static func findMatchingBacktickRun(
-    in chars: [Character],
-    from start: Int,
+  private static func findMatchingBacktickRunEnd(
+    in text: String,
+    from start: String.Index,
     length: Int
-  ) -> Int? {
-    var index = start
-    while index < chars.count {
-      if chars[index] == "`" {
-        var runLength = 0
-        while index + runLength < chars.count, chars[index + runLength] == "`" {
-          runLength += 1
-        }
-        if runLength == length { return index }
-        index += runLength
-      } else {
-        index += 1
+  ) -> String.Index? {
+    var cursor = start
+    while let tickRange = text.range(of: "`", range: cursor..<text.endIndex) {
+      var runEnd = tickRange.upperBound
+      var runLength = 1
+      while runEnd < text.endIndex, text[runEnd] == "`" {
+        runLength += 1
+        runEnd = text.index(after: runEnd)
       }
+      if runLength == length { return runEnd }
+      cursor = runEnd
     }
     return nil
   }
 
   private static func stripMarkdownImages(from text: String) -> String {
-    guard text.contains("!["), let markdownImageRegex else { return text }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return markdownImageRegex.stringByReplacingMatches(in: text, range: range, withTemplate: " ")
+    guard text.contains("![") else { return text }
+    var output = ""
+    output.reserveCapacity(min(text.utf8.count, 64 * 1_024))
+    var cursor = text.startIndex
+
+    while let openRange = text.range(of: "![", range: cursor..<text.endIndex) {
+      guard let closeBracket = text[openRange.upperBound...].firstIndex(of: "]") else {
+        break
+      }
+      let afterBracket = text.index(after: closeBracket)
+      guard afterBracket < text.endIndex, text[afterBracket] == "(" else {
+        output.append(contentsOf: text[cursor..<afterBracket])
+        cursor = afterBracket
+        continue
+      }
+      let urlStart = text.index(after: afterBracket)
+      var idx = urlStart
+      var parenDepth = 0
+      var closingParen: String.Index?
+      var sawNonWhitespace = false
+      var inQuote: Character?
+
+      while idx < text.endIndex {
+        let ch = text[idx]
+        if let quote = inQuote {
+          if ch == quote {
+            inQuote = nil
+          } else if ch == "\n" || ch == "\r" {
+            break
+          }
+        } else if ch == "\"" || ch == "'" {
+          inQuote = ch
+        } else if ch == "(" {
+          parenDepth += 1
+          sawNonWhitespace = true
+        } else if ch == ")" {
+          if parenDepth == 0 {
+            closingParen = idx
+            break
+          }
+          parenDepth -= 1
+        } else if ch == "\n" || ch == "\r" {
+          break
+        } else if !ch.isWhitespace {
+          sawNonWhitespace = true
+        }
+        idx = text.index(after: idx)
+      }
+
+      guard let closingParen, sawNonWhitespace else {
+        output.append(contentsOf: text[cursor..<urlStart])
+        cursor = urlStart
+        continue
+      }
+
+      if openRange.lowerBound > cursor {
+        output.append(contentsOf: text[cursor..<openRange.lowerBound])
+      }
+      output.append(" ")
+      cursor = text.index(after: closingParen)
+    }
+
+    if cursor < text.endIndex {
+      output.append(contentsOf: text[cursor..<text.endIndex])
+    }
+    return output
   }
 
   private static func sanitizedURL(_ value: String) -> URL? {
