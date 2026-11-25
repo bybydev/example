@@ -24,6 +24,18 @@ nonisolated enum MacConversationExportSupport {
   }
 }
 
+nonisolated enum MacMessageExportSupport {
+  static func filename(for message: ChatMessage, conversationTitle: String?) -> String {
+    let suffix = message.role == .assistant ? "response" : "message"
+    let trimmedTitle = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if trimmedTitle.isEmpty || trimmedTitle == "New Chat" {
+      return message.role == .assistant ? "assistant-response.md" : "message.md"
+    }
+    let stem = MacConversationExportSupport.markdownFilename(for: trimmedTitle)
+    return "\(stem)-\(suffix).md"
+  }
+}
+
 enum MacChatMessageWindowPolicy {
   static let initialVisibleCount = 30
   static let loadMoreBatchSize = 30
@@ -80,7 +92,6 @@ struct MacChatPane: View {
   let isImportingAttachments: Bool
   let sidebarVisible: Bool
   let toggleSidebar: () -> Void
-  let chooseTarget: () -> Void
   let manageProviders: () -> Void
   let configureTools: () -> Void
   let openChatSettings: () -> Void
@@ -99,6 +110,7 @@ struct MacChatPane: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var composerHeight: CGFloat = 0
   @State private var showingPromptsPicker = false
+  @State private var showingTargetPopover = false
   @State private var dismissedOmittedBannerKey: String?
   @State private var revealedConversationIDs: Set<ConversationID> = []
 
@@ -252,7 +264,7 @@ struct MacChatPane: View {
               bottomSpace: transcriptBottomSpace,
               isActive: isCurrent,
               navigationTarget: navigationTarget,
-              chooseTarget: chooseTarget,
+              chooseTarget: { showingTargetPopover = true },
               manageProviders: manageProviders,
               openChatSettings: openChatSettings,
               configureTools: configureTools,
@@ -302,7 +314,7 @@ struct MacChatPane: View {
           if let issue = configurationIssue {
             MacConfigurationRepairBanner(
               issue: issue,
-              switchModel: chooseTarget,
+              switchModel: { showingTargetPopover = true },
               openProviders: manageProviders
             )
           }
@@ -317,7 +329,7 @@ struct MacChatPane: View {
             attachments: attachments,
             isSending: isSending,
             isImportingAttachments: isImportingAttachments,
-            chooseTarget: chooseTarget,
+            showingTargetPopover: $showingTargetPopover,
             manageProviders: manageProviders,
             configureTools: configureTools,
             runAttachmentImport: runAttachmentImport,
@@ -1117,42 +1129,24 @@ private struct MacTranscriptView: View {
 
               ForEach(visibleMessages) { message in
                 let isLatestAssistant = message.id == latestAssistantID
-                transcriptRow(bottomSpacing: 48) {
-                  VStack(alignment: .leading, spacing: 8) {
-                    MacRichMessageView(
-                      providers: providers,
-                      chats: chats,
-                      mcp: mcp,
-                      conversationID: conversationID,
-                      message: message,
-                      failureContext: failureContextLabel(for: message, accountsByID: accountsByID),
-                      isLatestAssistant: isLatestAssistant,
-                      onShowDetails: { activeRowSheet = .details($0) },
-                      onEditMessage: { activeRowSheet = .edit($0) },
-                      onPreviewAttachment: { attachment, owner in
-                        activeRowSheet = .previewAttachment(attachment, owner)
-                      },
-                      onRequestRegenerate: requestRegeneration
-                    )
-
-                    if message.role == .assistant,
-                      message.status != .pending,
-                      message.status != .streaming
-                    {
-                      MacAssistantMessageActions(
-                        chats: chats,
-                        conversationID: conversationID,
-                        message: message,
-                        isLatestAssistant: isLatestAssistant,
-                        includeRetry: message.status != .failed,
-                        hideEmptyContentActions: message.status == .failed,
-                        onShowDetails: { activeRowSheet = .details(message) },
-                        onShowSources: { activeRowSheet = .sources($0) },
-                        onSaveImages: { activeRowSheet = .saveImages(message, $0) },
-                        onRequestRegenerate: requestRegeneration
-                      )
-                    }
-                  }
+                transcriptRow(bottomSpacing: message.role == .user ? 22 : 48) {
+                  MacTranscriptMessageRow(
+                    providers: providers,
+                    chats: chats,
+                    mcp: mcp,
+                    conversationID: conversationID,
+                    message: message,
+                    failureContext: failureContextLabel(for: message, accountsByID: accountsByID),
+                    isLatestAssistant: isLatestAssistant,
+                    onShowDetails: { activeRowSheet = .details($0) },
+                    onEditMessage: { activeRowSheet = .edit($0) },
+                    onPreviewAttachment: { attachment, owner in
+                      activeRowSheet = .previewAttachment(attachment, owner)
+                    },
+                    onShowSources: { activeRowSheet = .sources($0) },
+                    onSaveImages: { activeRowSheet = .saveImages(message, $0) },
+                    onRequestRegenerate: requestRegeneration
+                  )
                 }
                 .id(message.id.rawValue)
               }
@@ -2134,7 +2128,7 @@ private struct MacComposerView: View {
   let attachments: [ChatAttachment]
   let isSending: Bool
   let isImportingAttachments: Bool
-  let chooseTarget: () -> Void
+  @Binding var showingTargetPopover: Bool
   let manageProviders: () -> Void
   let configureTools: () -> Void
   let runAttachmentImport: (@escaping @MainActor () async -> [ChatAttachment]?) -> Void
@@ -2370,6 +2364,7 @@ private struct MacComposerView: View {
     .onChange(of: conversationID) { _, _ in
       urlDropTargeted = false
       imageDropTargeted = false
+      showingTargetPopover = false
     }
   }
 
@@ -2417,7 +2412,7 @@ private struct MacComposerView: View {
 
       Button("Switch Model") {
         editorFocused = false
-        chooseTarget()
+        showingTargetPopover = true
       }
       .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       .disabled(isStreaming || isSending)
@@ -2597,8 +2592,22 @@ private struct MacComposerView: View {
       if target == nil {
         manageProviders()
       } else {
-        chooseTarget()
+        showingTargetPopover.toggle()
       }
+    }
+    .popover(isPresented: $showingTargetPopover, arrowEdge: .top) {
+      MacComposerModelPopover(
+        providers: providers,
+        initialTarget: target,
+        maxOutputTokens: chats.effectiveOptions(for: conversationID).maxOutputTokens,
+        manageProviders: {
+          showingTargetPopover = false
+          manageProviders()
+        },
+        onCommit: { newTarget in
+          await chats.applyTarget(newTarget, conversationID: conversationID)
+        }
+      )
     }
     .help(target == nil ? "Set up a provider" : "Change model or reasoning (\(targetDetails))")
     .accessibilityLabel("Change provider, model, and reasoning")
@@ -2925,9 +2934,279 @@ private struct MacComposerSendButton: View {
   }
 }
 
+private struct MacTranscriptMessageRow: View {
+  @Bindable var providers: MacProviderModel
+  @Bindable var chats: MacChatSessionModel
+  @Bindable var mcp: MacMCPModel
+  let conversationID: ConversationID?
+  let message: ChatMessage
+  let failureContext: String?
+  let isLatestAssistant: Bool
+  let onShowDetails: (ChatMessage) -> Void
+  let onEditMessage: (ChatMessage) -> Void
+  let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
+  let onShowSources: ([MacAnswerSource]) -> Void
+  let onSaveImages: ([MacResponseImageCandidate]) -> Void
+  let onRequestRegenerate: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: message.role == .user ? 4 : 8) {
+      MacRichMessageView(
+        providers: providers,
+        chats: chats,
+        mcp: mcp,
+        conversationID: conversationID,
+        message: message,
+        failureContext: failureContext,
+        isLatestAssistant: isLatestAssistant,
+        onShowDetails: onShowDetails,
+        onEditMessage: onEditMessage,
+        onPreviewAttachment: onPreviewAttachment,
+        onRequestRegenerate: onRequestRegenerate
+      )
+
+      if message.role == .user {
+        MacUserMessageActions(
+          chats: chats,
+          conversationID: conversationID,
+          message: message,
+          isRowHovered: isHovered,
+          onEditMessage: { onEditMessage(message) },
+          onShowDetails: { onShowDetails(message) }
+        )
+      } else if message.status != .pending, message.status != .streaming {
+        MacAssistantMessageActions(
+          chats: chats,
+          conversationID: conversationID,
+          message: message,
+          isLatestAssistant: isLatestAssistant,
+          includeRetry: message.status != .failed,
+          hideEmptyContentActions: message.status == .failed,
+          onShowDetails: { onShowDetails(message) },
+          onShowSources: onShowSources,
+          onSaveImages: onSaveImages,
+          onRequestRegenerate: onRequestRegenerate
+        )
+      }
+    }
+    .onHover { isHovered = $0 }
+  }
+}
+
+private struct MacUserMessageActions: View {
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+  @Environment(\.macToastCenter) private var toastCenter
+  @Environment(MacWorkspaceModel.self) private var workspace
+  @Bindable var chats: MacChatSessionModel
+  let conversationID: ConversationID?
+  let message: ChatMessage
+  let isRowHovered: Bool
+  let onEditMessage: () -> Void
+  let onShowDetails: () -> Void
+
+  @State private var copied = false
+  @State private var copyResetTask: Task<Void, Never>?
+  @State private var showingMorePopover = false
+
+  private var hasCopyableContent: Bool {
+    !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var canEdit: Bool {
+    guard isTranscriptActive, let conversationID, hasCopyableContent else { return false }
+    return !chats.isGenerating(conversationID)
+  }
+
+  private var attachments: [ChatAttachment] {
+    message.attachments ?? []
+  }
+
+  private var isVisible: Bool {
+    isRowHovered || showingMorePopover || copied
+  }
+
+  var body: some View {
+    HStack(spacing: 2) {
+      Spacer(minLength: 0)
+
+      if hasCopyableContent {
+        Button {
+          copyText(message.content)
+        } label: {
+          Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(copied ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
+        }
+        .buttonStyle(MacIconButtonStyle())
+        .help(copied ? "Copied" : "Copy message")
+        .accessibilityLabel(copied ? "Message copied" : "Copy message")
+      }
+
+      if hasCopyableContent {
+        Button(action: onEditMessage) {
+          Image(systemName: "pencil")
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        .buttonStyle(MacIconButtonStyle())
+        .disabled(!canEdit)
+        .help(canEdit ? "Edit & Resend" : "Wait for the current response to finish before editing")
+        .accessibilityLabel("Edit and resend")
+      }
+
+      Button {
+        showingMorePopover.toggle()
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(
+            showingMorePopover ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
+      }
+      .buttonStyle(MacIconButtonStyle())
+      .popover(isPresented: $showingMorePopover, arrowEdge: .bottom) {
+        morePopoverContent
+      }
+      .help("More actions")
+      .accessibilityLabel("More actions")
+    }
+    .frame(height: MacDesignTokens.Control.iconButtonSize)
+    .opacity(isVisible ? 1 : 0)
+    .allowsHitTesting(isVisible)
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isVisible)
+    .onDisappear {
+      copyResetTask?.cancel()
+      copyResetTask = nil
+    }
+  }
+
+  private var morePopoverContent: some View {
+    let hasTopActions = hasCopyableContent || (conversationID != nil && !attachments.isEmpty)
+    return MacThemedActionPopoverContainer {
+      if hasCopyableContent {
+        MacThemedPopoverActionRow(
+          title: "Export as Markdown…",
+          systemImage: "square.and.arrow.down"
+        ) {
+          showingMorePopover = false
+          exportMessage()
+        }
+
+        ShareLink(item: message.content) {
+          MacThemedPopoverActionRowLabel(
+            title: "Share",
+            systemImage: "square.and.arrow.up"
+          )
+        }
+        .buttonStyle(.plain)
+      }
+
+      if let conversationID, !attachments.isEmpty {
+        MacThemedPopoverActionRow(
+          title: attachments.count == 1
+            ? "Save Attachment to Library"
+            : "Save Attachments to Library (\(attachments.count))",
+          systemImage: "books.vertical"
+        ) {
+          showingMorePopover = false
+          saveAttachmentsToLibrary(conversationID: conversationID)
+        }
+      }
+
+      if hasTopActions {
+        MacThemedPopoverDivider()
+      }
+
+      MacThemedPopoverActionRow(
+        title: "Message Details",
+        systemImage: "info.circle"
+      ) {
+        showingMorePopover = false
+        onShowDetails()
+      }
+    }
+  }
+
+  private func copyText(_ value: String) {
+    NSPasteboard.general.clearContents()
+    if NSPasteboard.general.setString(value, forType: .string) {
+      MacAppAnalytics.track(.contentCopied, dimension: .message)
+    }
+    copied = true
+    copyResetTask?.cancel()
+    copyResetTask = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(1.2))
+      guard !Task.isCancelled else { return }
+      copied = false
+    }
+  }
+
+  private func saveAttachmentsToLibrary(conversationID: ConversationID) {
+    let items = attachments
+    Task { @MainActor in
+      var savedCount = 0
+      var firstError: String?
+      for attachment in items {
+        let ok = await workspace.saveStoredAttachmentToLibrary(
+          attachment,
+          conversationID: conversationID,
+          messageID: message.id
+        )
+        if ok {
+          savedCount += 1
+        } else if firstError == nil {
+          firstError = workspace.consumeErrorMessage()
+        }
+      }
+      if let firstError {
+        chats.errorMessage = firstError
+      } else if savedCount == 1 {
+        toastCenter?.success(workspace.statusMessage ?? "Saved attachment to Library")
+      } else if savedCount > 1 {
+        toastCenter?.success("Saved \(savedCount) attachments to Library")
+      }
+    }
+  }
+
+  private func exportMessage() {
+    let content = message.content
+    let suggestedName = MacMessageExportSupport.filename(
+      for: message,
+      conversationTitle: chats.summary(conversationID)?.title
+    )
+    Task { @MainActor in
+      let panel = NSSavePanel()
+      panel.allowedContentTypes = [.markdown, .plainText]
+      panel.canCreateDirectories = true
+      panel.isExtensionHidden = false
+      panel.nameFieldStringValue = suggestedName
+
+      let response: NSApplication.ModalResponse
+      if let window = NSApp.keyWindow {
+        response = await panel.beginSheetModal(for: window)
+      } else {
+        response = panel.runModal()
+      }
+      guard response == .OK, let url = panel.url else { return }
+
+      do {
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        toastCenter?.success("Exported \"\(url.lastPathComponent)\"")
+      } catch {
+        MacAppAnalytics.reportError("message_export_failed", component: "chat")
+        chats.errorMessage = error.localizedDescription
+      }
+    }
+  }
+}
+
 private struct MacAssistantMessageActions: View {
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Environment(\.macPreparedAnswers) private var preparedAnswers
+  @Environment(\.macToastCenter) private var toastCenter
+  @Environment(MacWorkspaceModel.self) private var workspace
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID?
   let message: ChatMessage
@@ -2940,7 +3219,9 @@ private struct MacAssistantMessageActions: View {
   let onRequestRegenerate: () -> Void
 
   @State private var copied = false
+  @State private var copyResetTask: Task<Void, Never>?
   @State private var resolvedAnswer: MacPreparedAnswer?
+  @State private var showingMorePopover = false
 
   private var contentCacheKey: MacAnswerCacheKey {
     MacAnswerCacheKey(source: message.content)
@@ -2958,17 +3239,29 @@ private struct MacAssistantMessageActions: View {
     return !chats.isGenerating(conversationID)
   }
 
+  private var hasCopyableContent: Bool {
+    !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var hasReasoning: Bool {
+    !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var attachments: [ChatAttachment] {
+    message.attachments ?? []
+  }
+
   private var showContentActions: Bool {
-    !hideEmptyContentActions || !message.content.isEmpty
+    !hideEmptyContentActions || hasCopyableContent
   }
 
   private var extractedSources: [MacAnswerSource] {
-    guard showContentActions, !message.content.isEmpty else { return [] }
+    guard showContentActions, hasCopyableContent else { return [] }
     return preparedAnswer?.sources ?? []
   }
 
   private var hasSavableImages: Bool {
-    guard showContentActions, conversationID != nil, !message.content.isEmpty else { return false }
+    guard showContentActions, conversationID != nil, hasCopyableContent else { return false }
     return preparedAnswer?.hasSavableImages ?? false
   }
 
@@ -2977,110 +3270,62 @@ private struct MacAssistantMessageActions: View {
     HStack(spacing: 2) {
       if showContentActions {
         Button {
-          copyToPasteboard(message.content)
-          copied = true
-          Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.2))
-            copied = false
-          }
+          copyResponse()
         } label: {
-          actionIcon(copied ? "checkmark" : "doc.on.doc")
+          Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(copied ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
         }
-        .buttonStyle(.plain)
-        .disabled(message.content.isEmpty)
+        .buttonStyle(MacIconButtonStyle())
+        .disabled(!hasCopyableContent)
         .help(copied ? "Copied" : "Copy response")
         .accessibilityLabel(copied ? "Response copied" : "Copy response")
       }
 
-      if includeRetry {
+      if includeRetry && isLatestAssistant {
         Button(action: onRequestRegenerate) {
-          actionIcon("arrow.clockwise")
+          Image(systemName: "arrow.clockwise")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MacIconButtonStyle())
         .disabled(!canRetry)
-        .help(canRetry ? "Retry response" : "Retry is available on the latest response")
+        .help(canRetry ? "Retry response" : "Wait for generation to finish before retrying")
         .accessibilityLabel("Retry response")
       }
 
       if !sources.isEmpty {
-        Button {
+        MacSourcesPillButton(count: sources.count) {
           onShowSources(sources)
-        } label: {
-          HStack(spacing: 4) {
-            Image(systemName: "globe")
-              .font(.system(size: 11.5, weight: .medium))
-            Text(sources.count == 1 ? "1 Source" : "\(sources.count) Sources")
-              .font(.system(size: 11.5, weight: .medium))
-          }
-          .foregroundStyle(.secondary)
-          .padding(.horizontal, 8)
-          .frame(height: 26)
-          .background(MacDesignTokens.Colors.surface, in: Capsule())
-          .overlay {
-            Capsule()
-              .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
-          }
-          .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
         .padding(.horizontal, 4)
-        .help("View \(sources.count) cited \(sources.count == 1 ? "source" : "sources")")
-        .accessibilityLabel("Sources, \(sources.count)")
       }
 
-      Menu {
-        if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          Button("Copy Reasoning", systemImage: "brain") {
-            copyToPasteboard(message.reasoning)
-          }
-        }
-
-        if !sources.isEmpty {
-          Button("Sources (\(sources.count))…", systemImage: "globe") {
-            onShowSources(sources)
-          }
-        }
-
-        if hasSavableImages {
-          Button("Save Images…", systemImage: "photo.on.rectangle.angled") {
-            let candidates = MacResponseImageScanner.imageCandidates(in: message.content)
-            if !candidates.isEmpty {
-              onSaveImages(candidates)
-            }
-          }
-        }
-
-        if showContentActions, !message.content.isEmpty {
-          ShareLink(item: message.content) {
-            Label("Share", systemImage: "square.and.arrow.up")
-          }
-        }
-
-        if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          || !sources.isEmpty
-          || hasSavableImages
-          || (showContentActions && !message.content.isEmpty)
-        {
-          Divider()
-        }
-
-        Button("Message Details", systemImage: "info.circle") {
-          onShowDetails()
-        }
+      Button {
+        showingMorePopover.toggle()
       } label: {
-        actionIcon("ellipsis")
+        Image(systemName: "ellipsis")
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(
+            showingMorePopover ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
+      .buttonStyle(MacIconButtonStyle())
+      .popover(isPresented: $showingMorePopover, arrowEdge: .bottom) {
+        morePopoverContent(sources: sources)
+      }
       .help("More actions")
       .accessibilityLabel("More actions")
     }
     // Pulls the leading glyph back over its centered frame's inset so the
     // first icon's visual edge lines up with the message text above.
-    .padding(.leading, -7)
+    .padding(.leading, -6)
+    .onDisappear {
+      copyResetTask?.cancel()
+      copyResetTask = nil
+    }
     .task(id: contentCacheKey) {
-      guard isTranscriptActive, showContentActions, !message.content.isEmpty else { return }
+      guard isTranscriptActive, showContentActions, hasCopyableContent else { return }
       if let cached = preparedAnswer {
         resolvedAnswer = cached
         return
@@ -3096,17 +3341,326 @@ private struct MacAssistantMessageActions: View {
     }
   }
 
-  private func actionIcon(_ symbol: String) -> some View {
-    Image(systemName: symbol)
-      .font(.system(size: 13, weight: .medium))
-      .foregroundStyle(.secondary)
-      .frame(width: 30, height: 30)
-      .contentShape(Rectangle())
+  private func morePopoverContent(sources: [MacAnswerSource]) -> some View {
+    let hasSaveAttachments = conversationID != nil && !attachments.isEmpty
+    let hasSaveResponse = conversationID != nil && showContentActions && hasCopyableContent
+    let hasExportOrShare = showContentActions && hasCopyableContent
+    let hasTopSection =
+      hasReasoning || !sources.isEmpty || hasSavableImages
+      || hasSaveResponse || hasSaveAttachments || hasExportOrShare
+
+    return MacThemedActionPopoverContainer {
+      if hasReasoning {
+        MacThemedPopoverActionRow(
+          title: "Copy Reasoning",
+          systemImage: "brain"
+        ) {
+          showingMorePopover = false
+          copyToPasteboard(message.reasoning, dimension: .reasoning)
+          toastCenter?.success("Reasoning copied")
+        }
+      }
+
+      if !sources.isEmpty {
+        MacThemedPopoverActionRow(
+          title: "Sources (\(sources.count))…",
+          systemImage: "globe"
+        ) {
+          showingMorePopover = false
+          onShowSources(sources)
+        }
+      }
+
+      if hasSavableImages {
+        MacThemedPopoverActionRow(
+          title: "Save Images…",
+          systemImage: "photo.on.rectangle.angled"
+        ) {
+          showingMorePopover = false
+          let candidates = MacResponseImageScanner.imageCandidates(in: message.content)
+          if !candidates.isEmpty {
+            onSaveImages(candidates)
+          }
+        }
+      }
+
+      if hasSaveResponse, let conversationID {
+        MacThemedPopoverActionRow(
+          title: "Save Response to Library",
+          systemImage: "books.vertical"
+        ) {
+          showingMorePopover = false
+          saveResponseToLibrary(conversationID: conversationID)
+        }
+      }
+
+      if hasSaveAttachments, let conversationID {
+        MacThemedPopoverActionRow(
+          title: attachments.count == 1
+            ? "Save Attachment to Library"
+            : "Save Attachments to Library (\(attachments.count))",
+          systemImage: "paperclip"
+        ) {
+          showingMorePopover = false
+          saveAttachmentsToLibrary(conversationID: conversationID)
+        }
+      }
+
+      if hasExportOrShare {
+        MacThemedPopoverActionRow(
+          title: "Export as Markdown…",
+          systemImage: "square.and.arrow.down"
+        ) {
+          showingMorePopover = false
+          exportMessage()
+        }
+
+        ShareLink(item: message.content) {
+          MacThemedPopoverActionRowLabel(
+            title: "Share",
+            systemImage: "square.and.arrow.up"
+          )
+        }
+        .buttonStyle(.plain)
+      }
+
+      if hasTopSection {
+        MacThemedPopoverDivider()
+      }
+
+      MacThemedPopoverActionRow(
+        title: "Message Details",
+        systemImage: "info.circle"
+      ) {
+        showingMorePopover = false
+        onShowDetails()
+      }
+    }
   }
 
-  private func copyToPasteboard(_ value: String) {
+  private func copyResponse() {
+    copyToPasteboard(message.content, dimension: .message)
+    copied = true
+    copyResetTask?.cancel()
+    copyResetTask = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(1.2))
+      guard !Task.isCancelled else { return }
+      copied = false
+    }
+  }
+
+  private func copyToPasteboard(_ value: String, dimension: MacAppAnalytics.Dimension) {
     NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(value, forType: .string)
+    if NSPasteboard.general.setString(value, forType: .string) {
+      MacAppAnalytics.track(.contentCopied, dimension: dimension)
+    }
+  }
+
+  private func saveResponseToLibrary(conversationID: ConversationID) {
+    let content = message.content
+    let messageID = message.id
+    let createdAt = message.createdAt
+    let title = chats.summary(conversationID)?.title
+    Task { @MainActor in
+      let ok = await workspace.saveResponseToLibrary(
+        content,
+        conversationID: conversationID,
+        messageID: messageID,
+        createdAt: createdAt,
+        conversationTitle: title
+      )
+      if ok {
+        toastCenter?.success(workspace.statusMessage ?? "Saved response to Library")
+      } else if let error = workspace.consumeErrorMessage() {
+        chats.errorMessage = error
+      }
+    }
+  }
+
+  private func saveAttachmentsToLibrary(conversationID: ConversationID) {
+    let items = attachments
+    Task { @MainActor in
+      var savedCount = 0
+      var firstError: String?
+      for attachment in items {
+        let ok = await workspace.saveStoredAttachmentToLibrary(
+          attachment,
+          conversationID: conversationID,
+          messageID: message.id
+        )
+        if ok {
+          savedCount += 1
+        } else if firstError == nil {
+          firstError = workspace.consumeErrorMessage()
+        }
+      }
+      if let firstError {
+        chats.errorMessage = firstError
+      } else if savedCount == 1 {
+        toastCenter?.success(workspace.statusMessage ?? "Saved attachment to Library")
+      } else if savedCount > 1 {
+        toastCenter?.success("Saved \(savedCount) attachments to Library")
+      }
+    }
+  }
+
+  private func exportMessage() {
+    let content = message.content
+    let suggestedName = MacMessageExportSupport.filename(
+      for: message,
+      conversationTitle: chats.summary(conversationID)?.title
+    )
+    Task { @MainActor in
+      let panel = NSSavePanel()
+      panel.allowedContentTypes = [.markdown, .plainText]
+      panel.canCreateDirectories = true
+      panel.isExtensionHidden = false
+      panel.nameFieldStringValue = suggestedName
+
+      let response: NSApplication.ModalResponse
+      if let window = NSApp.keyWindow {
+        response = await panel.beginSheetModal(for: window)
+      } else {
+        response = panel.runModal()
+      }
+      guard response == .OK, let url = panel.url else { return }
+
+      do {
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        toastCenter?.success("Exported \"\(url.lastPathComponent)\"")
+      } catch {
+        MacAppAnalytics.reportError("message_export_failed", component: "chat")
+        chats.errorMessage = error.localizedDescription
+      }
+    }
+  }
+}
+
+private struct MacSourcesPillButton: View {
+  let count: Int
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 4) {
+        Image(systemName: "globe")
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(isHovered ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
+        Text(count == 1 ? "1 Source" : "\(count) Sources")
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted)
+      }
+      .padding(.horizontal, 8)
+      .frame(height: 26)
+      .background(
+        isHovered ? MacDesignTokens.Colors.selection.opacity(0.65) : MacDesignTokens.Colors.surface,
+        in: Capsule()
+      )
+      .overlay {
+        Capsule()
+          .stroke(
+            isHovered
+              ? MacDesignTokens.Colors.accent.opacity(0.45)
+              : MacDesignTokens.Colors.separator.opacity(0.75),
+            lineWidth: 0.65
+          )
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help("View \(count) cited \(count == 1 ? "source" : "sources")")
+    .accessibilityLabel("Sources, \(count)")
+  }
+}
+
+private struct MacThemedActionPopoverContainer<Content: View>: View {
+  @ViewBuilder let content: () -> Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      content()
+    }
+    .padding(6)
+    .frame(minWidth: 214, alignment: .leading)
+    .background(MacDesignTokens.Colors.surface)
+  }
+}
+
+private struct MacThemedPopoverDivider: View {
+  var body: some View {
+    Rectangle()
+      .fill(MacDesignTokens.Colors.separator.opacity(0.75))
+      .frame(height: 1)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 4)
+  }
+}
+
+private struct MacThemedPopoverActionRow: View {
+  let title: String
+  let systemImage: String
+  var isDestructive: Bool = false
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      MacThemedPopoverActionRowLabel(
+        title: title,
+        systemImage: systemImage,
+        isDestructive: isDestructive
+      )
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+private struct MacThemedPopoverActionRowLabel: View {
+  let title: String
+  let systemImage: String
+  var isDestructive: Bool = false
+
+  @State private var isHovered = false
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: systemImage)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(iconColor)
+        .frame(width: 16, alignment: .center)
+
+      Text(title)
+        .font(.system(size: 12.5, weight: .medium))
+        .foregroundStyle(textColor)
+        .lineLimit(1)
+
+      Spacer(minLength: 4)
+    }
+    .padding(.horizontal, 8)
+    .frame(height: 28)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(backgroundColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    .contentShape(Rectangle())
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+  }
+
+  private var iconColor: Color {
+    if isDestructive { return .red }
+    return isHovered ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
+  }
+
+  private var textColor: Color {
+    if isDestructive { return .red }
+    return MacDesignTokens.Colors.textPrimary
+  }
+
+  private var backgroundColor: Color {
+    if !isHovered { return .clear }
+    return isDestructive ? Color.red.opacity(0.10) : MacDesignTokens.Colors.selection.opacity(0.75)
   }
 }
 

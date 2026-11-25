@@ -33,6 +33,7 @@ struct BYOKmacApp: App {
         .ignoresSafeArea(edges: .top)
         .background(MacMainWindowConfigurator())
         .macAppTheme(model.themeStore, purchaseManager: purchases)
+        .syncMacApplicationAppearance(themeStore: model.themeStore, purchaseManager: purchases)
         .environment(purchases)
         .environment(proGateCenter)
         .environment(settingsRouter)
@@ -152,6 +153,7 @@ struct BYOKmacApp: App {
     Settings {
       MacSettingsView(model: model, purchaseManager: purchases)
         .macAppTheme(model.themeStore, purchaseManager: purchases)
+        .syncMacApplicationAppearance(themeStore: model.themeStore, purchaseManager: purchases)
         .environment(purchases)
         .environment(proGateCenter)
         .environment(settingsRouter)

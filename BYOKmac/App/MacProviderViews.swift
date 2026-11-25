@@ -69,38 +69,22 @@ struct MacModelCapabilityBadges: View {
   var isManual: Bool = false
   var isHidden: Bool = false
   var isAvailable: Bool = true
-
-  private var capabilities: ResolvedModelCapabilities {
-    ModelCapabilityResolver.resolve(kind: kind, modelID: model.id, model: model)
-  }
-
-  private var contextLabel: String? {
-    guard let context = capabilities.contextWindow ?? model.contextWindow else { return nil }
-    return "\(context.formatted(.number.notation(.compactName))) ctx"
-  }
-
-  private var supportsVision: Bool {
-    capabilities[.imageInput] == .supported || model.inputModalities.contains("image")
-  }
-
-  private var supportsFiles: Bool {
-    capabilities[.fileInput] == .supported || model.inputModalities.contains("file")
-  }
-
-  private var supportsReasoning: Bool {
-    capabilities[.reasoning] == .supported
-  }
-
-  private var supportsTools: Bool {
-    capabilities[.tools] == .supported
-  }
-
-  private var hasAnyBadge: Bool {
-    !isAvailable || contextLabel != nil || supportsVision || supportsFiles || supportsReasoning
-      || supportsTools || isManual || isHidden
-  }
+  var resolvedCapabilities: ResolvedModelCapabilities? = nil
 
   var body: some View {
+    let capabilities = resolvedCapabilities
+      ?? ModelCapabilityResolver.resolve(kind: kind, modelID: model.id, model: model)
+    let contextLabel: String? = (capabilities.contextWindow ?? model.contextWindow).map {
+      "\($0.formatted(.number.notation(.compactName))) ctx"
+    }
+    let supportsVision = capabilities[.imageInput] == .supported || model.inputModalities.contains("image")
+    let supportsFiles = capabilities[.fileInput] == .supported || model.inputModalities.contains("file")
+    let supportsReasoning = capabilities[.reasoning] == .supported
+    let supportsTools = capabilities[.tools] == .supported
+    let hasAnyBadge =
+      !isAvailable || contextLabel != nil || supportsVision || supportsFiles || supportsReasoning
+      || supportsTools || isManual || isHidden
+
     if hasAnyBadge {
       MacBadgeFlowLayout(horizontalSpacing: 5, verticalSpacing: 4) {
         if !isAvailable {
@@ -145,6 +129,965 @@ struct MacModelCapabilityBadges: View {
     .padding(.vertical, 2)
     .background(tint.opacity(0.11), in: Capsule())
     .fixedSize()
+  }
+}
+
+// MARK: - Lightweight Composer Model Popover
+
+nonisolated enum MacComposerModelPickerSupport: Sendable {
+  struct RowItem: Identifiable, Equatable, Sendable {
+    let id: ModelID
+    let displayName: String
+    let subtitleID: String?
+    let searchKey: String
+    let isFavorite: Bool
+    let isManual: Bool
+    let isAvailable: Bool
+    let supportsVision: Bool
+  }
+
+  static func makeRows(from records: [AccountModelRecord]) -> [RowItem] {
+    var rows: [RowItem] = []
+    rows.reserveCapacity(records.count)
+    for record in records {
+      let modelID = record.model.id
+      let rawName = record.model.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+      let displayName = rawName.isEmpty ? modelID.rawValue : rawName
+      let subtitleID =
+        displayName.caseInsensitiveCompare(modelID.rawValue) == .orderedSame
+        ? nil
+        : modelID.rawValue
+      let searchKey = "\(displayName) \(modelID.rawValue)".lowercased()
+      rows.append(
+        RowItem(
+          id: modelID,
+          displayName: displayName,
+          subtitleID: subtitleID,
+          searchKey: searchKey,
+          isFavorite: record.isFavorite,
+          isManual: record.isManual,
+          isAvailable: record.isAvailable,
+          supportsVision: record.model.inputModalities.contains("image")
+        )
+      )
+    }
+    return rows
+  }
+
+  static func filterRows(_ rows: [RowItem], query: String) -> [RowItem] {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !trimmed.isEmpty else { return rows }
+    return rows.filter { $0.searchKey.contains(trimmed) }
+  }
+
+  static func partitionRows(
+    _ rows: [RowItem],
+    hasQuery: Bool
+  ) -> (favorites: [RowItem], others: [RowItem]) {
+    guard !hasQuery else { return ([], rows) }
+    var favorites: [RowItem] = []
+    var others: [RowItem] = []
+    for row in rows {
+      if row.isFavorite {
+        favorites.append(row)
+      } else {
+        others.append(row)
+      }
+    }
+    return (favorites, others)
+  }
+}
+
+struct MacComposerModelPopover: View {
+  @Bindable var providers: MacProviderModel
+  let initialTarget: MacChatTarget?
+  let maxOutputTokens: Int?
+  let manageProviders: () -> Void
+  let onCommit: (MacChatTarget) async -> Bool
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var accountID: ProviderAccountID?
+  @State private var activeAccountID: ProviderAccountID?
+  @State private var activeModelID: ModelID?
+  @State private var reasoning: ReasoningOptions?
+  @State private var searchText = ""
+  @State private var cachedAccounts: [ProviderAccount] = []
+  @State private var cachedRows: [MacComposerModelPickerSupport.RowItem] = []
+  @State private var filteredRows: [MacComposerModelPickerSupport.RowItem] = []
+  @State private var showingManualEntry = false
+  @State private var manualModelDraft = ""
+  @State private var isRefreshing = false
+  @State private var isSaving = false
+  @State private var statusMessage: String?
+  @State private var errorMessage: String?
+  @FocusState private var searchFocused: Bool
+  @FocusState private var manualFieldFocused: Bool
+
+  init(
+    providers: MacProviderModel,
+    initialTarget: MacChatTarget?,
+    maxOutputTokens: Int? = nil,
+    manageProviders: @escaping () -> Void,
+    onCommit: @escaping (MacChatTarget) async -> Bool
+  ) {
+    self.providers = providers
+    self.initialTarget = initialTarget
+    self.maxOutputTokens = maxOutputTokens
+    self.manageProviders = manageProviders
+    self.onCommit = onCommit
+
+    let sortedAccounts = Self.sortedEnabledAccounts(from: providers)
+    let initialAccount = initialTarget.flatMap { target in
+      sortedAccounts.first { $0.id == target.accountID }
+    }
+    let fallbackTarget = providers.preferredTarget()
+    let seedAccountID = initialAccount?.id
+      ?? fallbackTarget?.accountID
+      ?? sortedAccounts.first?.id
+    let seedModelID: ModelID?
+    if initialAccount != nil, let initialTarget {
+      seedModelID = initialTarget.modelID
+    } else if let seedAccountID {
+      seedModelID = providers.usableModelID(for: seedAccountID)
+    } else {
+      seedModelID = nil
+    }
+
+    let initialRows = seedAccountID.map {
+      MacComposerModelPickerSupport.makeRows(from: providers.models(for: $0))
+    } ?? []
+    let control: ModelReasoningControl
+    if let seedAccountID, let seedModelID {
+      control = providers.capabilities(accountID: seedAccountID, modelID: seedModelID).reasoning
+    } else {
+      control = ModelReasoningControl()
+    }
+
+    _accountID = State(initialValue: seedAccountID)
+    _activeAccountID = State(initialValue: initialTarget?.accountID ?? seedAccountID)
+    _activeModelID = State(initialValue: initialTarget?.modelID ?? seedModelID)
+    _reasoning = State(initialValue: control.normalize(initialTarget?.reasoning))
+    _cachedAccounts = State(initialValue: sortedAccounts)
+    _cachedRows = State(initialValue: initialRows)
+    _filteredRows = State(initialValue: initialRows)
+  }
+
+  private static func sortedEnabledAccounts(from providers: MacProviderModel) -> [ProviderAccount] {
+    providers.accounts
+      .filter(\.isEnabled)
+      .sorted { lhs, rhs in
+        let lhsReady = providers.isReady(lhs) && !providers.isProviderRestricted(lhs.id)
+        let rhsReady = providers.isReady(rhs) && !providers.isProviderRestricted(rhs.id)
+        if lhsReady != rhsReady { return lhsReady }
+        let lhsDefault = providers.defaultAccountID == lhs.id
+        let rhsDefault = providers.defaultAccountID == rhs.id
+        if lhsDefault != rhsDefault { return lhsDefault }
+        return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+      }
+  }
+
+  private var selectedAccount: ProviderAccount? {
+    guard let accountID else { return nil }
+    return cachedAccounts.first { $0.id == accountID }
+  }
+
+  private var selectedAccountIsRestricted: Bool {
+    guard let accountID else { return false }
+    return providers.isProviderRestricted(accountID)
+  }
+
+  private var selectedAccountNeedsCredential: Bool {
+    guard let account = selectedAccount else { return false }
+    let definition = providers.provider(for: account.providerID) ?? account.definition
+    return definition.requiresCredential && !providers.hasCredential(account.id)
+  }
+
+  private var canSelectFromCurrentAccount: Bool {
+    selectedAccount != nil && !selectedAccountIsRestricted && !selectedAccountNeedsCredential
+  }
+
+  private var supportsModelDiscovery: Bool {
+    selectedAccount?.definition.modelsPath != nil
+  }
+
+  private var trimmedQuery: String {
+    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var activeCapabilities: ResolvedModelCapabilities? {
+    guard let activeAccountID, let activeModelID else { return nil }
+    return providers.capabilities(accountID: activeAccountID, modelID: activeModelID)
+  }
+
+  private var activeReasoningControl: ModelReasoningControl {
+    activeCapabilities?.reasoning ?? ModelReasoningControl()
+  }
+
+  private func anthropicOutputLimit(for options: ReasoningOptions?) -> Int? {
+    guard let activeAccountID, providers.account(activeAccountID)?.kind == .anthropic else {
+      return nil
+    }
+    let fallback = AnthropicMessagesAdapter.defaultMaxTokens(
+      reasoning: options,
+      capabilities: activeCapabilities
+    )
+    return maxOutputTokens ?? fallback
+  }
+
+  private var reasoningError: String? {
+    activeReasoningControl.budgetValidationMessage(
+      reasoning,
+      outputLimit: anthropicOutputLimit(for: reasoning)
+    )
+  }
+
+  private var catalogSignature: String {
+    let count = accountID.map { providers.models(for: $0).count } ?? 0
+    let refreshStamp = accountID.flatMap { providers.lastModelRefreshAt(for: $0)?.timeIntervalSince1970 } ?? 0
+    return "\(accountID?.rawValue ?? ""):\(count):\(providers.modelCatalogRevision):\(refreshStamp)"
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      if cachedAccounts.count > 1 {
+        providerStrip
+        Divider()
+      } else if let account = selectedAccount {
+        singleProviderHeader(account)
+        Divider()
+      }
+
+      searchBar
+
+      if showingManualEntry {
+        Divider()
+        manualEntryBar
+      }
+
+      if let warning = accountWarningMessage {
+        Divider()
+        warningStrip(warning)
+      }
+
+      Divider()
+
+      modelList
+
+      if accountID == activeAccountID,
+        !activeReasoningControl.choices.isEmpty,
+        activeAccountID != nil,
+        activeModelID != nil
+      {
+        Divider()
+        reasoningFooter
+      }
+
+      Divider()
+
+      bottomFooter
+    }
+    .frame(width: 392, height: 472)
+    .background(MacDesignTokens.Colors.canvas)
+    .onAppear {
+      searchFocused = true
+    }
+    .onChange(of: searchText) { _, newValue in
+      filteredRows = MacComposerModelPickerSupport.filterRows(cachedRows, query: newValue)
+    }
+    .onChange(of: catalogSignature) { _, _ in
+      rebuildAccountRows()
+    }
+  }
+
+  private var providerStrip: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 6) {
+        ForEach(cachedAccounts) { account in
+          let isSelected = account.id == accountID
+          let ready = providers.isReady(account) && !providers.isProviderRestricted(account.id)
+          MacComposerProviderChip(
+            account: account,
+            isSelected: isSelected,
+            isReady: ready
+          ) {
+            selectAccount(account.id)
+          }
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
+    }
+    .background(MacDesignTokens.Colors.surface.opacity(0.6))
+  }
+
+  private func singleProviderHeader(_ account: ProviderAccount) -> some View {
+    let ready = providers.isReady(account) && !providers.isProviderRestricted(account.id)
+    return HStack(spacing: 8) {
+      MacProviderMark(account: account, size: 20, isReady: ready)
+      Text(account.label)
+        .font(.system(size: 12.5, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .lineLimit(1)
+      Spacer(minLength: 6)
+      Text(providerDisplayName(account.kind))
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .background(MacDesignTokens.Colors.surface.opacity(0.6))
+  }
+
+  private var searchBar: some View {
+    HStack(spacing: 6) {
+      HStack(spacing: 6) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        TextField("Search models…", text: $searchText)
+          .textFieldStyle(.plain)
+          .font(.system(size: 12.5))
+          .focused($searchFocused)
+          .onSubmit {
+            if let firstAvailable = filteredRows.first(where: \.isAvailable) {
+              selectModel(firstAvailable.id)
+            }
+          }
+        if !searchText.isEmpty {
+          Button {
+            searchText = ""
+          } label: {
+            Image(systemName: "xmark.circle.fill")
+              .font(.system(size: 12))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Clear search")
+        }
+      }
+      .padding(.horizontal, 8)
+      .frame(height: 28)
+      .background(
+        MacDesignTokens.Colors.surface,
+        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.75)
+      }
+
+      if selectedAccount != nil {
+        Button {
+          toggleManualEntry()
+        } label: {
+          Image(systemName: showingManualEntry ? "xmark" : "plus")
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(
+              showingManualEntry ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
+            )
+        }
+        .buttonStyle(MacIconButtonStyle())
+        .help(showingManualEntry ? "Close custom model ID" : "Enter custom model ID")
+        .accessibilityLabel(showingManualEntry ? "Close custom model ID" : "Enter custom model ID")
+
+        if supportsModelDiscovery {
+          Button {
+            Task { await refreshCurrentAccount() }
+          } label: {
+            if isRefreshing {
+              ProgressView()
+                .controlSize(.small)
+            } else {
+              Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .disabled(isRefreshing || selectedAccountNeedsCredential || selectedAccountIsRestricted)
+          .help("Refresh models from provider")
+          .accessibilityLabel("Refresh models")
+        }
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+  }
+
+  private var manualEntryBar: some View {
+    HStack(spacing: 6) {
+      TextField("Exact model ID…", text: $manualModelDraft)
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: 12))
+        .focused($manualFieldFocused)
+        .onSubmit {
+          commitManualModel()
+        }
+      Button("Use") {
+        commitManualModel()
+      }
+      .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+      .disabled(
+        manualModelDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          || !canSelectFromCurrentAccount
+          || isSaving
+      )
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .background(MacDesignTokens.Colors.surface.opacity(0.45))
+  }
+
+  private var accountWarningMessage: String? {
+    if selectedAccountIsRestricted {
+      return "This restored connection requires BYOK Pro."
+    }
+    if selectedAccountNeedsCredential {
+      return "Add an API key in Providers before selecting a model."
+    }
+    if let errorMessage {
+      return errorMessage
+    }
+    return nil
+  }
+
+  private func warningStrip(_ message: String) -> some View {
+    HStack(spacing: 8) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.orange)
+      Text(message)
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .lineLimit(2)
+      Spacer(minLength: 4)
+      if selectedAccountNeedsCredential || selectedAccountIsRestricted {
+        Button("Providers…") {
+          manageProviders()
+        }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .background(Color.orange.opacity(0.10))
+  }
+
+  @ViewBuilder
+  private var modelList: some View {
+    if selectedAccount == nil {
+      ContentUnavailableView {
+        Label("No Enabled Providers", systemImage: "sparkles")
+      } description: {
+        Text("Add or enable a provider connection to pick a model.")
+      } actions: {
+        Button("Manage Providers…", action: manageProviders)
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if filteredRows.isEmpty {
+      ContentUnavailableView {
+        Label(
+          trimmedQuery.isEmpty ? "No Models" : "No Matching Models",
+          systemImage: trimmedQuery.isEmpty ? "cube" : "magnifyingglass"
+        )
+      } description: {
+        Text(
+          trimmedQuery.isEmpty
+            ? (supportsModelDiscovery
+              ? "Refresh discovery or add a custom model ID."
+              : "Add a custom model ID to continue.")
+            : "No models match \"\(trimmedQuery)\"."
+        )
+      } actions: {
+        if !trimmedQuery.isEmpty, canSelectFromCurrentAccount {
+          Button("Use \"\(trimmedQuery)\"") {
+            manualModelDraft = trimmedQuery
+            commitManualModel()
+          }
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+        } else if supportsModelDiscovery, canSelectFromCurrentAccount {
+          Button("Refresh Models") {
+            Task { await refreshCurrentAccount() }
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else {
+      let partitioned = MacComposerModelPickerSupport.partitionRows(
+        filteredRows,
+        hasQuery: !trimmedQuery.isEmpty
+      )
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 2) {
+          if !partitioned.favorites.isEmpty {
+            sectionHeader("Favorites")
+            ForEach(partitioned.favorites) { row in
+              modelRowView(row)
+            }
+            if !partitioned.others.isEmpty {
+              sectionHeader("All Models")
+                .padding(.top, 6)
+            }
+          }
+
+          ForEach(partitioned.others) { row in
+            modelRowView(row)
+          }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
+
+  private func sectionHeader(_ title: String) -> some View {
+    Text(title.uppercased())
+      .font(.system(size: 10, weight: .semibold))
+      .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      .tracking(0.4)
+      .padding(.horizontal, 8)
+      .padding(.top, 2)
+      .padding(.bottom, 2)
+  }
+
+  private func modelRowView(_ row: MacComposerModelPickerSupport.RowItem) -> some View {
+    let isCurrent = accountID == activeAccountID && row.id == activeModelID
+    return MacComposerModelRow(
+      row: row,
+      isSelected: isCurrent,
+      isDisabled: !row.isAvailable || !canSelectFromCurrentAccount || isSaving
+    ) {
+      selectModel(row.id)
+    }
+  }
+
+  private var reasoningFooter: some View {
+    let control = activeReasoningControl
+    let currentChoice = control.choice(for: reasoning)
+    let showsBudget =
+      currentChoice == .budget
+      || (control.combinesEffortAndBudget == true && reasoning != nil && reasoning?.enabled != false)
+
+    return VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        Label("Reasoning", systemImage: "brain")
+          .font(.system(size: 11.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+
+        Spacer(minLength: 6)
+
+        if control.choices.count <= 5 {
+          HStack(spacing: 4) {
+            ForEach(control.choices, id: \.self) { choice in
+              MacComposerReasoningChip(
+                title: choice.title,
+                isSelected: currentChoice == choice
+              ) {
+                applyReasoningChoice(choice)
+              }
+            }
+          }
+        } else {
+          Picker("Reasoning", selection: Binding(
+            get: { currentChoice },
+            set: { applyReasoningChoice($0) }
+          )) {
+            ForEach(control.choices, id: \.self) { choice in
+              Text(choice.title).tag(choice)
+            }
+          }
+          .labelsHidden()
+          .controlSize(.small)
+        }
+      }
+
+      if showsBudget, let budget = control.budget {
+        HStack(spacing: 6) {
+          Text("Budget")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+
+          TextField("Tokens", value: Binding(
+            get: { reasoning?.maxTokens ?? budget.defaultTokens },
+            set: { value in
+              var options = reasoning ?? ReasoningOptions(enabled: true)
+              options.maxTokens = value
+              reasoning = options
+            }
+          ), format: .number)
+          .textFieldStyle(.roundedBorder)
+          .controlSize(.small)
+          .frame(width: 90)
+          .onSubmit {
+            applyCurrentReasoning()
+          }
+
+          Button("Apply") {
+            applyCurrentReasoning()
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .disabled(reasoningError != nil || isSaving)
+
+          Spacer(minLength: 0)
+        }
+      }
+
+      if let reasoningError {
+        Text(reasoningError)
+          .font(.caption2)
+          .foregroundStyle(.red)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .background(MacDesignTokens.Colors.surface.opacity(0.45))
+  }
+
+  private var bottomFooter: some View {
+    HStack(spacing: 8) {
+      if isSaving {
+        ProgressView()
+          .controlSize(.mini)
+        Text("Applying…")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      } else if let statusMessage {
+        Text(statusMessage)
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .lineLimit(1)
+      } else {
+        Text(
+          trimmedQuery.isEmpty
+            ? "\(cachedRows.count) \(cachedRows.count == 1 ? "model" : "models")"
+            : "\(filteredRows.count) of \(cachedRows.count)"
+        )
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+
+      Spacer(minLength: 8)
+
+      Button("Manage Providers…") {
+        manageProviders()
+      }
+      .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+    }
+    .padding(.horizontal, 10)
+    .frame(height: 36)
+    .background(MacDesignTokens.Colors.surface.opacity(0.6))
+  }
+
+  private func selectAccount(_ id: ProviderAccountID) {
+    guard id != accountID else { return }
+    accountID = id
+    statusMessage = nil
+    errorMessage = nil
+    showingManualEntry = false
+    rebuildAccountRows()
+  }
+
+  private func rebuildAccountRows() {
+    cachedAccounts = Self.sortedEnabledAccounts(from: providers)
+    guard let accountID else {
+      cachedRows = []
+      filteredRows = []
+      return
+    }
+    let rows = MacComposerModelPickerSupport.makeRows(from: providers.models(for: accountID))
+    cachedRows = rows
+    filteredRows = MacComposerModelPickerSupport.filterRows(rows, query: searchText)
+  }
+
+  private func toggleManualEntry() {
+    showingManualEntry.toggle()
+    if showingManualEntry {
+      manualModelDraft = filteredRows.isEmpty ? trimmedQuery : ""
+      manualFieldFocused = true
+    } else {
+      manualModelDraft = ""
+      searchFocused = true
+    }
+  }
+
+  private func selectModel(_ modelID: ModelID) {
+    guard let accountID, canSelectFromCurrentAccount, !isSaving else { return }
+    let control = providers.capabilities(accountID: accountID, modelID: modelID).reasoning
+    let normalized = control.normalize(reasoning)
+    let target = MacChatTarget(
+      accountID: accountID,
+      modelID: modelID,
+      reasoning: normalized
+    )
+    isSaving = true
+    errorMessage = nil
+    Task { @MainActor in
+      defer { isSaving = false }
+      if await onCommit(target) {
+        activeAccountID = accountID
+        activeModelID = modelID
+        reasoning = normalized
+        dismiss()
+      } else {
+        errorMessage = "Could not switch to this model."
+      }
+    }
+  }
+
+  private func commitManualModel() {
+    let trimmed = manualModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, let accountID, canSelectFromCurrentAccount, !isSaving else { return }
+    let id = ModelID(rawValue: trimmed)
+    let control = providers.capabilities(accountID: accountID, modelID: id).reasoning
+    let normalized = control.normalize(reasoning)
+    let target = MacChatTarget(accountID: accountID, modelID: id, reasoning: normalized)
+    isSaving = true
+    errorMessage = nil
+    Task { @MainActor in
+      defer { isSaving = false }
+      do {
+        try await providers.ensureSelectableModel(id, for: accountID)
+        if await onCommit(target) {
+          activeAccountID = accountID
+          activeModelID = id
+          reasoning = normalized
+          manualModelDraft = ""
+          showingManualEntry = false
+          dismiss()
+        } else {
+          errorMessage = "Could not switch to \"\(trimmed)\"."
+        }
+      } catch {
+        errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func applyReasoningChoice(_ choice: ReasoningChoice) {
+    let updated = activeReasoningControl.options(for: choice, preserving: reasoning)
+    reasoning = updated
+    if choice != .budget {
+      applyCurrentReasoning()
+    }
+  }
+
+  private func applyCurrentReasoning() {
+    guard let activeAccountID, let activeModelID, reasoningError == nil, !isSaving else { return }
+    let normalized = activeReasoningControl.normalize(reasoning)
+    let target = MacChatTarget(
+      accountID: activeAccountID,
+      modelID: activeModelID,
+      reasoning: normalized
+    )
+    isSaving = true
+    errorMessage = nil
+    Task { @MainActor in
+      defer { isSaving = false }
+      if await onCommit(target) {
+        reasoning = normalized
+        statusMessage = "Reasoning updated"
+      } else {
+        errorMessage = "Could not update reasoning."
+      }
+    }
+  }
+
+  private func refreshCurrentAccount() async {
+    guard let requestedAccount = accountID, !isRefreshing else { return }
+    isRefreshing = true
+    statusMessage = nil
+    errorMessage = nil
+    defer { isRefreshing = false }
+    do {
+      let result = try await providers.refreshModelsIfNeeded(
+        accountID: requestedAccount,
+        force: true
+      )
+      guard accountID == requestedAccount else { return }
+      rebuildAccountRows()
+      switch result {
+      case .refreshed:
+        statusMessage = "Models updated"
+      case .unsupported:
+        statusMessage = "Discovery not supported"
+      case .current, .throttled:
+        statusMessage = "Up to date"
+      }
+    } catch {
+      guard accountID == requestedAccount else { return }
+      errorMessage = error.localizedDescription
+    }
+  }
+}
+
+private struct MacComposerProviderChip: View {
+  let account: ProviderAccount
+  let isSelected: Bool
+  let isReady: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 5) {
+        MacProviderMark(account: account, size: 16, isReady: isReady)
+        Text(account.label)
+          .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+          .foregroundStyle(
+            isSelected ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
+          .lineLimit(1)
+        if !isReady {
+          Circle()
+            .fill(Color.orange)
+            .frame(width: 5, height: 5)
+        }
+      }
+      .padding(.horizontal, 8)
+      .frame(height: 26)
+      .background(
+        isSelected
+          ? MacDesignTokens.Colors.accentSoft
+          : Color.primary.opacity(isHovered ? 0.055 : 0.025),
+        in: Capsule()
+      )
+      .overlay {
+        Capsule()
+          .stroke(
+            isSelected
+              ? MacDesignTokens.Colors.accent.opacity(0.6)
+              : MacDesignTokens.Colors.separator.opacity(0.75),
+            lineWidth: 0.75
+          )
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+  }
+}
+
+private struct MacComposerModelRow: View {
+  let row: MacComposerModelPickerSupport.RowItem
+  let isSelected: Bool
+  let isDisabled: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 1.5) {
+          HStack(spacing: 5) {
+            Text(row.displayName)
+              .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .lineLimit(1)
+
+            if row.isFavorite {
+              Image(systemName: "star.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(MacDesignTokens.Colors.accent)
+            }
+
+            if row.isManual {
+              Text("Custom")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(MacDesignTokens.Colors.accent)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(MacDesignTokens.Colors.accentSoft, in: Capsule())
+            }
+          }
+
+          if let subtitleID = row.subtitleID {
+            Text(subtitleID)
+              .font(.system(size: 10.5).monospaced())
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(1)
+              .truncationMode(.middle)
+          }
+        }
+
+        Spacer(minLength: 6)
+
+        if row.supportsVision {
+          Image(systemName: "eye")
+            .font(.system(size: 10.5))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.8))
+            .help("Supports image input")
+        }
+
+        if isSelected {
+          Image(systemName: "checkmark")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        } else if !row.isAvailable {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 10.5))
+            .foregroundStyle(.orange)
+        }
+      }
+      .padding(.horizontal, 9)
+      .padding(.vertical, 6)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(rowBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(isDisabled)
+    .opacity(row.isAvailable ? 1 : 0.5)
+    .onHover { isHovered = $0 }
+  }
+
+  private var rowBackground: Color {
+    if isSelected { return MacDesignTokens.Colors.selection }
+    if isHovered && !isDisabled { return Color.primary.opacity(0.05) }
+    return .clear
+  }
+}
+
+private struct MacComposerReasoningChip: View {
+  let title: String
+  let isSelected: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      Text(title)
+        .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+        .foregroundStyle(
+          isSelected ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
+        )
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(
+          isSelected
+            ? MacDesignTokens.Colors.accentSoft
+            : Color.primary.opacity(isHovered ? 0.06 : 0.03),
+          in: Capsule()
+        )
+        .overlay {
+          Capsule()
+            .stroke(
+              isSelected
+                ? MacDesignTokens.Colors.accent.opacity(0.55)
+                : MacDesignTokens.Colors.separator.opacity(0.65),
+              lineWidth: 0.75
+            )
+        }
+        .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
   }
 }
 

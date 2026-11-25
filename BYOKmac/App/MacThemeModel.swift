@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import MacAppFoundation
+import SwiftUI
 
 @MainActor
 enum MacThemeFoundation {
@@ -64,5 +66,71 @@ enum MacThemeFoundation {
     if let migratedID {
       defaults.set(migratedID, forKey: storageKey)
     }
+  }
+}
+
+nonisolated enum MacThemeAppearancePolicy: Sendable {
+  static func appearanceName(
+    effectiveThemeID: MacAppThemeID,
+    preferredColorScheme: ColorScheme?
+  ) -> NSAppearance.Name? {
+    guard effectiveThemeID != .system else { return nil }
+    switch preferredColorScheme {
+    case .dark:
+      return .darkAqua
+    case .light:
+      return .aqua
+    case nil:
+      return nil
+    @unknown default:
+      return nil
+    }
+  }
+}
+
+@MainActor
+private struct MacApplicationAppearanceSyncModifier: ViewModifier {
+  let themeStore: MacAppThemeStore
+  let purchaseManager: PurchaseManager
+
+  private var desiredAppearanceName: NSAppearance.Name? {
+    let hasPro = purchaseManager.hasPro
+    let effectiveID = themeStore.effectiveThemeID(hasPro: hasPro)
+    let theme = themeStore.currentTheme(hasPro: hasPro)
+    return MacThemeAppearancePolicy.appearanceName(
+      effectiveThemeID: effectiveID,
+      preferredColorScheme: theme.preferredColorScheme
+    )
+  }
+
+  func body(content: Content) -> some View {
+    content
+      .onAppear {
+        applyAppearance(desiredAppearanceName)
+      }
+      .onChange(of: desiredAppearanceName) { _, newValue in
+        applyAppearance(newValue)
+      }
+  }
+
+  private func applyAppearance(_ name: NSAppearance.Name?) {
+    if NSApplication.shared.appearance?.name != name {
+      NSApplication.shared.appearance = name.flatMap { NSAppearance(named: $0) }
+    }
+  }
+}
+
+extension View {
+  @MainActor
+  func syncMacApplicationAppearance(
+    themeStore: MacAppThemeStore,
+    purchaseManager: PurchaseManager
+  ) -> some View {
+    modifier(
+      MacApplicationAppearanceSyncModifier(
+        themeStore: themeStore,
+        purchaseManager: purchaseManager
+      )
+    )
   }
 }

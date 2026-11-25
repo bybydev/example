@@ -18,13 +18,11 @@ struct MacShellView: View {
   @State private var sidebarVisible = true
   @State private var navigation = MacChatNavigation()
   @State private var didSelectInitialChat = false
-  @State private var targetPickerConversationID: ConversationID?
   @State private var toolsConversationID: ConversationID?
   @State private var chatSettingsConversationID: ConversationID?
   @State private var searchText = ""
   @State private var pendingSearchFocus = false
   @State private var composerFocusRequestID = 0
-  @State private var showingTargetPicker = false
   @State private var showingChatTools = false
   @State private var showingChatSettings = false
   @State private var renameTarget: ChatConversation?
@@ -100,10 +98,6 @@ struct MacShellView: View {
         isImportingAttachments: (importingAttachmentCountsByKey[attachmentKey(paneConversationID)] ?? 0) > 0,
         sidebarVisible: sidebarVisible,
         toggleSidebar: { sidebarVisible.toggle() },
-        chooseTarget: {
-          targetPickerConversationID = paneConversationID
-          showingTargetPicker = true
-        },
         manageProviders: { utilitySheets.present(.providers) },
         configureTools: {
           toolsConversationID = paneConversationID
@@ -281,14 +275,6 @@ struct MacShellView: View {
         activeUpsellFeature = pending
       }
     }
-    .onChange(of: showingTargetPicker) { _, isPresented in
-      guard !isPresented, let pending = pendingUpsellFeature else { return }
-      pendingUpsellFeature = nil
-      Task { @MainActor in
-        try? await Task.sleep(for: .milliseconds(250))
-        activeUpsellFeature = pending
-      }
-    }
     .onReceive(NotificationCenter.default.publisher(for: .macOpenConversationFromLibrary)) { notification in
       guard let rawValue = notification.object as? String else { return }
       let conversationID = ConversationID(rawValue: rawValue)
@@ -303,15 +289,6 @@ struct MacShellView: View {
         request.conversationID == navigation.requestedID
       else { return }
       navigation.navigateToMessage(request)
-    }
-    .sheet(isPresented: $showingTargetPicker) {
-      MacTargetPickerView(
-        providers: providers,
-        initialTarget: chats.target(for: targetPickerConversationID),
-        maxOutputTokens: chats.effectiveOptions(for: targetPickerConversationID).maxOutputTokens
-      ) { target in
-        await chats.applyTarget(target, conversationID: targetPickerConversationID)
-      }
     }
     .sheet(isPresented: $showingChatSettings) {
       let project: ChatProject? = if let chatSettingsConversationID {
@@ -708,9 +685,6 @@ struct MacShellView: View {
     if utilitySheets.destination != nil {
       pendingUpsellFeature = feature
       utilitySheets.dismiss()
-    } else if showingTargetPicker {
-      pendingUpsellFeature = feature
-      showingTargetPicker = false
     } else {
       activeUpsellFeature = feature
     }

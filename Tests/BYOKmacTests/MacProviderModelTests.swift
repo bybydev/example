@@ -941,6 +941,79 @@ struct MacProviderModelTests {
     #expect(model.errorMessage != nil)
     #expect(model.models(for: accountID).contains { $0.model.id == "discovered-default" })
   }
+
+  @Test("Composer model popover support pre-indexes rows, filters quickly, and partitions favorites")
+  func composerModelPickerSupportIndexingAndFiltering() {
+    let accountID = ProviderAccountID(rawValue: "acct-anthropic")
+    let records = [
+      AccountModelRecord(
+        accountID: accountID,
+        model: ProviderModel(
+          providerID: BuiltInProviders.anthropicID,
+          id: "claude-sonnet-4-5",
+          displayName: "Claude Sonnet 4.5",
+          inputModalities: ["text", "image"]
+        ),
+        isFavorite: true,
+        isHidden: false,
+        isManual: false,
+        isAvailable: true
+      ),
+      AccountModelRecord(
+        accountID: accountID,
+        model: ProviderModel(
+          providerID: BuiltInProviders.anthropicID,
+          id: "custom-model",
+          displayName: "custom-model",
+          inputModalities: ["text"]
+        ),
+        isFavorite: false,
+        isHidden: false,
+        isManual: true,
+        isAvailable: true
+      ),
+      AccountModelRecord(
+        accountID: accountID,
+        model: ProviderModel(
+          providerID: BuiltInProviders.anthropicID,
+          id: "retired-model",
+          displayName: "Retired Model",
+          inputModalities: ["text"]
+        ),
+        isFavorite: false,
+        isHidden: false,
+        isManual: false,
+        isAvailable: false
+      ),
+    ]
+
+    let rows = MacComposerModelPickerSupport.makeRows(from: records)
+    #expect(rows.count == 3)
+    #expect(rows[0].subtitleID == "claude-sonnet-4-5")
+    #expect(rows[0].supportsVision)
+    #expect(rows[1].subtitleID == nil)
+    #expect(!rows[1].supportsVision)
+    #expect(rows[1].isManual)
+    #expect(!rows[2].isAvailable)
+
+    let partitionedNoQuery = MacComposerModelPickerSupport.partitionRows(rows, hasQuery: false)
+    #expect(partitionedNoQuery.favorites.map(\.id) == ["claude-sonnet-4-5"])
+    #expect(partitionedNoQuery.others.map(\.id) == ["custom-model", "retired-model"])
+
+    let partitionedWithQuery = MacComposerModelPickerSupport.partitionRows(rows, hasQuery: true)
+    #expect(partitionedWithQuery.favorites.isEmpty)
+    #expect(partitionedWithQuery.others.count == 3)
+
+    #expect(
+      MacComposerModelPickerSupport.filterRows(rows, query: "  SONNET ").map(\.id)
+        == ["claude-sonnet-4-5"]
+    )
+    #expect(
+      MacComposerModelPickerSupport.filterRows(rows, query: "custom").map(\.id)
+        == ["custom-model"]
+    )
+    #expect(MacComposerModelPickerSupport.filterRows(rows, query: "   ").count == 3)
+  }
 }
 
 @MainActor

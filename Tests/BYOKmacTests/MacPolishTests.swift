@@ -1,5 +1,8 @@
+import AppKit
 import BYOKchatProviderCore
 import Foundation
+import MacAppFoundation
+import SwiftUI
 import Testing
 
 @testable import BYOKmac
@@ -348,5 +351,80 @@ struct MacPolishTests {
     #expect(serverPartition.active.map(\.id) == ["mcp-1"])
     #expect(serverPartition.disabled.map(\.id) == ["mcp-2"])
     #expect(serverPartition.showsSectionHeaders)
+  }
+
+  // MARK: - Theme Appearance Policy
+
+  @Test("Theme appearance policy maps light and dark themes to NSAppearance and leaves system nil")
+  func themeAppearancePolicyMapping() {
+    #expect(
+      MacThemeAppearancePolicy.appearanceName(
+        effectiveThemeID: .system,
+        preferredColorScheme: nil
+      ) == nil
+    )
+    #expect(
+      MacThemeAppearancePolicy.appearanceName(
+        effectiveThemeID: .system,
+        preferredColorScheme: .dark
+      ) == nil
+    )
+    #expect(
+      MacThemeAppearancePolicy.appearanceName(
+        effectiveThemeID: .githubDarkDimmed,
+        preferredColorScheme: .dark
+      ) == .darkAqua
+    )
+    #expect(
+      MacThemeAppearancePolicy.appearanceName(
+        effectiveThemeID: .githubLight,
+        preferredColorScheme: .light
+      ) == .aqua
+    )
+    #expect(
+      MacThemeAppearancePolicy.appearanceName(
+        effectiveThemeID: .githubLight,
+        preferredColorScheme: nil
+      ) == nil
+    )
+  }
+
+  // MARK: - Message Export Filename
+
+  @Test("Message export filenames sanitize conversation titles and fall back cleanly")
+  func messageExportFilenameFormatting() {
+    let assistantMessage = ChatMessage(role: .assistant, content: "Hello")
+    let userMessage = ChatMessage(role: .user, content: "Hi")
+
+    #expect(
+      MacMessageExportSupport.filename(
+        for: assistantMessage,
+        conversationTitle: "Swift 6 Concurrency: Notes!"
+      ) == "Swift-6-Concurrency-Notes-response.md"
+    )
+    #expect(
+      MacMessageExportSupport.filename(
+        for: userMessage,
+        conversationTitle: "Swift 6 Concurrency: Notes!"
+      ) == "Swift-6-Concurrency-Notes-message.md"
+    )
+    #expect(
+      MacMessageExportSupport.filename(
+        for: assistantMessage,
+        conversationTitle: "New Chat"
+      ) == "assistant-response.md"
+    )
+    #expect(
+      MacMessageExportSupport.filename(
+        for: userMessage,
+        conversationTitle: "   "
+      ) == "message.md"
+    )
+    #expect(
+      MacMessageExportSupport.filename(
+        for: assistantMessage,
+        conversationTitle: nil
+      ) == "assistant-response.md"
+    )
   }
 }

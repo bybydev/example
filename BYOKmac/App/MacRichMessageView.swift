@@ -17,6 +17,7 @@ struct MacRichMessageView: View {
   let onRequestRegenerate: () -> Void
 
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+  @Environment(\.macToastCenter) private var toastCenter
   @Environment(MacWorkspaceModel.self) private var workspace
   @State private var retainedLiveRendering: LiveRendering?
   @State private var copied = false
@@ -276,7 +277,11 @@ struct MacRichMessageView: View {
               createdAt: message.createdAt,
               conversationTitle: chats.summary(conversationID)?.title
             )
-            if !ok, let error = workspace.consumeErrorMessage() { chats.errorMessage = error }
+            if ok {
+              toastCenter?.success(workspace.statusMessage ?? "Saved response to Library")
+            } else if let error = workspace.consumeErrorMessage() {
+              chats.errorMessage = error
+            }
           }
         }
       }
@@ -291,7 +296,11 @@ struct MacRichMessageView: View {
                   conversationID: conversationID,
                   messageID: message.id
                 )
-                if !ok, let error = workspace.consumeErrorMessage() { chats.errorMessage = error }
+                if ok {
+                  toastCenter?.success(workspace.statusMessage ?? "Saved \"\(attachment.filename)\" to Library")
+                } else if let error = workspace.consumeErrorMessage() {
+                  chats.errorMessage = error
+                }
               }
             }
           }
@@ -436,16 +445,33 @@ struct MacRichMessageView: View {
   }
 
   private func exportMessage() {
-    let panel = NSSavePanel()
-    panel.allowedContentTypes = [.markdown, .plainText]
-    panel.canCreateDirectories = true
-    panel.nameFieldStringValue = message.role == .assistant ? "assistant-response.md" : "message.md"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    do {
-      try message.content.write(to: url, atomically: true, encoding: .utf8)
-    } catch {
-      MacAppAnalytics.reportError("message_export_failed", component: "chat")
-      chats.errorMessage = error.localizedDescription
+    let content = message.content
+    let suggestedName = MacMessageExportSupport.filename(
+      for: message,
+      conversationTitle: chats.summary(conversationID)?.title
+    )
+    Task { @MainActor in
+      let panel = NSSavePanel()
+      panel.allowedContentTypes = [.markdown, .plainText]
+      panel.canCreateDirectories = true
+      panel.isExtensionHidden = false
+      panel.nameFieldStringValue = suggestedName
+
+      let response: NSApplication.ModalResponse
+      if let window = NSApp.keyWindow {
+        response = await panel.beginSheetModal(for: window)
+      } else {
+        response = panel.runModal()
+      }
+      guard response == .OK, let url = panel.url else { return }
+
+      do {
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        toastCenter?.success("Exported \"\(url.lastPathComponent)\"")
+      } catch {
+        MacAppAnalytics.reportError("message_export_failed", component: "chat")
+        chats.errorMessage = error.localizedDescription
+      }
     }
   }
 }
@@ -684,13 +710,14 @@ struct MacEditAndResendView: View {
 
       TextEditor(text: $text)
         .font(.system(size: 14))
+        .scrollContentBackground(.hidden)
         .focused($focused)
         .frame(minHeight: 180)
         .padding(6)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+        .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
         .overlay {
           RoundedRectangle(cornerRadius: 8)
-            .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 1)
         }
 
       HStack(spacing: 10) {
@@ -744,13 +771,13 @@ struct MacEditAndResendView: View {
             dismiss()
             manageProviders()
           }
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         } else if let chooseTarget {
           Button("Switch Model") {
             dismiss()
             chooseTarget()
           }
-          .controlSize(.small)
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         }
       }
     }
