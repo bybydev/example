@@ -286,9 +286,18 @@ final class MacWorkspaceModel {
     await assignConversation(conversationID, to: nil)
   }
 
+  func consumeErrorMessage() -> String? {
+    let message = errorMessage
+    errorMessage = nil
+    return message
+  }
+
   func addLibraryAttachments(_ attachments: [ChatAttachment]) async -> Bool {
     guard !attachments.isEmpty else { return true }
-    return await performResult("Added to Library", referencesChanged: true) {
+    let label = attachments.count == 1
+      ? "Added to Library"
+      : "Added \(attachments.count) items to Library"
+    return await performResult(label, referencesChanged: true) {
       let existingIDs = Set(await libraryStore.entries().map(\.id))
       let savedEntries = try await libraryStore.addAttachments(attachments, source: .manual)
       for entry in savedEntries where !existingIDs.contains(entry.id) {
@@ -302,7 +311,7 @@ final class MacWorkspaceModel {
     conversationID: ConversationID,
     messageID: ChatMessageID
   ) async -> Bool {
-    return await performResult("Saved to Library", referencesChanged: true) {
+    let didAdd = await performReturning(nil, referencesChanged: true) {
       let existingIDs = Set(await libraryStore.entries().map(\.id))
       let entry = try await libraryStore.ensureListed(
         fileID: attachment.id,
@@ -311,37 +320,100 @@ final class MacWorkspaceModel {
         byteCount: attachment.byteCount,
         source: .chat(conversationID: conversationID, messageID: messageID)
       )
-      if !existingIDs.contains(entry.id) {
+      let added = !existingIDs.contains(entry.id)
+      if added {
         MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
       }
+      return added
     }
+    guard let didAdd else { return false }
+    statusMessage = didAdd ? "Saved to Library" : "Already in Library"
+    return true
+  }
+
+  func saveProjectFileToLibrary(
+    _ file: ProjectFile,
+    projectID: ProjectID
+  ) async -> Bool {
+    let didAdd = await performReturning(nil, referencesChanged: true) {
+      let existingIDs = Set(await libraryStore.entries().map(\.id))
+      let entry = try await libraryStore.ensureListed(
+        fileID: file.id,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        byteCount: file.byteCount,
+        source: .project(projectID)
+      )
+      let added = !existingIDs.contains(entry.id)
+      if added {
+        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+      }
+      return added
+    }
+    guard let didAdd else { return false }
+    statusMessage = didAdd ? "Saved to Library" : "Already in Library"
+    return true
   }
 
   func saveResponseToLibrary(
     _ content: String,
     conversationID: ConversationID,
     messageID: ChatMessageID,
-    createdAt: Date
+    createdAt: Date,
+    conversationTitle: String? = nil
   ) async -> Bool {
     let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return false }
 
-    let parts = Calendar.current.dateComponents([.year, .month, .day], from: createdAt)
-    let date = String(
-      format: "%04d-%02d-%02d",
-      parts.year ?? 0,
-      parts.month ?? 0,
-      parts.day ?? 0
+    let filename = Self.responseFilename(
+      createdAt: createdAt,
+      conversationTitle: conversationTitle
     )
     return await performResult("Saved to Library", referencesChanged: true) {
       let entry = try await libraryStore.add(
-        filename: "Response-\(date).md",
+        filename: filename,
         mimeType: "text/markdown",
         data: Data(trimmed.utf8),
         source: .chat(conversationID: conversationID, messageID: messageID)
       )
       MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
     }
+  }
+
+  static func responseFilename(
+    createdAt: Date,
+    conversationTitle: String? = nil
+  ) -> String {
+    let parts = Calendar.current.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second],
+      from: createdAt
+    )
+    let stamp = String(
+      format: "%04d-%02d-%02d-%02d%02d%02d",
+      parts.year ?? 0,
+      parts.month ?? 0,
+      parts.day ?? 0,
+      parts.hour ?? 0,
+      parts.minute ?? 0,
+      parts.second ?? 0
+    )
+    if let title = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !title.isEmpty,
+      title.caseInsensitiveCompare("New Chat") != .orderedSame
+    {
+      let sanitized = title
+        .replacingOccurrences(of: "/", with: "-")
+        .replacingOccurrences(of: ":", with: "-")
+        .replacingOccurrences(of: "\0", with: "")
+        .components(separatedBy: .whitespacesAndNewlines)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+      let stem = String(sanitized.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+      if !stem.isEmpty && stem != "." && stem != ".." {
+        return "\(stem)-\(stamp).md"
+      }
+    }
+    return "Response-\(stamp).md"
   }
 
   @discardableResult
@@ -364,14 +436,34 @@ final class MacWorkspaceModel {
     }
   }
 
+  @discardableResult
+  func saveLibraryAttachments(
+    _ attachments: [ChatAttachment],
+    source: LibraryEntrySource,
+    successMessage: String? = "Saved to Library"
+  ) async -> [LibraryEntry]? {
+    guard !attachments.isEmpty else { return [] }
+    return await performReturning(successMessage, referencesChanged: true) {
+      let savedEntries = try await libraryStore.addAttachments(attachments, source: source)
+      for entry in savedEntries {
+        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+      }
+      return savedEntries
+    }
+  }
+
   func renameLibraryEntry(_ id: LibraryEntryID, filename: String) async -> Bool {
-    await performResult(nil) {
+    await performResult("Renamed library item") {
       try await libraryStore.rename(id, filename: filename)
     }
   }
 
   func deleteLibraryEntries(_ ids: Set<LibraryEntryID>) async -> Bool {
-    await performResult(nil, referencesChanged: true) {
+    guard !ids.isEmpty else { return true }
+    let label = ids.count == 1
+      ? "Deleted 1 item from Library"
+      : "Deleted \(ids.count) items from Library"
+    return await performResult(label, referencesChanged: true) {
       try await libraryStore.deleteEntries(ids)
     }
   }

@@ -1305,17 +1305,14 @@ private struct MacTranscriptView: View {
         },
         saveToLibrary: (conversationID != nil && !isStreamingOwner)
           ? {
-            guard let conversationID else { return }
-            Task { @MainActor in
-              let ok = await workspace.saveStoredAttachmentToLibrary(
-                attachment,
-                conversationID: conversationID,
-                messageID: owner.id
-              )
-              if !ok, let error = workspace.errorMessage {
-                chats.errorMessage = error
-              }
-            }
+            guard let conversationID else { return nil }
+            let ok = await workspace.saveStoredAttachmentToLibrary(
+              attachment,
+              conversationID: conversationID,
+              messageID: owner.id
+            )
+            if ok { return nil }
+            return workspace.consumeErrorMessage() ?? "Could not save attachment to Library."
           }
           : nil
       )

@@ -136,7 +136,15 @@ enum MacAttachmentImporter {
       if access { url.stopAccessingSecurityScopedResource() }
     }
 
-    let values = try url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
+    let values = try url.resourceValues(
+      forKeys: [.contentTypeKey, .fileSizeKey, .isDirectoryKey, .isRegularFileKey]
+    )
+    if values.isDirectory == true {
+      throw ProviderError.invalidRequest("\(url.lastPathComponent) is a folder and cannot be attached.")
+    }
+    if values.isRegularFile == false {
+      throw ProviderError.invalidRequest("\(url.lastPathComponent) is not a readable file.")
+    }
     if let fileSize = values.fileSize, fileSize > maximumFileBytes {
       throw ProviderError.invalidRequest("\(url.lastPathComponent) is larger than 20 MB.")
     }
@@ -638,13 +646,16 @@ private struct MacAttachmentTile: View {
 struct MacAttachmentPreviewSheet: View {
   let attachment: ChatAttachment
   let loadData: (String) async -> Data?
-  var saveToLibrary: (() -> Void)? = nil
+  var saveToLibrary: (() async -> String?)? = nil
 
   @Environment(\.dismiss) private var dismiss
   @State private var loadedImage: NSImage?
   @State private var quickLookURL: URL?
   @State private var tempDirectory: URL?
   @State private var errorMessage: String?
+  @State private var saveErrorMessage: String?
+  @State private var isSavingToLibrary = false
+  @State private var savedToLibrary = false
   @State private var isLoading = true
   @State private var zoomScale: CGFloat = 1.0
 
@@ -665,6 +676,17 @@ struct MacAttachmentPreviewSheet: View {
     }
     .onDisappear {
       cleanupTempDirectory()
+    }
+    .alert(
+      "Library Error",
+      isPresented: Binding(
+        get: { saveErrorMessage != nil },
+        set: { if !$0 { saveErrorMessage = nil } }
+      )
+    ) {
+      Button("OK", role: .cancel) { saveErrorMessage = nil }
+    } message: {
+      Text(saveErrorMessage ?? "Unknown error")
     }
   }
 
@@ -727,8 +749,33 @@ struct MacAttachmentPreviewSheet: View {
       }
 
       if let saveToLibrary {
-        Button("Save to Library", systemImage: "books.vertical", action: saveToLibrary)
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        Button {
+          guard !isSavingToLibrary else { return }
+          isSavingToLibrary = true
+          Task { @MainActor in
+            defer { isSavingToLibrary = false }
+            if let error = await saveToLibrary() {
+              saveErrorMessage = error
+            } else {
+              savedToLibrary = true
+            }
+          }
+        } label: {
+          if isSavingToLibrary {
+            HStack(spacing: 5) {
+              ProgressView()
+                .controlSize(.small)
+              Text("Saving…")
+            }
+          } else {
+            Label(
+              savedToLibrary ? "Saved to Library" : "Save to Library",
+              systemImage: savedToLibrary ? "checkmark" : "books.vertical"
+            )
+          }
+        }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        .disabled(isSavingToLibrary)
       }
 
       Button("Done") {
@@ -848,7 +895,7 @@ struct MacAttachmentPreviewSheet: View {
   }
 }
 
-private struct MacZoomableImageView: View {
+struct MacZoomableImageView: View {
   let image: NSImage
   @Binding var scale: CGFloat
   let minScale: CGFloat

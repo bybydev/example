@@ -59,6 +59,7 @@ struct MacLibraryAttachmentPickerView: View {
   @State private var tab: Tab = .saved
   @State private var savedSelection: Set<LibraryEntryID> = []
   @State private var chatSelection: Set<String> = []
+  @State private var cachedChatItems: [ChatItem] = []
   @State private var searchText = ""
   @State private var isLoading = false
   @State private var errorMessage: String?
@@ -78,6 +79,10 @@ struct MacLibraryAttachmentPickerView: View {
     var id: String { attachment.id }
   }
 
+  private var trimmedSearchQuery: String {
+    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   private var allAvailableEntries: [LibraryEntry] {
     workspace.libraryEntries
       .filter { !excludedIDs.contains($0.id.rawValue) }
@@ -85,43 +90,20 @@ struct MacLibraryAttachmentPickerView: View {
   }
 
   private var availableEntries: [LibraryEntry] {
-    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let query = trimmedSearchQuery
     guard !query.isEmpty else { return allAvailableEntries }
     return allAvailableEntries.filter {
       $0.filename.localizedCaseInsensitiveContains(query)
+        || $0.mimeType.localizedCaseInsensitiveContains(query)
     }
-  }
-
-  /// Conversation summaries retain attachment metadata in the v2 index, so
-  /// this list does not hydrate every chat just to populate the picker.
-  private var allChatItems: [ChatItem] {
-    var seen: Set<String> = []
-    var values: [ChatItem] = []
-
-    for conversation in chats.conversationSummaries {
-      for message in conversation.messages {
-        for attachment in message.attachments ?? []
-        where !excludedIDs.contains(attachment.id) && seen.insert(attachment.id).inserted
-        {
-          let title = conversation.title.trimmingCharacters(in: .whitespacesAndNewlines)
-          values.append(
-            ChatItem(
-              attachment: attachment,
-              conversationTitle: title.isEmpty ? "Chat" : title,
-              date: message.createdAt
-            )
-          )
-        }
-      }
-    }
-    return values.sorted { $0.date > $1.date }
   }
 
   private var chatItems: [ChatItem] {
-    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !query.isEmpty else { return allChatItems }
-    return allChatItems.filter { item in
+    let query = trimmedSearchQuery
+    guard !query.isEmpty else { return cachedChatItems }
+    return cachedChatItems.filter { item in
       item.attachment.filename.localizedCaseInsensitiveContains(query)
+        || item.attachment.mimeType.localizedCaseInsensitiveContains(query)
         || item.conversationTitle.localizedCaseInsensitiveContains(query)
     }
   }
@@ -131,7 +113,7 @@ struct MacLibraryAttachmentPickerView: View {
   }
 
   private var activeChatSelection: Set<String> {
-    chatSelection.intersection(Set(allChatItems.map(\.id)))
+    chatSelection.intersection(Set(cachedChatItems.map(\.id)))
   }
 
   private var selectedUniqueIDs: Set<String> {
@@ -140,6 +122,36 @@ struct MacLibraryAttachmentPickerView: View {
 
   private var totalSelectionCount: Int {
     selectedUniqueIDs.count
+  }
+
+  private var selectedByteCounts: [Int] {
+    var coveredSavedRawIDs = Set<String>()
+    var counts: [Int] = []
+    if !activeSavedSelection.isEmpty {
+      for entry in allAvailableEntries where activeSavedSelection.contains(entry.id) {
+        coveredSavedRawIDs.insert(entry.id.rawValue)
+        counts.append(entry.byteCount)
+      }
+    }
+    if !activeChatSelection.isEmpty {
+      for item in cachedChatItems
+      where activeChatSelection.contains(item.id) && !coveredSavedRawIDs.contains(item.id) {
+        counts.append(item.attachment.byteCount)
+      }
+    }
+    return counts
+  }
+
+  private var projectedTotalBytes: Int {
+    existingAttachmentByteCount + selectedByteCounts.reduce(0, +)
+  }
+
+  private var livePreflight: MacLibraryAttachmentPickerSupport.PreflightResult {
+    MacLibraryAttachmentPickerSupport.preflight(
+      existingCount: excludedIDs.count,
+      existingBytes: existingAttachmentByteCount,
+      selectedByteCounts: selectedByteCounts
+    )
   }
 
   private var maxSelectableCount: Int {
@@ -151,14 +163,42 @@ struct MacLibraryAttachmentPickerView: View {
   }
 
   private var capacityNote: String {
-    MacLibraryAttachmentPickerSupport.capacityNote(
+    if let error = livePreflight.errorMessage {
+      return error
+    }
+    return MacLibraryAttachmentPickerSupport.capacityNote(
       existingCount: excludedIDs.count,
       selectedCount: totalSelectionCount
     )
   }
 
+  private var sizeNote: String? {
+    guard totalSelectionCount > 0 || existingAttachmentByteCount > 0 else { return nil }
+    let used = byteCountText(projectedTotalBytes)
+    let limit = byteCountText(MacAttachmentImporter.maximumTotalBytes)
+    return "\(used) / \(limit)"
+  }
+
   private var activeErrorMessage: String? {
     errorMessage ?? workspace.errorMessage
+  }
+
+  private var chatSummariesSignature: [String] {
+    chats.conversationSummaries.map { summary in
+      let attachmentCount = summary.messages.reduce(0) { $0 + ($1.attachments?.count ?? 0) }
+      return "\(summary.id.rawValue):\(attachmentCount)"
+    }
+  }
+
+  private func tabTitle(_ option: Tab) -> String {
+    switch option {
+    case .saved:
+      let count = activeSavedSelection.count
+      return count > 0 ? "Saved (\(count))" : option.rawValue
+    case .fromChats:
+      let count = activeChatSelection.subtracting(Set(activeSavedSelection.map(\.rawValue))).count
+      return count > 0 ? "From Chats (\(count))" : option.rawValue
+    }
   }
 
   var body: some View {
@@ -174,7 +214,7 @@ struct MacLibraryAttachmentPickerView: View {
         Button(totalSelectionCount == 0 ? "Attach" : "Attach (\(totalSelectionCount))") { commit() }
           .buttonStyle(MacActionButtonStyle(.primary))
           .keyboardShortcut(.defaultAction)
-          .disabled(totalSelectionCount == 0 || isLoading)
+          .disabled(totalSelectionCount == 0 || !livePreflight.isValid || isLoading)
       }
       .padding(16)
 
@@ -184,7 +224,7 @@ struct MacLibraryAttachmentPickerView: View {
         MacSegmentedControl(
           options: Tab.allCases,
           selection: $tab,
-          title: \.rawValue
+          title: tabTitle
         )
         .disabled(isLoading)
 
@@ -212,10 +252,28 @@ struct MacLibraryAttachmentPickerView: View {
             .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
         }
 
-        Text(capacityNote)
-          .font(.caption)
-          .foregroundStyle(remainingSlots == 0 ? Color.orange : MacDesignTokens.Colors.textMuted)
-          .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 8) {
+          Text(capacityNote)
+            .font(.caption)
+            .foregroundStyle(
+              (!livePreflight.isValid || remainingSlots == 0)
+                ? Color.orange
+                : MacDesignTokens.Colors.textMuted
+            )
+            .lineLimit(2)
+
+          Spacer(minLength: 8)
+
+          if let sizeNote {
+            Text(sizeNote)
+              .font(.caption.monospacedDigit())
+              .foregroundStyle(
+                projectedTotalBytes > MacAttachmentImporter.maximumTotalBytes
+                  ? Color.orange
+                  : MacDesignTokens.Colors.textMuted
+              )
+          }
+        }
       }
       .padding(12)
 
@@ -231,12 +289,16 @@ struct MacLibraryAttachmentPickerView: View {
           .background(.regularMaterial, in: Capsule())
       }
     }
-    .onChange(of: tab) { _, _ in
-      searchText = ""
+    .onAppear {
+      rebuildChatItems()
+    }
+    .onChange(of: chatSummariesSignature) { _, _ in
+      rebuildChatItems()
     }
     .onChange(of: excludedIDs) { _, ids in
       savedSelection = savedSelection.filter { !ids.contains($0.rawValue) }
       chatSelection.subtract(ids)
+      rebuildChatItems()
     }
     .alert(
       "Attachment Error",
@@ -259,17 +321,43 @@ struct MacLibraryAttachmentPickerView: View {
     }
   }
 
+  /// Conversation summaries retain attachment metadata in the v2 index, so
+  /// this list does not hydrate every chat just to populate the picker.
+  private func rebuildChatItems() {
+    var seen: Set<String> = []
+    var values: [ChatItem] = []
+
+    for conversation in chats.conversationSummaries {
+      for message in conversation.messages {
+        for attachment in message.attachments ?? []
+        where !excludedIDs.contains(attachment.id) && seen.insert(attachment.id).inserted {
+          let title = conversation.title.trimmingCharacters(in: .whitespacesAndNewlines)
+          values.append(
+            ChatItem(
+              attachment: attachment,
+              conversationTitle: title.isEmpty ? "Chat" : title,
+              date: message.createdAt
+            )
+          )
+        }
+      }
+    }
+    cachedChatItems = values.sorted { $0.date > $1.date }
+  }
+
   @ViewBuilder
   private var content: some View {
     switch tab {
     case .saved:
       if availableEntries.isEmpty {
         ContentUnavailableView(
-          searchText.isEmpty ? "No Available Library Items" : "No Matches",
-          systemImage: searchText.isEmpty ? "books.vertical" : "magnifyingglass",
-          description: Text(searchText.isEmpty
-            ? "Import files into Library or remove an already selected attachment."
-            : "Try a different file name.")
+          trimmedSearchQuery.isEmpty ? "No Available Library Items" : "No Matches",
+          systemImage: trimmedSearchQuery.isEmpty ? "books.vertical" : "magnifyingglass",
+          description: Text(
+            trimmedSearchQuery.isEmpty
+              ? "Import files into Library or remove an already selected attachment."
+              : "Try a different file name."
+          )
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
@@ -286,11 +374,13 @@ struct MacLibraryAttachmentPickerView: View {
     case .fromChats:
       if chatItems.isEmpty {
         ContentUnavailableView(
-          searchText.isEmpty ? "No Chat Attachments" : "No Matches",
-          systemImage: searchText.isEmpty ? "paperclip" : "magnifyingglass",
-          description: Text(searchText.isEmpty
-            ? "Files attached to earlier chat messages will appear here."
-            : "Try a different file or chat name.")
+          trimmedSearchQuery.isEmpty ? "No Chat Attachments" : "No Matches",
+          systemImage: trimmedSearchQuery.isEmpty ? "paperclip" : "magnifyingglass",
+          description: Text(
+            trimmedSearchQuery.isEmpty
+              ? "Files attached to earlier chat messages will appear here."
+              : "Try a different file or chat name."
+          )
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
@@ -308,10 +398,14 @@ struct MacLibraryAttachmentPickerView: View {
 
   private func savedRow(_ entry: LibraryEntry) -> some View {
     let isSelected = selectedUniqueIDs.contains(entry.id.rawValue)
-    return selectableRow(
+    let exceedsSize = !isSelected
+      && (entry.byteCount > MacAttachmentImporter.maximumFileBytes
+        || projectedTotalBytes + entry.byteCount > MacAttachmentImporter.maximumTotalBytes)
+    return MacLibraryPickerSelectableRow(
       title: entry.filename,
       detail: "\(entry.byteCountText) · \(entry.mimeType)",
       isSelected: isSelected,
+      isDisabled: isLoading || (!isSelected && (remainingSlots == 0 || exceedsSize)),
       action: { toggleSaved(entry.id) }
     ) {
       MacLibraryPickerThumbnail(
@@ -332,10 +426,14 @@ struct MacLibraryAttachmentPickerView: View {
 
   private func chatRow(_ item: ChatItem) -> some View {
     let isSelected = selectedUniqueIDs.contains(item.id)
-    return selectableRow(
+    let exceedsSize = !isSelected
+      && (item.attachment.byteCount > MacAttachmentImporter.maximumFileBytes
+        || projectedTotalBytes + item.attachment.byteCount > MacAttachmentImporter.maximumTotalBytes)
+    return MacLibraryPickerSelectableRow(
       title: item.attachment.filename,
       detail: "\(item.conversationTitle) · \(byteCountText(item.attachment.byteCount))",
       isSelected: isSelected,
+      isDisabled: isLoading || (!isSelected && (remainingSlots == 0 || exceedsSize)),
       action: { toggleChat(item.id) }
     ) {
       MacLibraryPickerThumbnail(
@@ -345,48 +443,6 @@ struct MacLibraryAttachmentPickerView: View {
         }
       )
     }
-  }
-
-  private func selectableRow<Leading: View>(
-    title: String,
-    detail: String,
-    isSelected: Bool,
-    action: @escaping () -> Void,
-    @ViewBuilder leading: () -> Leading
-  ) -> some View {
-    let atCapacity = !isSelected && remainingSlots == 0
-    return Button(action: action) {
-      HStack(spacing: 10) {
-        leading()
-        VStack(alignment: .leading, spacing: 2) {
-          Text(title)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-            .lineLimit(1)
-          Text(detail)
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            .lineLimit(1)
-        }
-        Spacer(minLength: 8)
-        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 18))
-          .foregroundStyle(isSelected ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
-          .symbolRenderingMode(.hierarchical)
-      }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
-      .background(
-        isSelected ? MacDesignTokens.Colors.accent.opacity(0.10) : Color.clear,
-        in: RoundedRectangle(cornerRadius: 8)
-      )
-      .opacity(atCapacity ? 0.45 : 1)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .disabled(isLoading || atCapacity)
-    .accessibilityLabel("\(title), \(detail)")
-    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
   }
 
   private func toggleSaved(_ id: LibraryEntryID) {
@@ -421,7 +477,7 @@ struct MacLibraryAttachmentPickerView: View {
       let coveredSavedRawIDs = Set(selectedEntries.map(\.id.rawValue))
       let selectedItems = activeChatSelection.isEmpty
         ? []
-        : allChatItems.filter {
+        : cachedChatItems.filter {
           activeChatSelection.contains($0.id) && !coveredSavedRawIDs.contains($0.id)
         }
 
@@ -494,33 +550,138 @@ struct MacLibraryAttachmentPickerView: View {
   }
 }
 
-private struct MacLibraryPickerThumbnail: View {
-  let attachment: ChatAttachment
-  let loadThumbnail: (String, CGFloat) async -> Data?
-  @State private var image: NSImage?
+struct MacLibraryPickerSelectableRow<Leading: View>: View {
+  let title: String
+  let detail: String
+  let isSelected: Bool
+  let isDisabled: Bool
+  let action: () -> Void
+  @ViewBuilder let leading: () -> Leading
+
+  @State private var isHovered = false
 
   var body: some View {
-    Group {
-      if let image {
-        Image(nsImage: image)
-          .resizable()
-          .scaledToFill()
-      } else {
-        Image(systemName: attachment.isImage ? "photo" : "doc")
+    Button(action: action) {
+      HStack(spacing: 10) {
+        leading()
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .lineLimit(1)
+          Text(detail)
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 8)
+        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+          .font(.system(size: 18))
+          .foregroundStyle(isSelected ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
+          .symbolRenderingMode(.hierarchical)
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .background(rowBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .opacity(isDisabled && !isSelected ? 0.45 : 1)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(isDisabled)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .accessibilityLabel("\(title), \(detail)")
+    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+  }
+
+  private var rowBackground: Color {
+    if isSelected { return MacDesignTokens.Colors.accent.opacity(0.10) }
+    if isHovered && !isDisabled { return Color.primary.opacity(0.04) }
+    return Color.clear
+  }
+}
+
+struct MacLibraryPickerThumbnail: View {
+  let attachment: ChatAttachment
+  let loadThumbnail: (String, CGFloat) async -> Data?
+
+  @Environment(\.displayScale) private var displayScale
+  @State private var image: NSImage?
+
+  private var targetPixelSize: CGFloat {
+    max(80, ceil(40 * max(displayScale, 1)))
+  }
+
+  private var cacheKey: String {
+    "\(attachment.id)@\(Int(targetPixelSize.rounded()))"
+  }
+
+  private var displayedImage: NSImage? {
+    image ?? MacLibraryThumbnailCache.shared.image(forKey: cacheKey)
+  }
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+    MacDesignTokens.Colors.surface
+      .frame(width: 40, height: 40)
+      .overlay {
+        if let displayedImage {
+          Image(nsImage: displayedImage)
+            .resizable()
+            .scaledToFill()
+        } else {
+          Image(
+            systemName: MacLibraryThumbnailCache.fileSymbol(
+              mimeType: attachment.mimeType,
+              isImage: attachment.isImage
+            )
+          )
           .font(.system(size: 16, weight: .medium))
           .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
       }
-    }
-    .frame(width: 40, height: 40)
-    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
-    .clipShape(RoundedRectangle(cornerRadius: 8))
-    .task(id: attachment.id) {
-      guard attachment.isImage else {
-        image = nil
-        return
+      .clipShape(shape)
+      .task(id: cacheKey) {
+        await loadThumbnailImage()
       }
-      let data = await loadThumbnail(attachment.id, 96)
-      image = data.flatMap(NSImage.init(data:))
+  }
+
+  private func loadThumbnailImage() async {
+    guard attachment.isImage else {
+      image = nil
+      return
     }
+    let key = cacheKey
+    if let cached = MacLibraryThumbnailCache.shared.image(forKey: key) {
+      image = cached
+      return
+    }
+    image = nil
+
+    guard await MacImageWorkLimiter.shared.acquirePermit() else { return }
+    defer {
+      Task { await MacImageWorkLimiter.shared.releasePermit() }
+    }
+    guard !Task.isCancelled else { return }
+
+    if let cached = MacLibraryThumbnailCache.shared.image(forKey: key) {
+      image = cached
+      return
+    }
+
+    let maxPixels = targetPixelSize
+    guard let data = await loadThumbnail(attachment.id, maxPixels),
+      !data.isEmpty,
+      !Task.isCancelled
+    else { return }
+
+    let bitmap = await Task.detached(priority: .utility) {
+      MacLibraryThumbnailCache.decodeBitmap(from: data, maxPixelSize: maxPixels)
+    }.value
+
+    guard !Task.isCancelled, let bitmap else { return }
+    let decoded = NSImage(cgImage: bitmap.cgImage, size: bitmap.pointSize)
+    MacLibraryThumbnailCache.shared.insert(decoded, forKey: key, byteCost: bitmap.byteCost)
+    image = decoded
   }
 }

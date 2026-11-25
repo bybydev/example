@@ -285,6 +285,102 @@ struct MacLibraryWorkflowTests {
     #expect(request.conversationID == "chat-source")
     #expect(request.messageID == "message-source")
   }
+
+  @Test("Library file importer preserves original image format and skips folders cleanly")
+  func libraryFileImporterPreservesFormatAndSkipsFolders() async throws {
+    let context = try makeContext()
+    defer { context.cleanup() }
+
+    // 1x1 transparent PNG
+    let pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    let pngData = try #require(Data(base64Encoded: pngBase64))
+    let pngURL = context.root.appendingPathComponent("transparent-icon.png")
+    try pngData.write(to: pngURL)
+
+    let folderURL = context.root.appendingPathComponent("Subfolder", isDirectory: true)
+    try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+
+    let result = await MacLibraryFileImporter.importURLs([pngURL, folderURL])
+    #expect(result.attachments.count == 1)
+    #expect(result.skippedMessages.count == 1)
+
+    let imported = try #require(result.attachments.first)
+    #expect(imported.filename == "transparent-icon.png")
+    #expect(imported.mimeType == "image/png")
+    #expect(imported.kind == .image)
+    #expect(imported.data == pngData)
+  }
+
+  @Test("Project files can be saved to Library with project provenance")
+  func saveProjectFileToLibraryTracksProjectSource() async throws {
+    let context = try makeContext()
+    defer { context.cleanup() }
+    let services = try await makeServices(context)
+    let workspace = MacWorkspaceModel(services: services)
+    await workspace.reload()
+
+    let data = Data("project reference bytes".utf8)
+    let file = ProjectFile(
+      id: "project-source-blob",
+      filename: "spec.md",
+      mimeType: "text/markdown",
+      data: data
+    )
+    try await services.fileBlobStore.writeIfAbsent(
+      file.id,
+      data: data,
+      metadata: AttachmentBlobMetadata(
+        filename: file.filename,
+        mimeType: file.mimeType,
+        byteCount: data.count,
+        createdAt: .now
+      )
+    )
+
+    let projectID = ProjectID(rawValue: "project-alpha")
+    #expect(await workspace.saveProjectFileToLibrary(file, projectID: projectID))
+    #expect(workspace.statusMessage == "Saved to Library")
+    let entry = try #require(workspace.libraryEntries.first)
+    #expect(entry.source == .project(projectID))
+    #expect(MacLibrarySourceFilter.projects.matches(entry))
+
+    // Saving the same file again is idempotent and reports "Already in Library".
+    #expect(await workspace.saveProjectFileToLibrary(file, projectID: projectID))
+    #expect(workspace.statusMessage == "Already in Library")
+    #expect(workspace.libraryEntries.count == 1)
+  }
+
+  @Test("Saved response filenames include timestamp and sanitized title")
+  func responseFilenameGeneration() {
+    let date = Date(timeIntervalSince1970: 1_764_094_805)
+    let titled = MacWorkspaceModel.responseFilename(
+      createdAt: date,
+      conversationTitle: "API / Design: Plan"
+    )
+    #expect(titled.hasPrefix("API - Design- Plan-"))
+    #expect(titled.hasSuffix(".md"))
+    #expect(!titled.contains("/"))
+
+    let untitled = MacWorkspaceModel.responseFilename(
+      createdAt: date,
+      conversationTitle: "New Chat"
+    )
+    #expect(untitled.hasPrefix("Response-"))
+    #expect(untitled.hasSuffix(".md"))
+  }
+
+  @Test("consumeErrorMessage clears stale workspace errors")
+  func consumeErrorMessageClearsState() async throws {
+    let context = try makeContext()
+    defer { context.cleanup() }
+    let services = try await makeServices(context)
+    let workspace = MacWorkspaceModel(services: services)
+    workspace.errorMessage = "Temporary failure"
+
+    #expect(workspace.consumeErrorMessage() == "Temporary failure")
+    #expect(workspace.errorMessage == nil)
+  }
 }
 
 private struct MacAttachmentTestContext {

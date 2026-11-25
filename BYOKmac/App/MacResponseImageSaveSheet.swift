@@ -20,7 +20,6 @@ struct MacResponseImageSaveSheet: View {
   @State private var loadedByteCounts: [String: Int] = [:]
   @State private var savingID: String?
   @State private var isSaving = false
-  @State private var savedCount = 0
   @State private var errorMessage: String?
   @State private var didInitializeSelection = false
 
@@ -174,8 +173,7 @@ struct MacResponseImageSaveSheet: View {
             selected = Set(selectableIDs)
           }
         }
-        .font(.system(size: 11.5, weight: .medium))
-        .buttonStyle(MacSecondaryButtonStyle())
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .disabled(isSaving)
       }
     }
@@ -324,6 +322,8 @@ struct MacResponseImageSaveSheet: View {
 
     let wanted = selected
     var failures: [String] = []
+    var validated: [(candidate: MacResponseImageCandidate, attachment: ChatAttachment)] = []
+
     for (index, candidate) in candidates.enumerated()
     where wanted.contains(candidate.id) {
       savingID = candidate.id
@@ -347,34 +347,43 @@ struct MacResponseImageSaveSheet: View {
         resolvedMimeType: mimeType
       )
 
-      let added = await workspace.saveLibraryItem(
-        filename: filename,
-        mimeType: mimeType,
-        data: data,
+      validated.append((
+        candidate: candidate,
+        attachment: ChatAttachment(
+          kind: .image,
+          filename: filename,
+          mimeType: mimeType,
+          data: data
+        )
+      ))
+    }
+
+    var batchSavedCount = 0
+    if !validated.isEmpty {
+      savingID = validated.last?.candidate.id
+      let savedEntries = await workspace.saveLibraryAttachments(
+        validated.map(\.attachment),
         source: .chat(conversationID: conversationID, messageID: messageID),
         successMessage: nil
       )
-
-      // Keep only unsaved selections for retry, without duplicating successes.
-      if added != nil {
-        selected.remove(candidate.id)
-        savedIDs.insert(candidate.id)
-        savedCount += 1
+      if savedEntries != nil {
+        for item in validated {
+          selected.remove(item.candidate.id)
+          savedIDs.insert(item.candidate.id)
+        }
+        batchSavedCount = validated.count
       } else {
-        let reason = workspace.errorMessage ?? "Couldn't save to Library."
-        failures.append("\(candidate.label): \(reason)")
+        let reason = workspace.consumeErrorMessage() ?? "Couldn't save to Library."
+        failures.append(reason)
       }
     }
 
-    if savedCount > 0 {
-      workspace.statusMessage = savedCount == 1
-        ? "Saved image to Library"
-        : "Saved \(savedCount) images to Library"
-      onSaved(savedCount)
+    if batchSavedCount > 0 {
+      onSaved(batchSavedCount)
     }
 
     if !failures.isEmpty {
-      MacAppAnalytics.reportError("library_share_failed", component: "library")
+      MacAppAnalytics.reportError("library_save_failed", component: "library")
       errorMessage = failures.joined(separator: "\n")
     } else {
       dismiss()
@@ -405,6 +414,7 @@ private final class MacResponseImageThumbnailCache {
   private let storage: NSCache<NSString, NSImage> = {
     let cache = NSCache<NSString, NSImage>()
     cache.countLimit = 64
+    cache.totalCostLimit = 16 * 1_024 * 1_024
     return cache
   }()
 
@@ -474,7 +484,7 @@ private struct MacResponseImageCandidateThumbnail: View {
       RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
         .stroke(MacDesignTokens.Colors.separator.opacity(0.8), lineWidth: 0.75)
     }
-    .task(id: candidate.id) {
+    .task(id: cacheKey) {
       await loadThumbnail()
     }
   }

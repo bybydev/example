@@ -6,10 +6,14 @@ import SwiftUI
 final class MacUtilitySheetCoordinator {
   var destination: MacUtilitySheetDestination?
   var analyticsInitialConversationID: ConversationID?
+  var projectsInitialProjectID: ProjectID?
 
   func present(_ destination: MacUtilitySheetDestination) {
     if destination == .analytics {
       analyticsInitialConversationID = nil
+    }
+    if destination == .projects {
+      projectsInitialProjectID = nil
     }
     trackOpeningIfNeeded(destination)
     self.destination = destination
@@ -21,9 +25,16 @@ final class MacUtilitySheetCoordinator {
     destination = .analytics
   }
 
+  func presentProject(_ projectID: ProjectID) {
+    projectsInitialProjectID = projectID
+    trackOpeningIfNeeded(.projects)
+    destination = .projects
+  }
+
   func dismiss() {
     destination = nil
     analyticsInitialConversationID = nil
+    projectsInitialProjectID = nil
   }
 
   private func trackOpeningIfNeeded(_ destination: MacUtilitySheetDestination) {

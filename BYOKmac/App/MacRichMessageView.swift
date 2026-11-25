@@ -230,7 +230,7 @@ struct MacRichMessageView: View {
         conversationID: conversationID,
         messageID: message.id
       )
-      if !ok, let error = workspace.errorMessage {
+      if !ok, let error = workspace.consumeErrorMessage() {
         chats.errorMessage = error
       }
     }
@@ -273,9 +273,10 @@ struct MacRichMessageView: View {
               message.content,
               conversationID: conversationID,
               messageID: message.id,
-              createdAt: message.createdAt
+              createdAt: message.createdAt,
+              conversationTitle: chats.summary(conversationID)?.title
             )
-            if !ok, let error = workspace.errorMessage { chats.errorMessage = error }
+            if !ok, let error = workspace.consumeErrorMessage() { chats.errorMessage = error }
           }
         }
       }
@@ -290,7 +291,7 @@ struct MacRichMessageView: View {
                   conversationID: conversationID,
                   messageID: message.id
                 )
-                if !ok, let error = workspace.errorMessage { chats.errorMessage = error }
+                if !ok, let error = workspace.consumeErrorMessage() { chats.errorMessage = error }
               }
             }
           }

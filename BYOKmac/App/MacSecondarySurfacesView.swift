@@ -139,10 +139,14 @@ struct MacSecondarySurfacesView: View {
             if next != .analytics {
               utilitySheets.analyticsInitialConversationID = nil
             }
+            if next != .projects {
+              utilitySheets.projectsInitialProjectID = nil
+            }
           }
         ),
         onDismiss: {
           utilitySheets.analyticsInitialConversationID = nil
+          utilitySheets.projectsInitialProjectID = nil
           model.chats?.refreshNewChatTargetAfterProviderChanges()
         }
       ) { destination in
@@ -182,6 +186,9 @@ struct MacSecondarySurfacesView: View {
             messageID: messageID
           )
           utilitySheets.dismiss()
+        },
+        openSourceProject: { projectID in
+          utilitySheets.presentProject(projectID)
         }
       )
 
@@ -192,6 +199,7 @@ struct MacSecondarySurfacesView: View {
           providers: providers,
           chats: chats,
           mcp: mcp,
+          initialProjectID: utilitySheets.projectsInitialProjectID,
           openChat: { conversationID in
             MacLibraryNavigation.openConversation(conversationID)
             utilitySheets.dismiss()

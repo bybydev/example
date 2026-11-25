@@ -58,6 +58,7 @@ struct MacProjectsWorkspaceView: View {
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
+  let initialProjectID: ProjectID?
   let openChat: (ConversationID) -> Void
   let startNewChat: (ProjectID, String?) -> Void
 
@@ -66,6 +67,25 @@ struct MacProjectsWorkspaceView: View {
   @State private var searchText = ""
   @State private var showingNewProject = false
   @State private var deleteProject: ChatProject?
+
+  init(
+    workspace: MacWorkspaceModel,
+    providers: MacProviderModel,
+    chats: MacChatSessionModel,
+    mcp: MacMCPModel,
+    initialProjectID: ProjectID? = nil,
+    openChat: @escaping (ConversationID) -> Void,
+    startNewChat: @escaping (ProjectID, String?) -> Void
+  ) {
+    self.workspace = workspace
+    self.providers = providers
+    self.chats = chats
+    self.mcp = mcp
+    self.initialProjectID = initialProjectID
+    self.openChat = openChat
+    self.startNewChat = startNewChat
+    _selectedProjectID = State(initialValue: initialProjectID)
+  }
 
   private var selectedProject: ChatProject? {
     workspace.project(selectedProjectID)
@@ -106,6 +126,11 @@ struct MacProjectsWorkspaceView: View {
     }
     .frame(minWidth: 920, minHeight: 620)
     .background(MacDesignTokens.Colors.canvas)
+    .onChange(of: initialProjectID) { _, projectID in
+      if let projectID {
+        selectedProjectID = projectID
+      }
+    }
     .onChange(of: workspace.projects.map(\.id)) { _, ids in
       if let selectedProjectID, !ids.contains(selectedProjectID) {
         self.selectedProjectID = nil
@@ -1034,6 +1059,7 @@ private struct MacProjectSourcesWorkspaceView: View {
 
   @State private var searchText = ""
   @State private var showingImporter = false
+  @State private var showingLibraryPicker = false
   @State private var isWorking = false
   @State private var previewFile: ProjectFile?
   @State private var previewURL: URL?
@@ -1060,6 +1086,13 @@ private struct MacProjectSourcesWorkspaceView: View {
         MacProjectSearchField(placeholder: "Search sources", text: $searchText)
           .frame(maxWidth: 340)
         Spacer()
+        Button("From Library…", systemImage: "books.vertical") { showingLibraryPicker = true }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+          .disabled(
+            project.projectFiles.count >= ProjectWorkspaceStore.maxFileCount
+              || isWorking
+              || workspace.isBusy
+          )
         Button("Add Files", systemImage: "doc.badge.plus") { showingImporter = true }
           .buttonStyle(MacActionButtonStyle(.primary))
           .disabled(
@@ -1079,8 +1112,14 @@ private struct MacProjectSourcesWorkspaceView: View {
         } description: {
           Text("Add reference files that can be attached to chats in this project when needed.")
         } actions: {
-          Button("Add Files", systemImage: "plus") { showingImporter = true }
-            .buttonStyle(MacActionButtonStyle(.primary))
+          HStack(spacing: 8) {
+            Button("From Library…", systemImage: "books.vertical") { showingLibraryPicker = true }
+              .buttonStyle(MacActionButtonStyle(.secondary))
+              .disabled(isWorking || workspace.isBusy)
+            Button("Add Files", systemImage: "plus") { showingImporter = true }
+              .buttonStyle(MacActionButtonStyle(.primary))
+              .disabled(isWorking || workspace.isBusy)
+          }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else if visibleFiles.isEmpty {
@@ -1145,6 +1184,16 @@ private struct MacProjectSourcesWorkspaceView: View {
     ) { result in
       importFiles(result)
     }
+    .sheet(isPresented: $showingLibraryPicker) {
+      MacProjectLibrarySourcePickerSheet(
+        workspace: workspace,
+        excludedIDs: Set(project.projectFiles.map(\.id)),
+        existingFileCount: project.projectFiles.count,
+        existingByteCount: totalBytes
+      ) { additions in
+        await addLibraryFiles(additions)
+      }
+    }
     .sheet(
       isPresented: $showingPreview,
       onDismiss: {
@@ -1193,6 +1242,9 @@ private struct MacProjectSourcesWorkspaceView: View {
         Button("Preview", systemImage: "eye") {
           preview(file)
         }
+        Button("Save to Library", systemImage: "books.vertical") {
+          saveToLibrary(file)
+        }
         Divider()
         Button("Remove from Project", systemImage: "trash", role: .destructive) {
           remove(file)
@@ -1208,6 +1260,7 @@ private struct MacProjectSourcesWorkspaceView: View {
     .frame(minHeight: 56)
     .contextMenu {
       Button("Preview", systemImage: "eye") { preview(file) }
+      Button("Save to Library", systemImage: "books.vertical") { saveToLibrary(file) }
       Divider()
       Button("Remove from Project", systemImage: "trash", role: .destructive) { remove(file) }
     }
@@ -1228,6 +1281,14 @@ private struct MacProjectSourcesWorkspaceView: View {
         }
 
         Spacer()
+
+        if let previewFile {
+          Button("Save to Library", systemImage: "books.vertical") {
+            saveToLibrary(previewFile)
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .disabled(workspace.isBusy)
+        }
 
         Button("Done") {
           showingPreview = false
@@ -1344,6 +1405,21 @@ private struct MacProjectSourcesWorkspaceView: View {
         await mcp.reloadFromStorage()
       }
     }
+  }
+
+  private func saveToLibrary(_ file: ProjectFile) {
+    Task { @MainActor in
+      _ = await workspace.saveProjectFileToLibrary(file, projectID: project.id)
+    }
+  }
+
+  private func addLibraryFiles(_ additions: [ProjectFile]) async -> String? {
+    guard !additions.isEmpty else { return nil }
+    if await workspace.addProjectFiles(additions, to: project.id) {
+      await mcp.reloadFromStorage()
+      return nil
+    }
+    return workspace.consumeErrorMessage() ?? "Could not add files from Library."
   }
 
   private func importFiles(_ result: Result<[URL], Error>) {
@@ -2442,6 +2518,229 @@ private enum MacProjectWorkspaceEditorSupport {
     case "paintbrush.fill": "Creative"
     case "shippingbox.fill": "Product"
     default: "Project"
+    }
+  }
+}
+
+private struct MacProjectLibrarySourcePickerSheet: View {
+  @Bindable var workspace: MacWorkspaceModel
+  let excludedIDs: Set<String>
+  let existingFileCount: Int
+  let existingByteCount: Int
+  let addFiles: ([ProjectFile]) async -> String?
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var selection: Set<LibraryEntryID> = []
+  @State private var searchText = ""
+  @State private var isLoading = false
+  @State private var errorMessage: String?
+
+  private var trimmedSearchQuery: String {
+    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var allAvailableEntries: [LibraryEntry] {
+    workspace.libraryEntries
+      .filter { !excludedIDs.contains($0.id.rawValue) }
+      .sorted { $0.createdAt > $1.createdAt }
+  }
+
+  private var visibleEntries: [LibraryEntry] {
+    let query = trimmedSearchQuery
+    guard !query.isEmpty else { return allAvailableEntries }
+    return allAvailableEntries.filter {
+      $0.filename.localizedCaseInsensitiveContains(query)
+        || $0.mimeType.localizedCaseInsensitiveContains(query)
+    }
+  }
+
+  private var activeSelection: Set<LibraryEntryID> {
+    selection.intersection(Set(allAvailableEntries.map(\.id)))
+  }
+
+  private var selectedEntries: [LibraryEntry] {
+    allAvailableEntries.filter { activeSelection.contains($0.id) }
+  }
+
+  private var remainingSlots: Int {
+    max(0, ProjectWorkspaceStore.maxFileCount - existingFileCount - activeSelection.count)
+  }
+
+  private var projectedBytes: Int {
+    existingByteCount + selectedEntries.reduce(0) { $0 + $1.byteCount }
+  }
+
+  private var exceedsByteLimit: Bool {
+    projectedBytes > ProjectWorkspaceStore.maxTotalFileBytes
+      || selectedEntries.contains { $0.byteCount > ProjectWorkspaceStore.maxFileBytes }
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 8) {
+        Text("Add Sources from Library")
+          .font(.headline)
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+          .keyboardShortcut(.cancelAction)
+          .disabled(isLoading)
+        Button(activeSelection.isEmpty ? "Add" : "Add (\(activeSelection.count))") {
+          commit()
+        }
+        .buttonStyle(MacActionButtonStyle(.primary))
+        .keyboardShortcut(.defaultAction)
+        .disabled(activeSelection.isEmpty || exceedsByteLimit || isLoading)
+      }
+      .padding(16)
+
+      Divider()
+
+      VStack(spacing: 8) {
+        MacProjectSearchField(placeholder: "Search Library files", text: $searchText)
+
+        HStack(spacing: 8) {
+          Text(capacityMessage)
+            .font(.caption)
+            .foregroundStyle(
+              (exceedsByteLimit || remainingSlots == 0)
+                ? Color.orange
+                : MacDesignTokens.Colors.textMuted
+            )
+          Spacer(minLength: 8)
+          Text(
+            "\(ByteCountFormatter.string(fromByteCount: Int64(projectedBytes), countStyle: .file)) / 40 MB"
+          )
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(
+            projectedBytes > ProjectWorkspaceStore.maxTotalFileBytes
+              ? Color.orange
+              : MacDesignTokens.Colors.textMuted
+          )
+        }
+      }
+      .padding(12)
+
+      Divider()
+
+      if visibleEntries.isEmpty {
+        ContentUnavailableView(
+          trimmedSearchQuery.isEmpty ? "No Available Library Items" : "No Matches",
+          systemImage: trimmedSearchQuery.isEmpty ? "books.vertical" : "magnifyingglass",
+          description: Text(
+            trimmedSearchQuery.isEmpty
+              ? "Import files into Library or remove an existing source file from this project."
+              : "Try a different file name."
+          )
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView {
+          LazyVStack(spacing: 2) {
+            ForEach(visibleEntries) { entry in
+              let isSelected = activeSelection.contains(entry.id)
+              let exceedsLimit = !isSelected
+                && (entry.byteCount > ProjectWorkspaceStore.maxFileBytes
+                  || projectedBytes + entry.byteCount > ProjectWorkspaceStore.maxTotalFileBytes)
+              MacLibraryPickerSelectableRow(
+                title: entry.filename,
+                detail: "\(entry.byteCountText) · \(entry.mimeType)",
+                isSelected: isSelected,
+                isDisabled: isLoading || (!isSelected && (remainingSlots == 0 || exceedsLimit)),
+                action: { toggle(entry.id) }
+              ) {
+                MacLibraryPickerThumbnail(
+                  attachment: ChatAttachment(
+                    id: entry.id.rawValue,
+                    kind: entry.kind,
+                    filename: entry.filename,
+                    mimeType: entry.mimeType,
+                    data: Data(),
+                    declaredByteCount: entry.byteCount
+                  ),
+                  loadThumbnail: { _, size in
+                    await workspace.libraryThumbnail(entry, maxPixelSize: size)
+                  }
+                )
+              }
+            }
+          }
+          .padding(10)
+        }
+      }
+    }
+    .frame(width: 580, height: 480)
+    .background(MacDesignTokens.Colors.canvas)
+    .overlay {
+      if isLoading {
+        ProgressView()
+          .padding(12)
+          .background(.regularMaterial, in: Capsule())
+      }
+    }
+    .alert(
+      "Project Source Error",
+      isPresented: Binding(
+        get: { errorMessage != nil },
+        set: { if !$0 { errorMessage = nil } }
+      )
+    ) {
+      Button("OK", role: .cancel) { errorMessage = nil }
+    } message: {
+      Text(errorMessage ?? "Unknown error")
+    }
+  }
+
+  private var capacityMessage: String {
+    if projectedBytes > ProjectWorkspaceStore.maxTotalFileBytes {
+      return "Project reference files cannot exceed 40 MB total."
+    }
+    if remainingSlots == 0 {
+      return "Maximum of \(ProjectWorkspaceStore.maxFileCount) project files reached."
+    }
+    let noun = remainingSlots == 1 ? "file" : "files"
+    return "You can add up to \(remainingSlots) more \(noun)."
+  }
+
+  private func toggle(_ id: LibraryEntryID) {
+    if selection.contains(id) {
+      selection.remove(id)
+    } else if remainingSlots > 0 {
+      selection.insert(id)
+    }
+  }
+
+  private func commit() {
+    let entries = selectedEntries
+    guard !entries.isEmpty, !isLoading else { return }
+    isLoading = true
+    Task { @MainActor in
+      defer { isLoading = false }
+
+      var additions: [ProjectFile] = []
+      additions.reserveCapacity(entries.count)
+      for entry in entries {
+        guard let data = await workspace.libraryData(entry), !data.isEmpty else {
+          errorMessage = "The file '\(entry.filename)' could not be loaded."
+          return
+        }
+        additions.append(
+          ProjectFile(
+            id: entry.id.rawValue,
+            filename: entry.filename,
+            mimeType: entry.mimeType,
+            data: data,
+            declaredByteCount: data.count,
+            createdAt: entry.createdAt
+          )
+        )
+      }
+
+      if let error = await addFiles(additions) {
+        errorMessage = error
+      } else {
+        dismiss()
+      }
     }
   }
 }
