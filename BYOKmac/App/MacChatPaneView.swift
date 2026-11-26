@@ -1108,7 +1108,6 @@ private struct MacTranscriptView: View {
     case details(ChatMessage)
     case edit(ChatMessage)
     case previewAttachment(ChatAttachment, ChatMessage)
-    case sources([MacAnswerSource])
     case saveImages(ChatMessage, [MacResponseImageCandidate])
 
     var id: String {
@@ -1116,7 +1115,6 @@ private struct MacTranscriptView: View {
       case .details(let message): "details-\(message.id.rawValue)"
       case .edit(let message): "edit-\(message.id.rawValue)"
       case .previewAttachment(let attachment, let message): "attachment-\(message.id.rawValue)-\(attachment.id)"
-      case .sources(let sources): "sources-\(sources.count)-\(sources.first?.id ?? "")"
       case .saveImages(let message, _): "save-images-\(message.id.rawValue)"
       }
     }
@@ -1274,7 +1272,6 @@ private struct MacTranscriptView: View {
                     onPreviewAttachment: { attachment, owner in
                       activeRowSheet = .previewAttachment(attachment, owner)
                     },
-                    onShowSources: { activeRowSheet = .sources($0) },
                     onSaveImages: { activeRowSheet = .saveImages(message, $0) },
                     onRequestRegenerate: requestRegeneration
                   )
@@ -1544,9 +1541,6 @@ private struct MacTranscriptView: View {
           }
           : nil
       )
-
-    case .sources(let sources):
-      MacAnswerSourcesSheet(sources: sources)
 
     case .saveImages(let message, let candidates):
       if let conversationID {
@@ -3176,7 +3170,6 @@ private struct MacTranscriptMessageRow: View {
   let onShowDetails: (ChatMessage) -> Void
   let onEditMessage: (ChatMessage) -> Void
   let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
-  let onShowSources: ([MacAnswerSource]) -> Void
   let onSaveImages: ([MacResponseImageCandidate]) -> Void
   let onRequestRegenerate: () -> Void
 
@@ -3216,7 +3209,6 @@ private struct MacTranscriptMessageRow: View {
           includeRetry: true,
           hideEmptyContentActions: message.status == .failed,
           onShowDetails: { onShowDetails(message) },
-          onShowSources: onShowSources,
           onSaveImages: onSaveImages,
           onRequestRegenerate: onRequestRegenerate
         )
@@ -3443,14 +3435,19 @@ private struct MacAssistantMessageActions: View {
   var includeRetry: Bool = true
   var hideEmptyContentActions: Bool = false
   let onShowDetails: () -> Void
-  let onShowSources: ([MacAnswerSource]) -> Void
   let onSaveImages: ([MacResponseImageCandidate]) -> Void
   let onRequestRegenerate: () -> Void
 
   @State private var copied = false
   @State private var copyResetTask: Task<Void, Never>?
   @State private var resolvedAnswer: MacPreparedAnswer?
+  @State private var showingSourcesPopover = false
   @State private var showingMorePopover = false
+
+  private struct PrepareRequest: Equatable {
+    let cacheKey: MacAnswerCacheKey
+    let isActive: Bool
+  }
 
   private var contentCacheKey: MacAnswerCacheKey {
     MacAnswerCacheKey(source: message.content)
@@ -3531,8 +3528,17 @@ private struct MacAssistantMessageActions: View {
       }
 
       if !sources.isEmpty {
-        MacSourcesPillButton(count: sources.count) {
-          onShowSources(sources)
+        MacSourcesPillButton(
+          count: sources.count,
+          isPresented: showingSourcesPopover
+        ) {
+          showingSourcesPopover.toggle()
+        }
+        .popover(isPresented: $showingSourcesPopover, arrowEdge: .bottom) {
+          MacAnswerSourcesPopover(sources: sources) {
+            showingSourcesPopover = false
+          }
+          .presentationBackground(MacDesignTokens.Colors.surface)
         }
         .padding(.horizontal, 4)
       }
@@ -3548,7 +3554,8 @@ private struct MacAssistantMessageActions: View {
       }
       .buttonStyle(MacIconButtonStyle())
       .popover(isPresented: $showingMorePopover, arrowEdge: .bottom) {
-        morePopoverContent(sources: sources)
+        morePopoverContent
+          .presentationBackground(MacDesignTokens.Colors.surface)
       }
       .help("More actions")
       .accessibilityLabel("More actions")
@@ -3560,7 +3567,7 @@ private struct MacAssistantMessageActions: View {
       copyResetTask?.cancel()
       copyResetTask = nil
     }
-    .task(id: contentCacheKey) {
+    .task(id: PrepareRequest(cacheKey: contentCacheKey, isActive: isTranscriptActive)) {
       guard isTranscriptActive, showContentActions, hasCopyableContent else { return }
       if let cached = preparedAnswer {
         resolvedAnswer = cached
@@ -3577,12 +3584,12 @@ private struct MacAssistantMessageActions: View {
     }
   }
 
-  private func morePopoverContent(sources: [MacAnswerSource]) -> some View {
+  private var morePopoverContent: some View {
     let hasSaveAttachments = conversationID != nil && !attachments.isEmpty
     let hasSaveResponse = conversationID != nil && showContentActions && hasCopyableContent
     let hasExportOrShare = showContentActions && hasCopyableContent
     let hasTopSection =
-      hasReasoning || !sources.isEmpty || hasSavableImages
+      hasReasoning || hasSavableImages
       || hasSaveResponse || hasSaveAttachments || hasExportOrShare
 
     return MacThemedActionPopoverContainer {
@@ -3597,19 +3604,9 @@ private struct MacAssistantMessageActions: View {
         }
       }
 
-      if !sources.isEmpty {
-        MacThemedPopoverActionRow(
-          title: "Sources (\(sources.count))…",
-          systemImage: "globe"
-        ) {
-          showingMorePopover = false
-          onShowSources(sources)
-        }
-      }
-
       if hasSavableImages {
         MacThemedPopoverActionRow(
-          title: "Save Images…",
+          title: "Save Images",
           systemImage: "photo.on.rectangle.angled"
         ) {
           showingMorePopover = false
@@ -3644,7 +3641,7 @@ private struct MacAssistantMessageActions: View {
 
       if hasExportOrShare {
         MacThemedPopoverActionRow(
-          title: "Export as Markdown…",
+          title: "Export as Markdown",
           systemImage: "square.and.arrow.down"
         ) {
           showingMorePopover = false
@@ -3809,30 +3806,35 @@ private struct MacInlineRetryActionButton: View {
 
 private struct MacSourcesPillButton: View {
   let count: Int
+  var isPresented: Bool = false
   let action: () -> Void
 
   @State private var isHovered = false
+
+  private var isActive: Bool {
+    isHovered || isPresented
+  }
 
   var body: some View {
     Button(action: action) {
       HStack(spacing: 4) {
         Image(systemName: "globe")
           .font(.system(size: 11.5, weight: .medium))
-          .foregroundStyle(isHovered ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(isActive ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
         Text(count == 1 ? "1 Source" : "\(count) Sources")
           .font(.system(size: 11.5, weight: .medium))
-          .foregroundStyle(isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(isActive ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted)
       }
       .padding(.horizontal, 8)
       .frame(height: 26)
       .background(
-        isHovered ? MacDesignTokens.Colors.selection.opacity(0.65) : MacDesignTokens.Colors.surface,
+        isActive ? MacDesignTokens.Colors.selection.opacity(0.65) : MacDesignTokens.Colors.surface,
         in: Capsule()
       )
       .overlay {
         Capsule()
           .stroke(
-            isHovered
+            isActive
               ? MacDesignTokens.Colors.accent.opacity(0.45)
               : MacDesignTokens.Colors.separator.opacity(0.75),
             lineWidth: 0.65
@@ -3842,7 +3844,7 @@ private struct MacSourcesPillButton: View {
     }
     .buttonStyle(.plain)
     .onHover { isHovered = $0 }
-    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isActive)
     .help("View \(count) cited \(count == 1 ? "source" : "sources")")
     .accessibilityLabel("Sources, \(count)")
   }

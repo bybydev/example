@@ -483,4 +483,48 @@ struct MacAnswerContentParserTests {
       #expect(MacAnswerContentParser.isValidBrowsableURL(valid))
     }
   }
+
+  @Test("Cleans formatted link titles, handles title attributes and angle destinations, ignores numeric citation titles, and preserves case-sensitive paths")
+  func sourceExtractionEdgeCases() {
+    let text = """
+    Read [Use `Task` safely](https://swift.org/concurrency) and [**Apple Docs**](https://apple.com "Apple Home").
+    Also see [`URLSession`](<https://developer.apple.com/documentation/foundation/urlsession>) and [Upper](HTTPS://DOCS.EXAMPLE.COM/Guide).
+    Citation markers [1](https://news.example.com/story?id=42) and [[2]](https://blog.example.com/).
+    Emphasized **https://spec.example.com/v2** and <https://ref.example.com/rfc>.
+    Case-sensitive short links: https://youtu.be/AbCdEf and https://youtu.be/abcdef.
+    Ignored inline code link `[Fake](https://fake.example/nope)` and `![Img](https://img.example/a.png)`.
+    """
+
+    let sources = MacAnswerContentParser.sources(in: text)
+    #expect(sources.count == 10)
+
+    #expect(sources[0].displayTitle == "Use Task safely")
+    #expect(sources[0].displayPath == "/concurrency")
+    #expect(sources[0].hasDistinctTitle)
+
+    #expect(sources[1].displayTitle == "Apple Docs")
+    #expect(sources[1].url.absoluteString == "https://apple.com")
+    #expect(sources[1].displayPath == nil)
+
+    #expect(sources[2].displayTitle == "URLSession")
+    #expect(sources[2].url.absoluteString == "https://developer.apple.com/documentation/foundation/urlsession")
+
+    #expect(sources[3].displayTitle == "Upper")
+    #expect(sources[3].url.absoluteString == "HTTPS://DOCS.EXAMPLE.COM/Guide")
+
+    #expect(sources[4].title == nil)
+    #expect(sources[4].displayTitle == "news.example.com")
+    #expect(sources[4].displayPath == "/story?id=42")
+    #expect(!sources[4].hasDistinctTitle)
+
+    #expect(sources[5].title == nil)
+    #expect(sources[5].displayTitle == "blog.example.com")
+    #expect(sources[5].displayPath == nil)
+
+    #expect(sources[6].url.absoluteString == "https://spec.example.com/v2")
+    #expect(sources[7].url.absoluteString == "https://ref.example.com/rfc")
+
+    #expect(sources[8].url.absoluteString == "https://youtu.be/AbCdEf")
+    #expect(sources[9].url.absoluteString == "https://youtu.be/abcdef")
+  }
 }

@@ -280,9 +280,25 @@ struct MacAnswerSource: Identifiable, Hashable, Sendable {
     url.host(percentEncoded: false) ?? url.host ?? url.absoluteString
   }
 
+  /// Path and optional query without scheme/host, or `nil` for root-only URLs.
+  var displayPath: String? {
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+      return nil
+    }
+    let rawPath = components.path
+    let hasMeaningfulPath = !rawPath.isEmpty && rawPath != "/"
+    let query = components.query.flatMap { $0.isEmpty ? nil : "?\($0)" } ?? ""
+    guard hasMeaningfulPath || !query.isEmpty else { return nil }
+    return (hasMeaningfulPath ? rawPath : "") + query
+  }
+
   var displayTitle: String {
     let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return trimmed.isEmpty ? host : trimmed
+  }
+
+  var hasDistinctTitle: Bool {
+    displayTitle.caseInsensitiveCompare(host) != .orderedSame
   }
 }
 
@@ -298,7 +314,7 @@ enum MacAnswerContentParser {
     pattern: #"(?<![\\$\d])\$(?![$\s])(?:\\.|[^$\n])+(?<!\s)(?<!\\)\$(?![$\d])|\\\((?:\\.|[^\\\n])+\\\)"#
   )
   private static let markdownLinkRegex = try? NSRegularExpression(
-    pattern: #"(?<!!)\[([^\]]+)\]\((https?://(?:[^\s()]+|\([^\s()]*\))+)\)"#
+    pattern: #"(?<!!)\[([^\]]+)\]\(\s*<?((?i:https?)://(?:[^\s()<>]++|\([^\s()<>]*+\))++)>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)"#
   )
   private static let orderedListRegex = try? NSRegularExpression(pattern: #"^\d+[.)]\s"#)
   private static let inlineMarkdownFormattingRegex = try? NSRegularExpression(
@@ -1202,27 +1218,34 @@ enum MacAnswerContentParser {
   }
 
   private static func markdownSources(_ markdown: String) -> [MacAnswerSource] {
-    let cleaned = stripMarkdownImages(from: stripInlineCodeSpans(from: markdown))
+    let cleaned = stripMarkdownImagesOutsideInlineCode(from: markdown)
     guard !cleaned.isEmpty else { return [] }
 
     let fullRange = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
+    let codeRanges = inlineCodeSpanNSRanges(in: cleaned)
     var positioned: [PositionedSource] = []
     var linkedRanges: [NSRange] = []
 
     if let markdownLinkRegex {
       for match in markdownLinkRegex.matches(in: cleaned, range: fullRange) {
+        guard match.numberOfRanges >= 3 else { continue }
+        let openingRange = NSRange(location: match.range.location, length: 1)
+        let urlNSRange = match.range(at: 2)
+        guard !overlapsAny(openingRange, in: codeRanges),
+          !overlapsAny(urlNSRange, in: codeRanges)
+        else { continue }
+
         guard
-          match.numberOfRanges >= 3,
           let titleRange = Range(match.range(at: 1), in: cleaned),
-          let urlRange = Range(match.range(at: 2), in: cleaned),
+          let urlRange = Range(urlNSRange, in: cleaned),
           let url = sanitizedURL(String(cleaned[urlRange]))
         else { continue }
-        let rawTitle = String(cleaned[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = cleanedSourceTitle(String(cleaned[titleRange]))
         linkedRanges.append(match.range)
         positioned.append(
           PositionedSource(
             location: match.range.location,
-            source: MacAnswerSource(url: url, title: rawTitle.isEmpty ? nil : rawTitle)
+            source: MacAnswerSource(url: url, title: title)
           )
         )
       }
@@ -1232,7 +1255,9 @@ enum MacAnswerContentParser {
       let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     {
       for match in detector.matches(in: cleaned, range: fullRange) {
-        guard !linkedRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else {
+        guard !overlapsAny(match.range, in: linkedRanges),
+          !overlapsAny(match.range, in: codeRanges)
+        else {
           continue
         }
         guard let rawURL = match.url,
@@ -1265,6 +1290,90 @@ enum MacAnswerContentParser {
     return positioned
       .sorted { $0.location < $1.location }
       .map(\.source)
+  }
+
+  private static func cleanedSourceTitle(_ raw: String) -> String? {
+    let plain = plainTableCellText(raw)
+      .split(whereSeparator: \.isWhitespace)
+      .joined(separator: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !plain.isEmpty else { return nil }
+
+    // Numeric web-search citation markers like "[1]" or "1" are redundant
+    // beside the row index badge; let them fall back to the source host.
+    let strippedCitation = plain.trimmingCharacters(in: CharacterSet(charactersIn: "[]()^.,"))
+    if !strippedCitation.isEmpty,
+      strippedCitation.count <= 3,
+      strippedCitation.allSatisfy(\.isASCII),
+      strippedCitation.allSatisfy(\.isNumber)
+    {
+      return nil
+    }
+
+    return plain
+  }
+
+  private static func inlineCodeSpanNSRanges(in text: String) -> [NSRange] {
+    guard text.contains("`") else { return [] }
+    var ranges: [NSRange] = []
+    var cursor = text.startIndex
+
+    while let tickRange = text.range(of: "`", range: cursor..<text.endIndex) {
+      var runEnd = tickRange.upperBound
+      var runLength = 1
+      while runEnd < text.endIndex, text[runEnd] == "`" {
+        runLength += 1
+        runEnd = text.index(after: runEnd)
+      }
+      if let closeEnd = findMatchingBacktickRunEnd(in: text, from: runEnd, length: runLength) {
+        ranges.append(NSRange(tickRange.lowerBound..<closeEnd, in: text))
+        cursor = closeEnd
+      } else {
+        cursor = runEnd
+      }
+    }
+
+    return ranges
+  }
+
+  private static func overlapsAny(_ range: NSRange, in ranges: [NSRange]) -> Bool {
+    ranges.contains { NSIntersectionRange($0, range).length > 0 }
+  }
+
+  /// Strips Markdown image syntax (`![alt](url)`) outside matched inline code
+  /// spans so image URLs are not extracted as sources while inline code inside
+  /// link labels (e.g. ``[Use `Task`](https://swift.org)``) remains intact.
+  private static func stripMarkdownImagesOutsideInlineCode(from text: String) -> String {
+    guard text.contains("![") else { return text }
+    guard text.contains("`") else { return stripMarkdownImages(from: text) }
+
+    var output = ""
+    output.reserveCapacity(min(text.utf8.count, 64 * 1_024))
+    var cursor = text.startIndex
+
+    while let tickRange = text.range(of: "`", range: cursor..<text.endIndex) {
+      var runEnd = tickRange.upperBound
+      var runLength = 1
+      while runEnd < text.endIndex, text[runEnd] == "`" {
+        runLength += 1
+        runEnd = text.index(after: runEnd)
+      }
+      if let closeEnd = findMatchingBacktickRunEnd(in: text, from: runEnd, length: runLength) {
+        if tickRange.lowerBound > cursor {
+          output.append(stripMarkdownImages(from: String(text[cursor..<tickRange.lowerBound])))
+        }
+        output.append(contentsOf: text[tickRange.lowerBound..<closeEnd])
+        cursor = closeEnd
+      } else {
+        output.append(stripMarkdownImages(from: String(text[cursor..<runEnd])))
+        cursor = runEnd
+      }
+    }
+
+    if cursor < text.endIndex {
+      output.append(stripMarkdownImages(from: String(text[cursor..<text.endIndex])))
+    }
+    return output
   }
 
   /// Replaces matched backtick inline code spans with spaces so links or image
@@ -1391,7 +1500,9 @@ enum MacAnswerContentParser {
 
   private static func sanitizedURL(_ value: String) -> URL? {
     var trimmed = value
-    let trailingSimplePunctuation: Set<Character> = [".", ",", ";", ":", "!", "?"]
+    let trailingSimplePunctuation: Set<Character> = [
+      ".", ",", ";", ":", "!", "?", "*", "~", ">", "\"", "'",
+    ]
     while let last = trimmed.last {
       if trailingSimplePunctuation.contains(last) {
         trimmed.removeLast()
@@ -1419,9 +1530,13 @@ enum MacAnswerContentParser {
   }
 
   private static func normalizedURLKey(_ url: URL) -> String {
-    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-    components?.fragment = nil
-    if components?.path == "/" { components?.path = "" }
-    return (components?.url ?? url).absoluteString.lowercased()
+    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+      return url.absoluteString
+    }
+    components.scheme = components.scheme?.lowercased()
+    components.host = components.host?.lowercased()
+    components.fragment = nil
+    if components.path == "/" { components.path = "" }
+    return (components.url ?? url).absoluteString
   }
 }

@@ -1,55 +1,34 @@
 import AppKit
 import SwiftUI
 
-struct MacAnswerSourcesSheet: View {
+struct MacAnswerSourcesPopover: View {
   let sources: [MacAnswerSource]
+  let onDismiss: () -> Void
 
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.macAppTheme) private var theme
   @State private var copiedSourceID: String?
   @State private var copiedAll = false
   @State private var copyFeedbackRevision = 0
 
-  init(sources: [MacAnswerSource]) {
-    self.sources = sources
-  }
-
   var body: some View {
-    VStack(spacing: 0) {
+    VStack(alignment: .leading, spacing: 0) {
       headerBar
 
-      Divider()
+      Rectangle()
+        .fill(theme.separator.opacity(0.75))
+        .frame(height: 1)
 
-      if sources.isEmpty {
-        ContentUnavailableView(
-          "No Sources",
-          systemImage: "link",
-          description: Text("This response doesn't include any web links.")
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
+      if sources.count > 6 {
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
-              MacAnswerSourceRow(
-                index: index + 1,
-                source: source,
-                isCopied: copiedSourceID == source.id,
-                open: { openSource(source) },
-                copy: { copySource(source) }
-              )
-            }
-          }
-          .padding(16)
+          sourceRows
         }
+        .frame(maxHeight: 340)
+      } else {
+        sourceRows
       }
     }
-    .frame(
-      minWidth: 500,
-      idealWidth: MacDesignTokens.Sheet.standardWidth,
-      minHeight: 340,
-      idealHeight: MacDesignTokens.Sheet.standardHeight
-    )
-    .background(MacDesignTokens.Colors.canvas)
+    .frame(width: 356, alignment: .leading)
+    .background(theme.surface)
     .task(id: copyFeedbackRevision) {
       guard copyFeedbackRevision > 0 else { return }
       try? await Task.sleep(for: .seconds(1.4))
@@ -62,44 +41,51 @@ struct MacAnswerSourcesSheet: View {
   }
 
   private var headerBar: some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Sources")
-          .font(.headline)
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+    HStack(spacing: 6) {
+      Text("Sources")
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(theme.textPrimary)
 
-        Text(sources.count == 1 ? "1 link" : "\(sources.count) links")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      }
+      Text("·")
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(theme.textMuted.opacity(0.6))
+
+      Text("\(sources.count)")
+        .font(.system(size: 11.5, weight: .medium))
+        .monospacedDigit()
+        .foregroundStyle(theme.textMuted)
 
       Spacer(minLength: 8)
 
       if !sources.isEmpty {
-        Button {
+        MacSourcesCopyAllButton(isCopied: copiedAll) {
           copyAllSources()
-        } label: {
-          Label(
-            copiedAll ? "Copied All" : "Copy All",
-            systemImage: copiedAll ? "checkmark" : "doc.on.doc"
-          )
-          .font(.system(size: 11.5, weight: .medium))
         }
-        .buttonStyle(MacSecondaryButtonStyle())
-        .help("Copy all source URLs")
       }
-
-      Button("Done") { dismiss() }
-        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-        .keyboardShortcut(.cancelAction)
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 9)
+  }
+
+  private var sourceRows: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
+        MacAnswerSourcePopoverRow(
+          index: index + 1,
+          source: source,
+          isCopied: copiedSourceID == source.id,
+          open: { openSource(source) },
+          copy: { copySource(source) }
+        )
+      }
+    }
+    .padding(6)
   }
 
   private func openSource(_ source: MacAnswerSource) {
     guard MacAnswerContentParser.isValidBrowsableURL(source.url) else { return }
     NSWorkspace.shared.open(source.url)
+    onDismiss()
   }
 
   private func copySource(_ source: MacAnswerSource) {
@@ -125,90 +111,105 @@ struct MacAnswerSourcesSheet: View {
   }
 }
 
-private struct MacAnswerSourceRow: View {
+private struct MacSourcesCopyAllButton: View {
+  let isCopied: Bool
+  let action: () -> Void
+
+  @Environment(\.macAppTheme) private var theme
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 4) {
+        Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+          .font(.system(size: 10.5, weight: .semibold))
+        Text(isCopied ? "Copied" : "Copy All")
+          .font(.system(size: 11, weight: .medium))
+      }
+      .foregroundStyle(isCopied ? theme.accent : (isHovered ? theme.textPrimary : theme.textMuted))
+      .padding(.horizontal, 7)
+      .padding(.vertical, 3.5)
+      .background(
+        isHovered ? theme.selection.opacity(0.6) : Color.clear,
+        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+      )
+      .contentShape(
+        RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+      )
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help("Copy all source URLs")
+  }
+}
+
+private struct MacAnswerSourcePopoverRow: View {
   let index: Int
   let source: MacAnswerSource
   let isCopied: Bool
   let open: () -> Void
   let copy: () -> Void
 
+  @Environment(\.macAppTheme) private var theme
   @State private var isHovered = false
 
   var body: some View {
-    HStack(spacing: 11) {
+    HStack(spacing: 9) {
       Button(action: open) {
-        HStack(spacing: 11) {
+        HStack(spacing: 9) {
           Text("\(index)")
-            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .font(.system(size: 10.5, weight: .bold, design: .rounded))
             .monospacedDigit()
-            .foregroundStyle(MacDesignTokens.Colors.accent)
-            .frame(width: 24, height: 24)
-            .background(MacDesignTokens.Colors.accent.opacity(0.14), in: Circle())
+            .foregroundStyle(theme.accent)
+            .frame(width: 20, height: 20)
+            .background(theme.accent.opacity(0.13), in: Circle())
 
-          VStack(alignment: .leading, spacing: 2) {
+          VStack(alignment: .leading, spacing: 1.5) {
             Text(source.displayTitle)
-              .font(.system(size: 13.5, weight: .semibold))
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .font(.system(size: 12.5, weight: .medium))
+              .foregroundStyle(theme.textPrimary)
               .lineLimit(1)
+              .truncationMode(.tail)
 
-            HStack(spacing: 5) {
-              Text(source.host)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                .lineLimit(1)
-
-              if source.url.absoluteString != source.host {
-                Text("·")
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.6))
-                Text(source.url.absoluteString)
-                  .font(.caption2)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.8))
-                  .lineLimit(1)
-                  .truncationMode(.middle)
-              }
-            }
+            subtitleView
           }
 
-          Spacer(minLength: 6)
+          Spacer(minLength: 4)
         }
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .help("Open \(source.url.absoluteString) in browser")
+      .help("Open \(source.url.absoluteString)")
 
-      HStack(spacing: 4) {
+      if isHovered || isCopied {
         Button(isCopied ? "Copied" : "Copy URL", systemImage: isCopied ? "checkmark" : "doc.on.doc") {
           copy()
         }
         .labelStyle(.iconOnly)
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(isCopied ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
-        .buttonStyle(MacIconButtonStyle())
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(isCopied ? theme.accent : theme.textMuted)
+        .frame(width: 24, height: 24)
+        .contentShape(Rectangle())
+        .buttonStyle(.plain)
         .help(isCopied ? "Copied URL" : "Copy URL")
-
-        Button("Open in Browser", systemImage: "arrow.up.right") {
-          open()
-        }
-        .labelStyle(.iconOnly)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        .buttonStyle(MacIconButtonStyle())
-        .help("Open in browser")
+      } else {
+        Image(systemName: "arrow.up.right")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(theme.textMuted.opacity(0.55))
+          .frame(width: 24, height: 24)
+          .accessibilityHidden(true)
       }
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 9)
+    .padding(.horizontal, 8)
+    .padding(.vertical, 6.5)
     .background(
-      isHovered
-        ? MacDesignTokens.Colors.selection.opacity(0.45)
-        : MacDesignTokens.Colors.surface,
-      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+      isHovered ? theme.selection.opacity(0.55) : Color.clear,
+      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
     )
-    .overlay {
-      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
-        .stroke(MacDesignTokens.Colors.separator.opacity(isHovered ? 0.95 : 0.7), lineWidth: 0.75)
-    }
+    .contentShape(
+      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+    )
     .onHover { isHovered = $0 }
     .animation(
       .easeOut(duration: MacDesignTokens.Control.interactionDuration),
@@ -221,6 +222,42 @@ private struct MacAnswerSourceRow: View {
       Button("Copy URL", systemImage: "doc.on.doc") {
         copy()
       }
+    }
+  }
+
+  @ViewBuilder
+  private var subtitleView: some View {
+    if source.hasDistinctTitle {
+      HStack(spacing: 4) {
+        Text(source.host)
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(theme.textMuted)
+          .lineLimit(1)
+          .layoutPriority(1)
+
+        if let path = source.displayPath {
+          Text("·")
+            .font(.system(size: 11))
+            .foregroundStyle(theme.textMuted.opacity(0.55))
+          Text(path)
+            .font(.system(size: 11))
+            .foregroundStyle(theme.textMuted.opacity(0.8))
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+      }
+    } else if let path = source.displayPath {
+      Text(path)
+        .font(.system(size: 11))
+        .foregroundStyle(theme.textMuted)
+        .lineLimit(1)
+        .truncationMode(.middle)
+    } else {
+      Text(source.url.absoluteString)
+        .font(.system(size: 11))
+        .foregroundStyle(theme.textMuted.opacity(0.85))
+        .lineLimit(1)
+        .truncationMode(.middle)
     }
   }
 }
