@@ -1,4 +1,3 @@
-- Focus on iOS app only, ignore macOS target.
 - Do not run build or tests.
 - Do not open xcode or iOS simulator.
 - All CI workflows must be triggered manually only.
