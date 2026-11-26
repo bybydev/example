@@ -110,4 +110,154 @@ final class MacScrollWheelRoutingTests: XCTestCase {
     XCTAssertEqual(MacScrollWheelRouting.horizontalDelta(deltaX: 11, deltaY: 3), 11)
     XCTAssertEqual(MacScrollWheelRouting.horizontalDelta(deltaX: -9, deltaY: -2), -9)
   }
+
+  func testVerticalMouseWheelAlwaysPassesThrough() {
+    var axis: MacScrollWheelRouting.Axis?
+    let decision = MacScrollWheelRouting.route(
+      deltaX: 0,
+      deltaY: -3,
+      hasPreciseDeltas: false,
+      modifierFlags: [],
+      phase: [],
+      momentumPhase: [],
+      canScrollHorizontally: true,
+      lockedAxis: &axis
+    )
+    XCTAssertEqual(decision, .passthrough)
+    XCTAssertNil(axis)
+  }
+
+  func testShiftMouseWheelScalesDiscreteDeltaHorizontally() {
+    var axis: MacScrollWheelRouting.Axis?
+    let decision = MacScrollWheelRouting.route(
+      deltaX: 0,
+      deltaY: -2,
+      hasPreciseDeltas: false,
+      modifierFlags: [.shift],
+      phase: [],
+      momentumPhase: [],
+      canScrollHorizontally: true,
+      lockedAxis: &axis
+    )
+    XCTAssertEqual(decision, .horizontal(delta: -24))
+  }
+
+  func testTrackpadVerticalGestureLocksVerticalAndNeverHijacksDrift() {
+    var axis: MacScrollWheelRouting.Axis?
+
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: 0, deltaY: 0, hasPreciseDeltas: true, modifierFlags: [],
+        phase: .mayBegin, momentumPhase: [], canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .passthrough
+    )
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: -1, deltaY: -10, hasPreciseDeltas: true, modifierFlags: [],
+        phase: .began, momentumPhase: [], canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .passthrough
+    )
+    XCTAssertEqual(axis, .vertical)
+
+    // Subsequent horizontal drift within the same vertical swipe must stay passthrough.
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: -8, deltaY: -1, hasPreciseDeltas: true, modifierFlags: [],
+        phase: .changed, momentumPhase: [], canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .passthrough
+    )
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: -5, deltaY: -1, hasPreciseDeltas: true, modifierFlags: [],
+        phase: [], momentumPhase: .changed, canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .passthrough
+    )
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: 0, deltaY: 0, hasPreciseDeltas: true, modifierFlags: [],
+        phase: [], momentumPhase: .ended, canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .passthrough
+    )
+    XCTAssertNil(axis)
+  }
+
+  func testTrackpadHorizontalGesturePansAndKeepsMomentum() {
+    var axis: MacScrollWheelRouting.Axis?
+
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: -9, deltaY: -1, hasPreciseDeltas: true, modifierFlags: [],
+        phase: .began, momentumPhase: [], canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .horizontal(delta: -9)
+    )
+    XCTAssertEqual(axis, .horizontal)
+
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: -6, deltaY: -5, hasPreciseDeltas: true, modifierFlags: [],
+        phase: .changed, momentumPhase: [], canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .horizontal(delta: -6)
+    )
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: 0, deltaY: 0, hasPreciseDeltas: true, modifierFlags: [],
+        phase: .ended, momentumPhase: [], canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .consume
+    )
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: -4, deltaY: 0, hasPreciseDeltas: true, modifierFlags: [],
+        phase: [], momentumPhase: .changed, canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .horizontal(delta: -4)
+    )
+    XCTAssertEqual(
+      MacScrollWheelRouting.route(
+        deltaX: 0, deltaY: 0, hasPreciseDeltas: true, modifierFlags: [],
+        phase: [], momentumPhase: .ended, canScrollHorizontally: true, lockedAxis: &axis
+      ),
+      .consume
+    )
+    XCTAssertNil(axis)
+  }
+
+  func testUnownedMomentumPassingOverCodeBlockPassesThrough() {
+    var axis: MacScrollWheelRouting.Axis?
+    let decision = MacScrollWheelRouting.route(
+      deltaX: -6,
+      deltaY: -1,
+      hasPreciseDeltas: true,
+      modifierFlags: [],
+      phase: [],
+      momentumPhase: .changed,
+      canScrollHorizontally: true,
+      lockedAxis: &axis
+    )
+    XCTAssertEqual(decision, .passthrough)
+    XCTAssertNil(axis)
+  }
+
+  func testNonOverflowingBlockAlwaysPassesThrough() {
+    var axis: MacScrollWheelRouting.Axis?
+    let decision = MacScrollWheelRouting.route(
+      deltaX: -12,
+      deltaY: 0,
+      hasPreciseDeltas: true,
+      modifierFlags: [],
+      phase: .began,
+      momentumPhase: [],
+      canScrollHorizontally: false,
+      lockedAxis: &axis
+    )
+    XCTAssertEqual(decision, .passthrough)
+    XCTAssertNil(axis)
+  }
 }

@@ -2193,23 +2193,25 @@ struct MacHighlightedCodeBlock: View {
 
       Divider()
 
-      ScrollView(.horizontal) {
-        if isStreaming {
-          Text(preview.displayedContent)
-            .font(.system(size: 13, design: .monospaced))
-            .fixedSize(horizontal: true, vertical: true)
-            .textSelection(.enabled)
+      MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+        Group {
+          if isStreaming {
+            Text(preview.displayedContent)
+              .font(.system(size: 13, design: .monospaced))
+              .fixedSize(horizontal: true, vertical: true)
+              .textSelection(.enabled)
+              .padding(13)
+          } else {
+            MacHighlightedCodeText(
+              code: preview.displayedContent,
+              language: language,
+              colorScheme: colorScheme
+            )
             .padding(13)
-        } else {
-          MacHighlightedCodeText(
-            code: preview.displayedContent,
-            language: language,
-            colorScheme: colorScheme
-          )
-          .padding(13)
+          }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .scrollIndicators(.visible)
 
       if preview.isLong && !isStreaming {
         Divider()
@@ -3164,14 +3166,18 @@ struct MacMermaidAnswerView: View {
           .foregroundStyle(.secondary)
       }
       if !source.isEmpty {
-        ScrollView([.horizontal, .vertical]) {
-          Text(source)
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        let streamingPreview = lines.count > 8
+          ? "…\n" + lines.suffix(8).joined(separator: "\n")
+          : source
+        MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+          Text(streamingPreview)
             .font(.system(size: 12.5, design: .monospaced))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: true, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, 8)
         }
-        .frame(maxHeight: 160)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3248,14 +3254,14 @@ struct MacMermaidAnswerView: View {
     }()
 
     VStack(spacing: 0) {
-      ScrollView(.horizontal) {
+      MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
         Text(displayedContent)
           .font(.system(size: 13, design: .monospaced))
           .textSelection(.enabled)
           .fixedSize(horizontal: true, vertical: true)
           .padding(13)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .scrollIndicators(.visible)
 
       if isLong {
         Divider()

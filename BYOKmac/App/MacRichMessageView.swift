@@ -156,7 +156,7 @@ struct MacRichMessageView: View {
           isStreaming: isStreaming && message.content.isEmpty,
           streamingSnapshot: livePresentation?.reasoningSnapshot,
           onExpandedChange: { expanded in
-            livePresentation?.setReasoningRenderEnabled(expanded)
+            chats.livePresentations[storedMessage.id]?.setReasoningRenderEnabled(expanded)
           }
         )
       }
