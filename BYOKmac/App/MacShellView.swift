@@ -1490,14 +1490,24 @@ private struct MacConversationRow: View {
 
   @State private var isHovered = false
   @State private var isEllipsisHovered = false
+  @State private var showingOptionsPopover = false
+  @State private var showingProjectPicker = false
 
   private var displayTitle: String {
     conversation.title.isEmpty ? "New Chat" : conversation.title
   }
 
+  private var otherProjects: [ChatProject] {
+    projects.filter { $0.id != currentProject?.id }
+  }
+
+  private var showsEllipsisButton: Bool {
+    isHovered || showingOptionsPopover
+  }
+
   private var rowBackground: Color {
     if selected { return MacDesignTokens.Colors.selection }
-    if isHovered { return MacDesignTokens.Colors.selection.opacity(0.45) }
+    if showsEllipsisButton { return MacDesignTokens.Colors.selection.opacity(0.45) }
     return .clear
   }
 
@@ -1523,34 +1533,47 @@ private struct MacConversationRow: View {
         }
       }
       .padding(.leading, MacDesignTokens.Spacing.small)
-      .padding(.trailing, isHovered ? 30 : MacDesignTokens.Spacing.small)
+      .padding(.trailing, showsEllipsisButton ? 30 : MacDesignTokens.Spacing.small)
       .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .overlay(alignment: .trailing) {
-      Menu {
-        menuItems
+      Button {
+        showingOptionsPopover.toggle()
       } label: {
         Image(systemName: "ellipsis")
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(
-            isEllipsisHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+            isEllipsisHovered || showingOptionsPopover
+              ? MacDesignTokens.Colors.textPrimary
+              : MacDesignTokens.Colors.textMuted
           )
           .frame(width: 24, height: 24)
           .background(
-            Color.primary.opacity(isEllipsisHovered ? MacDesignTokens.Control.sheetCloseHoverOpacity : 0),
+            Color.primary.opacity(
+              isEllipsisHovered || showingOptionsPopover
+                ? MacDesignTokens.Control.sheetCloseHoverOpacity
+                : 0
+            ),
             in: RoundedRectangle(cornerRadius: 6, style: .continuous)
           )
           .contentShape(Rectangle())
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
+      .buttonStyle(.plain)
+      .popover(isPresented: $showingOptionsPopover, arrowEdge: .trailing) {
+        optionsPopoverContent
+          .presentationBackground(MacDesignTokens.Colors.surface)
+      }
+      .onChange(of: showingOptionsPopover) { _, isPresented in
+        if !isPresented {
+          showingProjectPicker = false
+        }
+      }
       .onHover { isEllipsisHovered = $0 }
       .padding(.trailing, 4)
-      .opacity(isHovered ? 1 : 0)
-      .allowsHitTesting(isHovered)
+      .opacity(showsEllipsisButton ? 1 : 0)
+      .allowsHitTesting(showsEllipsisButton)
       .help("Chat options")
       .accessibilityLabel("Options for \(displayTitle)")
     }
@@ -1562,13 +1585,117 @@ private struct MacConversationRow: View {
     .onHover { isHovered = $0 }
     .animation(
       .easeOut(duration: MacDesignTokens.Control.interactionDuration),
-      value: isHovered
+      value: showsEllipsisButton
     )
     .contextMenu {
       menuItems
     }
     .accessibilityLabel(displayTitle)
     .accessibilityValue(pinned ? "Pinned" : "")
+  }
+
+  private var optionsPopoverContent: some View {
+    MacThemedActionPopoverContainer(minWidth: 204, maxWidth: 248) {
+      if showingProjectPicker {
+        projectPickerPopoverContent
+      } else {
+        mainOptionsPopoverContent
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var mainOptionsPopoverContent: some View {
+    MacThemedPopoverActionRow(
+      title: pinned ? "Unpin" : "Pin",
+      systemImage: pinned ? "pin.slash" : "pin"
+    ) {
+      runPopoverAction(togglePinned)
+    }
+
+    MacThemedPopoverActionRow(title: "Rename", systemImage: "pencil") {
+      runPopoverAction(rename)
+    }
+
+    if currentProject != nil || !projects.isEmpty {
+      MacThemedPopoverDivider()
+
+      if let currentProject {
+        MacThemedPopoverActionRow(
+          title: "Remove from \(currentProject.name)",
+          systemImage: "folder.badge.minus"
+        ) {
+          runPopoverAction { assignProject(nil) }
+        }
+        if !otherProjects.isEmpty {
+          MacThemedPopoverActionRow(
+            title: "Move to Project",
+            systemImage: "folder.badge.plus",
+            showsDisclosureChevron: true
+          ) {
+            showingProjectPicker = true
+          }
+        }
+      } else if !projects.isEmpty {
+        MacThemedPopoverActionRow(
+          title: "Add to Project",
+          systemImage: "folder.badge.plus",
+          showsDisclosureChevron: true
+        ) {
+          showingProjectPicker = true
+        }
+      }
+    }
+
+    MacThemedPopoverDivider()
+
+    MacThemedPopoverActionRow(
+      title: "Delete",
+      systemImage: "trash",
+      isDestructive: true
+    ) {
+      runPopoverAction(delete)
+    }
+  }
+
+  @ViewBuilder
+  private var projectPickerPopoverContent: some View {
+    let destinations = currentProject == nil ? projects : otherProjects
+    let rows = VStack(alignment: .leading, spacing: 2) {
+      ForEach(destinations) { project in
+        let accent = MacProjectAccentOption(rawValue: project.accentID)?.color ?? .blue
+        MacThemedPopoverActionRow(
+          title: project.name,
+          systemImage: project.symbolName,
+          iconTint: accent
+        ) {
+          runPopoverAction { assignProject(project.id) }
+        }
+      }
+    }
+
+    MacThemedPopoverActionRow(
+      title: currentProject == nil ? "Add to Project" : "Move to Project",
+      systemImage: "chevron.left"
+    ) {
+      showingProjectPicker = false
+    }
+
+    MacThemedPopoverDivider()
+
+    if destinations.count > 7 {
+      ScrollView {
+        rows
+      }
+      .frame(height: 220)
+    } else {
+      rows
+    }
+  }
+
+  private func runPopoverAction(_ action: () -> Void) {
+    showingOptionsPopover = false
+    action()
   }
 
   private var menuItems: some View {

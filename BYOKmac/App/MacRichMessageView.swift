@@ -1,5 +1,6 @@
 import AppKit
 import BYOKchatProviderCore
+import MacAppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -16,6 +17,7 @@ struct MacRichMessageView: View {
   let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
   let onRequestRegenerate: () -> Void
 
+  @Environment(\.macAppTheme) private var theme
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Environment(\.macToastCenter) private var toastCenter
   @Environment(MacWorkspaceModel.self) private var workspace
@@ -337,15 +339,11 @@ struct MacRichMessageView: View {
     }
   }
 
-  private var canRetryAssistant: Bool {
-    isLatestAssistant && canMutateConversation
-  }
-
   @ViewBuilder
   private var statusView: some View {
     switch message.status {
     case .failed:
-      failureCard
+      failureNotice
     case .cancelled:
       HStack(spacing: 5) {
         Image(systemName: "stop.circle.fill")
@@ -377,64 +375,34 @@ struct MacRichMessageView: View {
     }
   }
 
-  private var failureCard: some View {
+  private var failureNotice: some View {
     let description = message.errorDescription ?? "Something went wrong. Try again."
 
-    return HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "xmark.octagon.fill")
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(Color.red)
-        .frame(width: 26, height: 26)
-        .background(Color.red.opacity(0.12), in: Circle())
-        .accessibilityHidden(true)
+    return VStack(alignment: .leading, spacing: 3) {
+      Text(description)
+        .font(.system(size: 13.5))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
 
-      VStack(alignment: .leading, spacing: 8) {
-        if let failureContext, !failureContext.isEmpty {
-          Text(failureContext)
-            .font(.system(size: 11.5, weight: .semibold))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-
-        Text(description)
-          .font(.system(size: 13.5))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          .fixedSize(horizontal: false, vertical: true)
-          .textSelection(.enabled)
-
-        if isLatestAssistant {
-          Button(action: requestRegeneration) {
-            Label("Retry", systemImage: "arrow.clockwise")
-              .font(.system(size: 12.5, weight: .semibold))
-              .foregroundStyle(
-                canRetryAssistant ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
-              )
-              .padding(.horizontal, 11)
-              .padding(.vertical, 6)
-              .background(MacDesignTokens.Colors.canvas, in: Capsule())
-              .overlay(Capsule().stroke(MacDesignTokens.Colors.separator, lineWidth: 0.75))
-              .opacity(canRetryAssistant ? 1 : 0.45)
-          }
-          .buttonStyle(.plain)
-          .disabled(!canRetryAssistant)
-          .help(canRetryAssistant ? "Retry response" : "Wait for generation to finish before retrying")
-          .accessibilityLabel("Retry")
-        }
+      if let failureContext, !failureContext.isEmpty {
+        Text(failureContext)
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(12)
-    .background(
-      MacDesignTokens.Colors.surface,
-      in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .stroke(Color.red.opacity(0.32), lineWidth: 0.75)
-    )
-  }
-
-  private func requestRegeneration() {
-    onRequestRegenerate()
+    .padding(.leading, 11)
+    .padding(.vertical, 1)
+    .overlay(alignment: .leading) {
+      RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+        .fill(theme.destructive.opacity(0.65))
+        .frame(width: 2.5)
+        .padding(.vertical, 2)
+        .accessibilityHidden(true)
+    }
+    .frame(maxWidth: 620, alignment: .leading)
   }
 
   private func copyToPasteboard(_ value: String) {

@@ -400,6 +400,9 @@ private struct MacChatHeader: View {
   let exportMarkdown: () -> Void
   let deleteConversation: () -> Void
 
+  @State private var showingOverflowPopover = false
+  @State private var showingProjectPicker = false
+
   private var otherProjects: [ChatProject] {
     allProjects.filter { $0.id != activeProject?.id }
   }
@@ -470,55 +473,156 @@ private struct MacChatHeader: View {
   }
 
   private var overflowMenu: some View {
-    Menu {
-      Button("Prompts…", systemImage: "text.bubble", action: openPrompts)
-      Button("Chat Settings…", systemImage: "slider.horizontal.3", action: openChatSettings)
-      Button(
-        enabledToolCount == 0 ? "Tools…" : "Tools (\(enabledToolCount))…",
-        systemImage: "wrench.and.screwdriver",
-        action: openTools
-      )
-      if activeProject != nil {
-        Button("Project Settings…", systemImage: "folder.badge.gearshape", action: openProject)
-      }
-      if hasPersistedConversation && (activeProject != nil || !allProjects.isEmpty) {
-        Divider()
-        if let activeProject {
-          Button("Remove from \(activeProject.name)", systemImage: "folder.badge.minus") {
-            assignProject(nil)
-          }
-          if !otherProjects.isEmpty {
-            Menu("Move to Project…", systemImage: "folder.badge.plus") {
-              ForEach(otherProjects) { project in
-                Button(project.name) { assignProject(project.id) }
-              }
-            }
-          }
-        } else if !allProjects.isEmpty {
-          Menu("Add to Project…", systemImage: "folder.badge.plus") {
-            ForEach(allProjects) { project in
-              Button(project.name) { assignProject(project.id) }
-            }
-          }
-        }
-      }
-      Button("Chat Usage & Analytics…", systemImage: "chart.bar.xaxis", action: openAnalytics)
-      Divider()
-      Button("Rename…", systemImage: "pencil", action: renameConversation)
-        .disabled(!hasPersistedConversation)
-      Button("Export as Markdown…", systemImage: "square.and.arrow.up", action: exportMarkdown)
-        .disabled(!canExportMarkdown)
-      Divider()
-      Button("Delete…", systemImage: "trash", role: .destructive, action: deleteConversation)
-        .disabled(!hasPersistedConversation)
+    Button {
+      showingOverflowPopover.toggle()
     } label: {
-      MacIconMenuLabel(systemImage: "ellipsis")
+      Image(systemName: "ellipsis")
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(
+          showingOverflowPopover
+            ? MacDesignTokens.Colors.textPrimary
+            : MacDesignTokens.Colors.textMuted
+        )
     }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .fixedSize()
+    .buttonStyle(MacIconButtonStyle())
+    .popover(isPresented: $showingOverflowPopover, arrowEdge: .bottom) {
+      overflowPopoverContent
+        .presentationBackground(MacDesignTokens.Colors.surface)
+    }
+    .onChange(of: showingOverflowPopover) { _, isPresented in
+      if !isPresented {
+        showingProjectPicker = false
+      }
+    }
     .help("Chat options")
     .accessibilityLabel("Chat options")
+  }
+
+  private var overflowPopoverContent: some View {
+    MacThemedActionPopoverContainer(minWidth: 224, maxWidth: 264) {
+      if showingProjectPicker {
+        projectPickerPopoverContent
+      } else {
+        mainOverflowPopoverContent
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var mainOverflowPopoverContent: some View {
+    MacThemedPopoverActionRow(title: "Prompts", systemImage: "text.bubble") {
+      runPopoverAction(openPrompts)
+    }
+    MacThemedPopoverActionRow(title: "Chat Settings", systemImage: "slider.horizontal.3") {
+      runPopoverAction(openChatSettings)
+    }
+    MacThemedPopoverActionRow(
+      title: enabledToolCount == 0 ? "Tools" : "Tools (\(enabledToolCount))",
+      systemImage: "wrench.and.screwdriver"
+    ) {
+      runPopoverAction(openTools)
+    }
+    if activeProject != nil {
+      MacThemedPopoverActionRow(title: "Project Settings", systemImage: "folder.badge.gearshape") {
+        runPopoverAction(openProject)
+      }
+    }
+    MacThemedPopoverActionRow(title: "Chat Usage & Analytics", systemImage: "chart.bar.xaxis") {
+      runPopoverAction(openAnalytics)
+    }
+
+    if hasPersistedConversation && (activeProject != nil || !allProjects.isEmpty) {
+      MacThemedPopoverDivider()
+
+      if let activeProject {
+        MacThemedPopoverActionRow(
+          title: "Remove from \(activeProject.name)",
+          systemImage: "folder.badge.minus"
+        ) {
+          runPopoverAction { assignProject(nil) }
+        }
+        if !otherProjects.isEmpty {
+          MacThemedPopoverActionRow(
+            title: "Move to Project",
+            systemImage: "folder.badge.plus",
+            showsDisclosureChevron: true
+          ) {
+            showingProjectPicker = true
+          }
+        }
+      } else if !allProjects.isEmpty {
+        MacThemedPopoverActionRow(
+          title: "Add to Project",
+          systemImage: "folder.badge.plus",
+          showsDisclosureChevron: true
+        ) {
+          showingProjectPicker = true
+        }
+      }
+    }
+
+    MacThemedPopoverDivider()
+
+    MacThemedPopoverActionRow(title: "Rename", systemImage: "pencil") {
+      runPopoverAction(renameConversation)
+    }
+    .disabled(!hasPersistedConversation)
+
+    MacThemedPopoverActionRow(title: "Export as Markdown", systemImage: "square.and.arrow.up") {
+      runPopoverAction(exportMarkdown)
+    }
+    .disabled(!canExportMarkdown)
+
+    MacThemedPopoverDivider()
+
+    MacThemedPopoverActionRow(
+      title: "Delete",
+      systemImage: "trash",
+      isDestructive: true
+    ) {
+      runPopoverAction(deleteConversation)
+    }
+    .disabled(!hasPersistedConversation)
+  }
+
+  @ViewBuilder
+  private var projectPickerPopoverContent: some View {
+    let destinations = activeProject == nil ? allProjects : otherProjects
+    let rows = VStack(alignment: .leading, spacing: 2) {
+      ForEach(destinations) { project in
+        let accent = MacProjectAccentOption(rawValue: project.accentID)?.color ?? .blue
+        MacThemedPopoverActionRow(
+          title: project.name,
+          systemImage: project.symbolName,
+          iconTint: accent
+        ) {
+          runPopoverAction { assignProject(project.id) }
+        }
+      }
+    }
+
+    MacThemedPopoverActionRow(
+      title: activeProject == nil ? "Add to Project" : "Move to Project",
+      systemImage: "chevron.left"
+    ) {
+      showingProjectPicker = false
+    }
+
+    MacThemedPopoverDivider()
+
+    if destinations.count > 7 {
+      ScrollView {
+        rows
+      }
+      .frame(height: 220)
+    } else {
+      rows
+    }
+  }
+
+  private func runPopoverAction(_ action: () -> Void) {
+    showingOverflowPopover = false
+    action()
   }
 }
 
@@ -2162,10 +2266,18 @@ private struct MacComposerView: View {
   let removeAttachment: (String) -> Void
   let send: (String, [ChatAttachment]) -> Void
 
+  private enum AttachmentPopoverPage {
+    case main
+    case projectFiles
+    case prompts
+  }
+
   @Environment(MacWorkspaceModel.self) private var workspace
   @FocusState private var editorFocused: Bool
   @State private var urlDropTargeted = false
   @State private var imageDropTargeted = false
+  @State private var showingAttachmentPopover = false
+  @State private var attachmentPopoverPage: AttachmentPopoverPage = .main
   @State private var showingFileImporter = false
   @State private var showingLibraryPicker = false
   @State private var previewingAttachment: ChatAttachment?
@@ -2528,78 +2640,25 @@ private struct MacComposerView: View {
   }
 
   private var attachmentMenu: some View {
-    Menu {
-      if isAtAttachmentLimit {
-        Label(
-          "Attachment limit reached (\(MacAttachmentImporter.maximumCount)/\(MacAttachmentImporter.maximumCount))",
-          systemImage: "exclamationmark.circle"
-        )
-        .disabled(true)
-        Divider()
-      }
-
-      Button("Choose Files…", systemImage: "doc.badge.plus") {
-        showingFileImporter = true
-      }
-      .disabled(isAtAttachmentLimit)
-
-      Button("Paste Image or File", systemImage: "doc.on.clipboard") {
-        importPasteboard()
-      }
-      .disabled(isAtAttachmentLimit)
-
-      Divider()
-      Button("From Library…", systemImage: "books.vertical") {
-        showingLibraryPicker = true
-      }
-      .disabled(isAtAttachmentLimit)
-
-      if !projectFiles.isEmpty {
-        Divider()
-        let attachedIDs = Set(attachments.map(\.id))
-        Menu("Project Files", systemImage: "folder.badge.plus") {
-          ForEach(projectFiles) { file in
-            let isAttached = attachedIDs.contains(file.id)
-            Button {
-              attachProjectFile(file)
-            } label: {
-              if isAttached {
-                Label(file.filename, systemImage: "checkmark")
-              } else {
-                Text(file.filename)
-              }
-            }
-            .disabled(isAttached || isAtAttachmentLimit)
-          }
-        }
-      }
-
-      if !promptPresets.isEmpty {
-        Divider()
-        Menu("Prompts", systemImage: "text.bubble") {
-          ForEach(promptPresets) { preset in
-            Button(preset.name) { applyPromptPreset(preset) }
-          }
-        }
-      }
-
-      Divider()
-      Button(
-        enabledToolCount == 0 ? "Tools…" : "Tools · \(enabledToolCount)…",
-        systemImage: "wrench.and.screwdriver",
-        action: configureTools
-      )
+    Button {
+      editorFocused = false
+      showingAttachmentPopover.toggle()
     } label: {
       MacComposerPlusButtonLabel(
         isImporting: isImportingAttachments,
         isDisabled: isAttachmentEditingDisabled || isImportingAttachments
       )
     }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    // Menu is width-greedy on macOS; without this it absorbs the flexible
-    // space in bottomControls and pushes the model pill toward the send button.
-    .fixedSize()
+    .buttonStyle(.plain)
+    .popover(isPresented: $showingAttachmentPopover, arrowEdge: .top) {
+      attachmentPopoverContent
+        .presentationBackground(MacDesignTokens.Colors.surface)
+    }
+    .onChange(of: showingAttachmentPopover) { _, isPresented in
+      if !isPresented {
+        attachmentPopoverPage = .main
+      }
+    }
     .disabled(isAttachmentEditingDisabled || isImportingAttachments)
     .accessibilityLabel(isImportingAttachments ? "Importing attachments" : "Add or configure")
     .help(
@@ -2607,6 +2666,151 @@ private struct MacComposerView: View {
         ? "Importing attachments…"
         : "Add attachments, project prompts, or configure chat tools"
     )
+  }
+
+  private var attachmentPopoverContent: some View {
+    MacThemedActionPopoverContainer(minWidth: 224, maxWidth: 268) {
+      switch attachmentPopoverPage {
+      case .main:
+        mainAttachmentPopoverContent
+      case .projectFiles:
+        projectFilesPopoverContent
+      case .prompts:
+        promptsPopoverContent
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var mainAttachmentPopoverContent: some View {
+    if isAtAttachmentLimit {
+      HStack(spacing: 8) {
+        Image(systemName: "exclamationmark.circle")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.orange)
+          .frame(width: 16, alignment: .center)
+        Text("Attachment limit reached (\(MacAttachmentImporter.maximumCount)/\(MacAttachmentImporter.maximumCount))")
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .lineLimit(1)
+      }
+      .padding(.horizontal, 8)
+      .frame(height: 26, alignment: .leading)
+
+      MacThemedPopoverDivider()
+    }
+
+    MacThemedPopoverActionRow(title: "Choose Files", systemImage: "doc.badge.plus") {
+      runAttachmentPopoverAction { showingFileImporter = true }
+    }
+    .disabled(isAtAttachmentLimit)
+
+    MacThemedPopoverActionRow(title: "Paste Image or File", systemImage: "doc.on.clipboard") {
+      runAttachmentPopoverAction(importPasteboard)
+    }
+    .disabled(isAtAttachmentLimit)
+
+    MacThemedPopoverDivider()
+
+    MacThemedPopoverActionRow(title: "From Library", systemImage: "books.vertical") {
+      runAttachmentPopoverAction { showingLibraryPicker = true }
+    }
+    .disabled(isAtAttachmentLimit)
+
+    if !projectFiles.isEmpty {
+      MacThemedPopoverActionRow(
+        title: "Project Files",
+        systemImage: "folder.badge.plus",
+        showsDisclosureChevron: true
+      ) {
+        attachmentPopoverPage = .projectFiles
+      }
+    }
+
+    if !promptPresets.isEmpty {
+      MacThemedPopoverDivider()
+
+      MacThemedPopoverActionRow(
+        title: "Prompts",
+        systemImage: "text.bubble",
+        showsDisclosureChevron: true
+      ) {
+        attachmentPopoverPage = .prompts
+      }
+    }
+
+    MacThemedPopoverDivider()
+
+    MacThemedPopoverActionRow(
+      title: enabledToolCount == 0 ? "Tools" : "Tools · \(enabledToolCount)",
+      systemImage: "wrench.and.screwdriver"
+    ) {
+      runAttachmentPopoverAction(configureTools)
+    }
+  }
+
+  @ViewBuilder
+  private var projectFilesPopoverContent: some View {
+    let attachedIDs = Set(attachments.map(\.id))
+    let rows = VStack(alignment: .leading, spacing: 2) {
+      ForEach(projectFiles) { file in
+        let isAttached = attachedIDs.contains(file.id)
+        MacThemedPopoverActionRow(
+          title: file.filename,
+          systemImage: isAttached ? "checkmark" : "doc",
+          iconTint: isAttached ? MacDesignTokens.Colors.accent : nil
+        ) {
+          runAttachmentPopoverAction { attachProjectFile(file) }
+        }
+        .disabled(isAttached || isAtAttachmentLimit)
+      }
+    }
+
+    MacThemedPopoverActionRow(title: "Project Files", systemImage: "chevron.left") {
+      attachmentPopoverPage = .main
+    }
+
+    MacThemedPopoverDivider()
+
+    if projectFiles.count > 7 {
+      ScrollView {
+        rows
+      }
+      .frame(height: 220)
+    } else {
+      rows
+    }
+  }
+
+  @ViewBuilder
+  private var promptsPopoverContent: some View {
+    let rows = VStack(alignment: .leading, spacing: 2) {
+      ForEach(promptPresets) { preset in
+        MacThemedPopoverActionRow(title: preset.name, systemImage: "text.bubble") {
+          runAttachmentPopoverAction { applyPromptPreset(preset) }
+        }
+      }
+    }
+
+    MacThemedPopoverActionRow(title: "Prompts", systemImage: "chevron.left") {
+      attachmentPopoverPage = .main
+    }
+
+    MacThemedPopoverDivider()
+
+    if promptPresets.count > 7 {
+      ScrollView {
+        rows
+      }
+      .frame(height: 220)
+    } else {
+      rows
+    }
+  }
+
+  private func runAttachmentPopoverAction(_ action: () -> Void) {
+    showingAttachmentPopover = false
+    action()
   }
 
   private var targetButton: some View {
@@ -3009,7 +3213,7 @@ private struct MacTranscriptMessageRow: View {
           conversationID: conversationID,
           message: message,
           isLatestAssistant: isLatestAssistant,
-          includeRetry: message.status != .failed,
+          includeRetry: true,
           hideEmptyContentActions: message.status == .failed,
           onShowDetails: { onShowDetails(message) },
           onShowSources: onShowSources,
@@ -3308,15 +3512,22 @@ private struct MacAssistantMessageActions: View {
       }
 
       if includeRetry && isLatestAssistant {
-        Button(action: onRequestRegenerate) {
-          Image(systemName: "arrow.clockwise")
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        if message.status == .failed {
+          MacInlineRetryActionButton(
+            isEnabled: canRetry,
+            action: onRequestRegenerate
+          )
+        } else {
+          Button(action: onRequestRegenerate) {
+            Image(systemName: "arrow.clockwise")
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .disabled(!canRetry)
+          .help(canRetry ? "Retry response" : "Wait for generation to finish before retrying")
+          .accessibilityLabel("Retry response")
         }
-        .buttonStyle(MacIconButtonStyle())
-        .disabled(!canRetry)
-        .help(canRetry ? "Retry response" : "Wait for generation to finish before retrying")
-        .accessibilityLabel("Retry response")
       }
 
       if !sources.isEmpty {
@@ -3559,6 +3770,43 @@ private struct MacAssistantMessageActions: View {
   }
 }
 
+private struct MacInlineRetryActionButton: View {
+  let isEnabled: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 5) {
+        Image(systemName: "arrow.clockwise")
+          .font(.system(size: 11.5, weight: .semibold))
+        Text("Retry")
+          .font(.system(size: 12.5, weight: .medium))
+      }
+      .foregroundStyle(
+        isEnabled ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
+      )
+      .padding(.horizontal, 6)
+      .frame(height: MacDesignTokens.Control.iconButtonSize)
+      .background(
+        Color.primary.opacity(isHovered && isEnabled ? MacDesignTokens.Control.hoverOpacity : 0),
+        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+      )
+      .contentShape(
+        RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+      )
+      .opacity(isEnabled ? 1 : MacDesignTokens.Control.disabledOpacity)
+    }
+    .buttonStyle(.plain)
+    .disabled(!isEnabled)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help(isEnabled ? "Retry response" : "Wait for generation to finish before retrying")
+    .accessibilityLabel("Retry response")
+  }
+}
+
 private struct MacSourcesPillButton: View {
   let count: Int
   let action: () -> Void
@@ -3600,7 +3848,9 @@ private struct MacSourcesPillButton: View {
   }
 }
 
-private struct MacThemedActionPopoverContainer<Content: View>: View {
+struct MacThemedActionPopoverContainer<Content: View>: View {
+  var minWidth: CGFloat = 214
+  var maxWidth: CGFloat? = nil
   @ViewBuilder let content: () -> Content
 
   var body: some View {
@@ -3608,12 +3858,12 @@ private struct MacThemedActionPopoverContainer<Content: View>: View {
       content()
     }
     .padding(6)
-    .frame(minWidth: 214, alignment: .leading)
+    .frame(minWidth: minWidth, maxWidth: maxWidth, alignment: .leading)
     .background(MacDesignTokens.Colors.surface)
   }
 }
 
-private struct MacThemedPopoverDivider: View {
+struct MacThemedPopoverDivider: View {
   var body: some View {
     Rectangle()
       .fill(MacDesignTokens.Colors.separator.opacity(0.75))
@@ -3623,10 +3873,12 @@ private struct MacThemedPopoverDivider: View {
   }
 }
 
-private struct MacThemedPopoverActionRow: View {
+struct MacThemedPopoverActionRow: View {
   let title: String
   let systemImage: String
   var isDestructive: Bool = false
+  var iconTint: Color? = nil
+  var showsDisclosureChevron: Bool = false
   let action: () -> Void
 
   var body: some View {
@@ -3634,18 +3886,23 @@ private struct MacThemedPopoverActionRow: View {
       MacThemedPopoverActionRowLabel(
         title: title,
         systemImage: systemImage,
-        isDestructive: isDestructive
+        isDestructive: isDestructive,
+        iconTint: iconTint,
+        showsDisclosureChevron: showsDisclosureChevron
       )
     }
     .buttonStyle(.plain)
   }
 }
 
-private struct MacThemedPopoverActionRowLabel: View {
+struct MacThemedPopoverActionRowLabel: View {
   let title: String
   let systemImage: String
   var isDestructive: Bool = false
+  var iconTint: Color? = nil
+  var showsDisclosureChevron: Bool = false
 
+  @Environment(\.isEnabled) private var isEnabled
   @State private var isHovered = false
 
   var body: some View {
@@ -3659,21 +3916,30 @@ private struct MacThemedPopoverActionRowLabel: View {
         .font(.system(size: 12.5, weight: .medium))
         .foregroundStyle(textColor)
         .lineLimit(1)
+        .truncationMode(.tail)
 
       Spacer(minLength: 4)
+
+      if showsDisclosureChevron {
+        Image(systemName: "chevron.right")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
     }
     .padding(.horizontal, 8)
     .frame(height: 28)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(backgroundColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     .contentShape(Rectangle())
+    .opacity(isEnabled ? 1 : MacDesignTokens.Control.disabledOpacity)
     .onHover { isHovered = $0 }
     .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
   }
 
   private var iconColor: Color {
     if isDestructive { return .red }
-    return isHovered ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
+    if let iconTint { return iconTint }
+    return isHovered && isEnabled ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted
   }
 
   private var textColor: Color {
@@ -3682,7 +3948,7 @@ private struct MacThemedPopoverActionRowLabel: View {
   }
 
   private var backgroundColor: Color {
-    if !isHovered { return .clear }
+    guard isHovered && isEnabled else { return .clear }
     return isDestructive ? Color.red.opacity(0.10) : MacDesignTokens.Colors.selection.opacity(0.75)
   }
 }
