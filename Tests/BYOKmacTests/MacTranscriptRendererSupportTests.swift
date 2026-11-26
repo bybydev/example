@@ -192,4 +192,14 @@ struct MacTranscriptRendererSupportTests {
     let decodedLegacy = try JSONDecoder().decode(ChatMessage.self, from: legacyData)
     #expect(decodedLegacy.citations == nil)
   }
+
+  @Test("User message link detection handles uppercase schemes, ignores filenames, and trims trailing punctuation")
+  func userMessageLinkDetectionEdgeCases() {
+    let prompt = "Check (HTTPS://SWIFT.ORG/docs). Also edit README.md and App.swift, or visit www.apple.com/macos!"
+    let matches = MacUserMessageTextSupport.linkMatches(in: prompt)
+
+    #expect(matches.count == 2)
+    #expect(matches[0].url.absoluteString == "HTTPS://SWIFT.ORG/docs")
+    #expect(matches[1].url.absoluteString == "https://www.apple.com/macos")
+  }
 }

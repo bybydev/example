@@ -3504,6 +3504,7 @@ private struct MacUserMessageActions: View {
       .buttonStyle(MacIconButtonStyle())
       .popover(isPresented: $showingMorePopover, arrowEdge: .bottom) {
         morePopoverContent
+          .presentationBackground(MacDesignTokens.Colors.surface)
       }
       .help("More actions")
       .accessibilityLabel("More actions")
@@ -3523,7 +3524,7 @@ private struct MacUserMessageActions: View {
     return MacThemedActionPopoverContainer {
       if hasCopyableContent {
         MacThemedPopoverActionRow(
-          title: "Export as Markdown…",
+          title: "Export as Markdown",
           systemImage: "square.and.arrow.down"
         ) {
           showingMorePopover = false

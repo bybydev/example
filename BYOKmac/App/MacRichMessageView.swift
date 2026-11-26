@@ -1083,13 +1083,31 @@ enum MacUserMessageTextSupport {
       let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
       var matches: [LinkMatch] = []
       for match in detector.matches(in: text, range: fullRange) {
-        guard let url = match.url,
-          MacUserMessageTextSupport.isValidBrowsableURL(url),
-          let range = Range(match.range, in: text)
+        guard let rawURL = match.url,
+          let rawRange = Range(match.range, in: text)
         else { continue }
-        let startOffset = text.distance(from: text.startIndex, to: range.lowerBound)
-        let endOffset = text.distance(from: text.startIndex, to: range.upperBound)
-        guard endOffset > startOffset else { continue }
+        let matchedText = String(text[rawRange])
+        let lowered = matchedText.lowercased()
+        guard lowered.hasPrefix("http://")
+          || lowered.hasPrefix("https://")
+          || lowered.hasPrefix("www.")
+        else { continue }
+
+        let trimmedText = MacUserMessageTextSupport.trimTrailingLinkPunctuation(matchedText)
+        let resolvedURL: URL?
+        if lowered.hasPrefix("http://") || lowered.hasPrefix("https://") {
+          resolvedURL = URL(string: trimmedText).flatMap {
+            MacUserMessageTextSupport.isValidBrowsableURL($0) ? $0 : nil
+          }
+        } else {
+          resolvedURL = URL(string: "https://\(trimmedText)").flatMap {
+            MacUserMessageTextSupport.isValidBrowsableURL($0) ? $0 : nil
+          } ?? (MacUserMessageTextSupport.isValidBrowsableURL(rawURL) ? rawURL : nil)
+        }
+        guard let url = resolvedURL else { continue }
+        let startOffset = text.distance(from: text.startIndex, to: rawRange.lowerBound)
+        let endOffset = startOffset + trimmedText.count
+        guard endOffset > startOffset, endOffset <= text.count else { continue }
         matches.append(LinkMatch(startOffset: startOffset, endOffset: endOffset, url: url))
       }
       cache[text] = matches
@@ -1101,9 +1119,33 @@ enum MacUserMessageTextSupport {
     }
   }
 
+  static func trimTrailingLinkPunctuation(_ value: String) -> String {
+    var trimmed = value
+    let trailingSimplePunctuation: Set<Character> = [
+      ".", ",", ";", ":", "!", "?", "*", "~", ">", "\"", "'",
+    ]
+    while let last = trimmed.last {
+      if trailingSimplePunctuation.contains(last) {
+        trimmed.removeLast()
+      } else if last == ")" {
+        guard trimmed.filter({ $0 == ")" }).count > trimmed.filter({ $0 == "(" }).count else { break }
+        trimmed.removeLast()
+      } else if last == "]" {
+        guard trimmed.filter({ $0 == "]" }).count > trimmed.filter({ $0 == "[" }).count else { break }
+        trimmed.removeLast()
+      } else if last == "}" {
+        guard trimmed.filter({ $0 == "}" }).count > trimmed.filter({ $0 == "{" }).count else { break }
+        trimmed.removeLast()
+      } else {
+        break
+      }
+    }
+    return trimmed
+  }
+
   static func linkMatches(in text: String) -> [LinkMatch] {
-    guard text.contains("http://")
-      || text.contains("https://")
+    guard text.localizedCaseInsensitiveContains("http://")
+      || text.localizedCaseInsensitiveContains("https://")
       || text.localizedCaseInsensitiveContains("www.")
     else { return [] }
     return LinkDetectorCache.shared.matches(in: text)
@@ -1138,7 +1180,13 @@ private struct MacUserMessageTextView: View {
   @State private var isExpanded = false
 
   var body: some View {
-    let preview = MacUserMessageTextSupport.preview(for: text, isExpanded: isExpanded)
+    let autoExpandedForFind = !isExpanded
+      && !findQuery.isEmpty
+      && MacTranscriptFindSupport.containsMatch(in: text, query: findQuery)
+    let preview = MacUserMessageTextSupport.preview(
+      for: text,
+      isExpanded: isExpanded || autoExpandedForFind
+    )
     let matches = MacUserMessageTextSupport.linkMatches(in: preview.displayedText)
     let hasFindMatches = MacTranscriptFindSupport.containsMatch(in: preview.displayedText, query: findQuery)
 
@@ -1146,6 +1194,7 @@ private struct MacUserMessageTextView: View {
       if matches.isEmpty && !hasFindMatches {
         Text(preview.displayedText)
           .font(.system(size: textSize))
+          .lineSpacing(textSize * 0.18)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
       } else {
@@ -1167,12 +1216,13 @@ private struct MacUserMessageTextView: View {
           : baseAttributed
         Text(highlighted)
           .font(.system(size: textSize))
+          .lineSpacing(textSize * 0.18)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
           .tint(theme.accent)
       }
 
-      if preview.isLong {
+      if preview.isLong && !autoExpandedForFind {
         Button {
           withAnimation(.snappy(duration: 0.2)) {
             isExpanded.toggle()
