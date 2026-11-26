@@ -134,8 +134,12 @@ struct MacProviderManagementView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(
-      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
-      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
+      minWidth: showsCloseButton ? MacDesignTokens.Sheet.workspaceMinWidth : nil,
+      idealWidth: showsCloseButton ? MacDesignTokens.Sheet.workspaceIdealWidth : nil,
+      maxWidth: .infinity,
+      minHeight: showsCloseButton ? MacDesignTokens.Sheet.workspaceMinHeight : nil,
+      idealHeight: showsCloseButton ? MacDesignTokens.Sheet.workspaceIdealHeight : nil,
+      maxHeight: .infinity
     )
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: model.accounts.map(\.id)) { _, ids in

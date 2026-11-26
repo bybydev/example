@@ -551,10 +551,7 @@ struct MacAnalyticsView: View {
         value: showsRangeSwitchSkeleton
       )
     }
-    .frame(
-      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
-      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
-    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(theme.canvas)
     .foregroundStyle(theme.textPrimary)
     .task(id: overviewReloadKey) {

@@ -214,6 +214,10 @@ struct MacDataAndSettingsTests {
 
   @Test("Paywall URLs and simulated product prices match iOS parity")
   func paywallURLsAndSimulatedPrices() {
+    #expect(
+      MacPurchaseStore.writeReviewURL.absoluteString
+        == "https://apps.apple.com/app/id6799335915?action=write-review"
+    )
     #expect(MacPurchaseStore.websiteURL.absoluteString == "https://spokiostudio.com/byokchat")
     #expect(MacPurchaseStore.contactURL.absoluteString == "https://spokiostudio.com/byokchat/contact")
     #expect(MacPurchaseStore.privacyURL.absoluteString == "https://spokiostudio.com/byokchat/privacy")

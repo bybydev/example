@@ -421,33 +421,34 @@ private struct MacChatHeader: View {
       .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
       .accessibilityLabel(sidebarVisible ? "Hide sidebar" : "Show sidebar")
 
-      VStack(alignment: .leading, spacing: 1) {
-        Text(title)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          .lineLimit(1)
-          .truncationMode(.tail)
-
-        if let messageCount, messageCount > 0 {
-          Text("\(messageCount) \(messageCount == 1 ? "message" : "messages")")
-            .font(.system(size: 10.5, weight: .regular))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      MacCappedWidthLayout(maxWidth: 260) {
+        VStack(alignment: .leading, spacing: 1) {
+          Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .lineLimit(1)
+            .truncationMode(.tail)
+
+          if let messageCount, messageCount > 0 {
+            Text("\(messageCount) \(messageCount == 1 ? "message" : "messages")")
+              .font(.system(size: 10.5, weight: .regular))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(1)
+          }
         }
       }
-      .frame(maxWidth: 320, alignment: .leading)
 
       if let activeProject {
         MacChatProjectBadgeButton(project: activeProject, action: openProject)
       }
+
+      overflowMenu
 
       Color.clear
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
         .allowsWindowActivationEvents(true)
-
-      overflowMenu
 
       MacProHeaderButton()
         .fixedSize()
@@ -511,14 +512,7 @@ private struct MacChatHeader: View {
       Button("Delete…", systemImage: "trash", role: .destructive, action: deleteConversation)
         .disabled(!hasPersistedConversation)
     } label: {
-      Image(systemName: "ellipsis.circle")
-        .font(.system(size: 14, weight: .medium))
-        .foregroundStyle(.secondary)
-        .frame(
-          width: MacDesignTokens.Control.iconButtonSize,
-          height: MacDesignTokens.Control.iconButtonSize
-        )
-        .contentShape(Rectangle())
+      MacIconMenuLabel(systemImage: "ellipsis")
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
@@ -536,47 +530,77 @@ private struct MacChatProjectBadgeButton: View {
 
   var body: some View {
     let accent = MacProjectAccentOption(rawValue: project.accentID)?.color ?? .blue
-    Button(action: action) {
-      HStack(spacing: 5) {
-        Image(systemName: project.symbolName)
-          .font(.system(size: 9.5, weight: .semibold))
-          .foregroundStyle(accent)
-          .frame(width: 16, height: 16)
-          .background(
-            accent.opacity(isHovered ? 0.22 : 0.14),
-            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
-          )
-        Text(project.name)
-          .font(.system(size: 11.5, weight: .medium))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          .lineLimit(1)
-          .truncationMode(.tail)
+    MacCappedWidthLayout(maxWidth: 160) {
+      Button(action: action) {
+        HStack(spacing: 5) {
+          Image(systemName: project.symbolName)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(accent)
+            .frame(width: 16, height: 16)
+            .background(
+              accent.opacity(isHovered ? 0.22 : 0.14),
+              in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+            )
+          Text(project.name)
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 9)
+        .frame(height: MacDesignTokens.Control.compactButtonHeight)
+        .background(
+          isHovered ? MacDesignTokens.Colors.surface : MacDesignTokens.Colors.canvas,
+          in: Capsule()
+        )
+        .overlay {
+          Capsule()
+            .stroke(
+              isHovered
+                ? accent.opacity(0.45)
+                : MacDesignTokens.Colors.separator.opacity(0.85),
+              lineWidth: 0.75
+            )
+        }
+        .contentShape(Capsule())
       }
-      .padding(.leading, 5)
-      .padding(.trailing, 9)
-      .frame(height: MacDesignTokens.Control.compactButtonHeight)
-      .background(
-        isHovered ? MacDesignTokens.Colors.surface : MacDesignTokens.Colors.canvas,
-        in: Capsule()
-      )
-      .overlay {
-        Capsule()
-          .stroke(
-            isHovered
-              ? accent.opacity(0.45)
-              : MacDesignTokens.Colors.separator.opacity(0.85),
-            lineWidth: 0.75
-          )
-      }
-      .contentShape(Capsule())
+      .buttonStyle(.plain)
+      .onHover { isHovered = $0 }
+      .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+      .help("Open \(project.name) in Projects")
+      .accessibilityLabel("Project \(project.name)")
     }
-    .buttonStyle(.plain)
-    .onHover { isHovered = $0 }
-    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
-    .frame(maxWidth: 180, alignment: .leading)
-    .fixedSize(horizontal: true, vertical: true)
-    .help("Open \(project.name) in Projects")
-    .accessibilityLabel("Project \(project.name)")
+  }
+}
+
+/// Constrains a child to `maxWidth` while hugging its intrinsic width when narrower.
+private struct MacCappedWidthLayout: Layout {
+  let maxWidth: CGFloat
+
+  func sizeThatFits(
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) -> CGSize {
+    guard let child = subviews.first else { return .zero }
+    let cappedWidth = min(proposal.width ?? maxWidth, maxWidth)
+    return child.sizeThatFits(
+      ProposedViewSize(width: cappedWidth, height: proposal.height)
+    )
+  }
+
+  func placeSubviews(
+    in bounds: CGRect,
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) {
+    guard let child = subviews.first else { return }
+    child.place(
+      at: bounds.origin,
+      proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+    )
   }
 }
 

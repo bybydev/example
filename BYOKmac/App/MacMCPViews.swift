@@ -117,10 +117,7 @@ struct MacMCPServerManagementView: View {
         serverList
       }
     }
-    .frame(
-      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
-      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
-    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: mcp.servers.map(\.id)) { _, ids in
       if let selectedServerID, !ids.contains(selectedServerID) {

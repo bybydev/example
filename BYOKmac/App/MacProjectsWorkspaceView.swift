@@ -206,10 +206,7 @@ struct MacProjectsWorkspaceView: View {
         projectsHome
       }
     }
-    .frame(
-      minWidth: MacDesignTokens.Sheet.workspaceMinWidth,
-      minHeight: MacDesignTokens.Sheet.workspaceMinHeight
-    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: initialProjectID) { _, projectID in
       if let projectID {

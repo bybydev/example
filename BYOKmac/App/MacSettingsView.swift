@@ -419,6 +419,18 @@ private struct MacAboutSettingsView: View {
 
         MacSettingsCard {
           HStack {
+            Text("Rate BYOKchat")
+              .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button("Write a Review") {
+              NSWorkspace.shared.open(MacPurchaseStore.writeReviewURL)
+            }
+            .buttonStyle(MacSettingsButtonStyle())
+          }
+
+          MacSettingsDivider()
+
+          HStack {
             Text("Website")
               .foregroundStyle(theme.textPrimary)
             Spacer()

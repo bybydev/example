@@ -287,6 +287,8 @@ enum MacPurchaseStore {
     features: features
   )
 
+  static let appStoreID = "6799335915"
+  static let writeReviewURL = URL(string: "https://apps.apple.com/app/id\(appStoreID)?action=write-review")!
   static let websiteURL = URL(string: "https://spokiostudio.com/byokchat")!
   static let contactURL = URL(string: "https://spokiostudio.com/byokchat/contact")!
   static let privacyURL = URL(string: "https://spokiostudio.com/byokchat/privacy")!

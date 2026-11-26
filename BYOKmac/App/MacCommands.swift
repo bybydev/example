@@ -50,6 +50,19 @@ struct MacCommands: Commands {
 
     CommandGroup(after: .help) {
       Divider()
+      Button("BYOKchat Website") {
+        NSWorkspace.shared.open(MacPurchaseStore.websiteURL)
+      }
+      Button("Contact Support") {
+        NSWorkspace.shared.open(MacPurchaseStore.contactURL)
+      }
+      Button("Privacy Policy") {
+        NSWorkspace.shared.open(MacPurchaseStore.privacyURL)
+      }
+      Button("Terms of Use") {
+        NSWorkspace.shared.open(MacPurchaseStore.termsURL)
+      }
+      Divider()
       Button("Reveal BYOKchat Data in Finder") {
         model.revealDataDirectory()
       }
