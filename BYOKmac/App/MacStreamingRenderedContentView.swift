@@ -3,16 +3,17 @@ import SwiftUI
 struct MacStreamingRenderedContentView: View {
   let snapshot: MacStreamingAnswerSnapshot
   var textSize: CGFloat = 15
+  var muted = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       ForEach(snapshot.stableBlocks) { rendered in
-        MacStableRenderedAnswerBlockView(rendered: rendered, textSize: textSize)
+        MacStableRenderedAnswerBlockView(rendered: rendered, textSize: textSize, muted: muted)
           .equatable()
       }
 
       ForEach(Array(snapshot.tailBlocks.enumerated()), id: \.offset) { _, block in
-        MacStreamingTailBlockView(block: block, textSize: textSize)
+        MacStreamingTailBlockView(block: block, textSize: textSize, muted: muted)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -22,6 +23,7 @@ struct MacStreamingRenderedContentView: View {
 private struct MacStableRenderedAnswerBlockView: View, Equatable {
   let rendered: MacRenderedAnswerBlock
   let textSize: CGFloat
+  let muted: Bool
 
   @ViewBuilder
   var body: some View {
@@ -29,7 +31,7 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
     case .markdown(let source):
       // MarkdownUI and inline LaTeX are allowed only after this top-level
       // block has crossed the stable boundary. Its input never changes again.
-      MacMarkdownMessageContent(text: source, textSize: textSize)
+      MacMarkdownMessageContent(text: source, textSize: textSize, muted: muted)
 
     case .code(let language, let content, let isComplete):
       if MacAnswerContentParser.isMermaidLanguage(language) {
@@ -62,6 +64,7 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
 private struct MacStreamingTailBlockView: View {
   let block: MacAnswerContentBlock
   let textSize: CGFloat
+  let muted: Bool
 
   @ViewBuilder
   var body: some View {
@@ -69,6 +72,7 @@ private struct MacStreamingTailBlockView: View {
     case .markdown(let source):
       Text(stabilizedTailText(source))
         .font(.system(size: textSize))
+        .foregroundStyle(muted ? MacDesignTokens.Colors.textMuted : MacDesignTokens.Colors.textPrimary)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)

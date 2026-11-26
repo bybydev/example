@@ -17,8 +17,12 @@ struct MacMarkdownMessageContent: View {
   /// Base body font size. Code/theme styles derive from it; defaults to the
   /// standard answer size.
   var textSize: CGFloat = 15
+  /// Renders body and inline code in the theme's muted foreground (used for
+  /// secondary reasoning traces so they stay visually subordinate to answers).
+  var muted = false
 
   @State private var completedAnswer: MacPreparedAnswer?
+  @Environment(\.macAppTheme) private var appTheme
   @Environment(\.macPreparedAnswers) private var preparedAnswers
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
 
@@ -55,6 +59,7 @@ struct MacMarkdownMessageContent: View {
         // happens asynchronously on MacAnswerContentParseCache, never here.
         Text(text)
           .font(.system(size: textSize))
+          .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -192,13 +197,20 @@ struct MacMarkdownMessageContent: View {
         .imageRenderingMode(.template)
         .imageAccessibility(.sre)
         .font(.system(size: textSize))
-        .foregroundStyle(.primary)
+        .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     } else {
       Markdown(segment.markdownContent ?? MarkdownContent(segment.text))
         .markdownImageProvider(MacMarkdownResponseImageProvider())
-        .markdownTheme(Self.chatTheme(textSize: textSize, columnAlignments: segment.columnAlignments))
+        .markdownTheme(
+          Self.chatTheme(
+            textSize: textSize,
+            muted: muted,
+            mutedColor: appTheme.textMuted,
+            columnAlignments: segment.columnAlignments
+          )
+        )
         .textSelection(.enabled)
         .tint(.accentColor)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -257,6 +269,8 @@ struct MacMarkdownMessageContent: View {
 
   private struct ChatThemeKey: Hashable {
     let textSize: CGFloat
+    let muted: Bool
+    let themeID: MacAppThemeID
     let columnAlignments: [MacTableColumnAlignment]
   }
 
@@ -266,13 +280,27 @@ struct MacMarkdownMessageContent: View {
   @MainActor
   private static func chatTheme(
     textSize: CGFloat,
+    muted: Bool = false,
+    mutedColor: Color,
     columnAlignments: [MacTableColumnAlignment] = []
   ) -> MarkdownUI.Theme {
-    let key = ChatThemeKey(textSize: textSize, columnAlignments: columnAlignments)
+    let themeID = MacThemeFoundation.store.effectiveThemeID(
+      hasPro: MacPurchaseStore.manager.hasPro
+    )
+    let key = ChatThemeKey(
+      textSize: textSize,
+      muted: muted,
+      themeID: themeID,
+      columnAlignments: columnAlignments
+    )
     if let existing = cachedThemes[key] {
       return existing
     }
-    let theme = buildChatTheme(textSize: textSize, columnAlignments: columnAlignments)
+    let theme = buildChatTheme(
+      textSize: textSize,
+      foreground: muted ? mutedColor : .primary,
+      columnAlignments: columnAlignments
+    )
     if cachedThemes.count >= 16 {
       cachedThemes.removeAll(keepingCapacity: true)
     }
@@ -280,19 +308,21 @@ struct MacMarkdownMessageContent: View {
     return theme
   }
 
+  @MainActor
   private static func buildChatTheme(
     textSize: CGFloat,
+    foreground: Color = .primary,
     columnAlignments: [MacTableColumnAlignment] = []
   ) -> MarkdownUI.Theme {
     MarkdownUI.Theme.basic
       .text {
-        ForegroundColor(.primary)
+        ForegroundColor(foreground)
         FontSize(textSize)
       }
       .code {
         FontFamilyVariant(.monospaced)
         FontSize(.em(0.9))
-        ForegroundColor(.primary)
+        ForegroundColor(foreground)
         BackgroundColor(Color.primary.opacity(0.06))
       }
       .strong {

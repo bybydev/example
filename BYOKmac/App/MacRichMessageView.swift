@@ -154,7 +154,10 @@ struct MacRichMessageView: View {
         MacReasoningDisclosure(
           text: message.reasoning,
           isStreaming: isStreaming && message.content.isEmpty,
-          streamingSnapshot: livePresentation?.reasoningSnapshot
+          streamingSnapshot: livePresentation?.reasoningSnapshot,
+          onExpandedChange: { expanded in
+            livePresentation?.setReasoningRenderEnabled(expanded)
+          }
         )
       }
 
@@ -442,40 +445,97 @@ struct MacRichMessageView: View {
   }
 }
 
+nonisolated enum MacReasoningDurationFormatter {
+  static func format(seconds: Int) -> String {
+    let clamped = max(1, seconds)
+    if clamped < 60 {
+      return "\(clamped)s"
+    }
+    let minutes = clamped / 60
+    let remainder = clamped % 60
+    return remainder == 0 ? "\(minutes)m" : "\(minutes)m \(remainder)s"
+  }
+
+  static func elapsedSeconds(from start: Date, to end: Date) -> Int {
+    max(1, Int(end.timeIntervalSince(start).rounded(.down)))
+  }
+}
+
 private struct MacReasoningDisclosure: View {
   let text: String
   let isStreaming: Bool
   let streamingSnapshot: MacStreamingAnswerSnapshot?
+  var onExpandedChange: ((Bool) -> Void)? = nil
 
   /// Reasoning body renders one step smaller than the answer text.
   private static let contentFontSize: CGFloat = 13
+  private static let longTraceCollapseThreshold = 600
 
   @State private var expanded = false
+  @State private var isHeaderHovered = false
+  @State private var isCopyHovered = false
+  @State private var isCollapseHovered = false
+  @State private var copied = false
+  @State private var copyResetTask: Task<Void, Never>?
   @State private var reasoningStartedAt: Date?
   @State private var reasoningFinishedAt: Date?
 
   init(
     text: String,
     isStreaming: Bool,
-    streamingSnapshot: MacStreamingAnswerSnapshot? = nil
+    streamingSnapshot: MacStreamingAnswerSnapshot? = nil,
+    onExpandedChange: ((Bool) -> Void)? = nil
   ) {
     self.text = text
     self.isStreaming = isStreaming
     self.streamingSnapshot = streamingSnapshot
+    self.onExpandedChange = onExpandedChange
     _reasoningStartedAt = State(initialValue: isStreaming ? .now : nil)
     _reasoningFinishedAt = State(initialValue: nil)
   }
 
+  private var showsBottomCollapse: Bool {
+    text.count > Self.longTraceCollapseThreshold
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Button {
-        expanded.toggle()
-      } label: {
-        reasoningLabel
+      HStack(spacing: 4) {
+        Button {
+          expanded.toggle()
+        } label: {
+          reasoningLabel
+        }
+        .buttonStyle(.plain)
+        .onHover { isHeaderHovered = $0 }
+        .accessibilityLabel(isStreaming ? "Thinking" : "Reasoning")
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+        if expanded {
+          Button {
+            copyReasoning()
+          } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+              .font(.system(size: 11, weight: .medium))
+              .foregroundStyle(
+                copied
+                  ? MacDesignTokens.Colors.accent
+                  : (isCopyHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted)
+              )
+              .frame(width: 22, height: 22)
+              .background(
+                Color.primary.opacity(isCopyHovered ? MacDesignTokens.Control.hoverOpacity : 0),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+              )
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .onHover { isCopyHovered = $0 }
+          .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isCopyHovered)
+          .help(copied ? "Copied reasoning" : "Copy reasoning")
+          .accessibilityLabel(copied ? "Reasoning copied" : "Copy reasoning")
+        }
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel(isStreaming ? "Thinking" : "Reasoning")
-      .accessibilityValue(expanded ? "Expanded" : "Collapsed")
 
       if expanded {
         reasoningContent
@@ -483,6 +543,9 @@ private struct MacReasoningDisclosure: View {
       }
     }
     .animation(.easeOut(duration: 0.15), value: expanded)
+    .onChange(of: expanded) { _, isExpanded in
+      onExpandedChange?(isExpanded)
+    }
     .onChange(of: isStreaming) { _, value in
       if value {
         if reasoningStartedAt == nil {
@@ -493,40 +556,93 @@ private struct MacReasoningDisclosure: View {
         reasoningFinishedAt = .now
       }
     }
+    .onDisappear {
+      copyResetTask?.cancel()
+      copyResetTask = nil
+      onExpandedChange?(false)
+    }
   }
 
   private var reasoningContent: some View {
-    Group {
-      if let streamingSnapshot {
-        if streamingSnapshot.revision > 0 {
-          MacStreamingRenderedContentView(
-            snapshot: streamingSnapshot,
-            textSize: Self.contentFontSize
-          )
+    VStack(alignment: .leading, spacing: 8) {
+      Group {
+        if let streamingSnapshot {
+          if streamingSnapshot.revision > 0 {
+            MacStreamingRenderedContentView(
+              snapshot: streamingSnapshot,
+              textSize: Self.contentFontSize,
+              muted: true
+            )
+          } else {
+            Text(text)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         } else {
-          Text(text)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+          MacMarkdownMessageContent(
+            text: text,
+            textSize: Self.contentFontSize,
+            muted: true
+          )
         }
-      } else {
-        MacMarkdownMessageContent(text: text, textSize: Self.contentFontSize)
+      }
+      .font(.system(size: Self.contentFontSize))
+
+      if showsBottomCollapse {
+        Button {
+          expanded = false
+        } label: {
+          HStack(spacing: 4) {
+            Image(systemName: "chevron.up")
+              .font(.system(size: 9.5, weight: .semibold))
+            Text("Collapse")
+              .font(.caption.weight(.medium))
+          }
+          .foregroundStyle(
+            isCollapseHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted
+          )
+          .padding(.horizontal, 6)
+          .padding(.vertical, 3)
+          .background(
+            Color.primary.opacity(isCollapseHovered ? MacDesignTokens.Control.hoverOpacity : 0),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          )
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, -6)
+        .onHover { isCollapseHovered = $0 }
+        .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isCollapseHovered)
+        .accessibilityLabel("Collapse reasoning")
       }
     }
-    .font(.system(size: Self.contentFontSize))
-    .foregroundStyle(.secondary)
-    .padding(.leading, 14)
+    .padding(.leading, 12)
+    .padding(.vertical, 2)
+    .overlay(alignment: .leading) {
+      RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+        .fill(MacDesignTokens.Colors.separator)
+        .frame(width: 2)
+        .padding(.vertical, 2)
+        .accessibilityHidden(true)
+    }
   }
 
   @ViewBuilder
   private var reasoningLabel: some View {
-    HStack(spacing: 7) {
+    HStack(spacing: 6) {
       if isStreaming {
         ProgressView()
           .controlSize(.mini)
 
         if let reasoningStartedAt {
           TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text("Thinking… \(elapsedSeconds(from: reasoningStartedAt, to: context.date))s")
+            let elapsed = MacReasoningDurationFormatter.elapsedSeconds(
+              from: reasoningStartedAt,
+              to: context.date
+            )
+            Text("Thinking… \(MacReasoningDurationFormatter.format(seconds: elapsed))")
+              .monospacedDigit()
           }
         } else {
           Text("Thinking…")
@@ -535,7 +651,12 @@ private struct MacReasoningDisclosure: View {
         Image(systemName: "brain")
 
         if let reasoningStartedAt, let reasoningFinishedAt {
-          Text("Thought for \(elapsedSeconds(from: reasoningStartedAt, to: reasoningFinishedAt))s")
+          let elapsed = MacReasoningDurationFormatter.elapsedSeconds(
+            from: reasoningStartedAt,
+            to: reasoningFinishedAt
+          )
+          Text("Thought for \(MacReasoningDurationFormatter.format(seconds: elapsed))")
+            .monospacedDigit()
         } else {
           Text("Thought")
         }
@@ -546,12 +667,32 @@ private struct MacReasoningDisclosure: View {
         .rotationEffect(.degrees(expanded ? 90 : 0))
     }
     .font(.caption.weight(.semibold))
-    .foregroundStyle(.secondary)
+    .foregroundStyle(
+      isHeaderHovered || expanded
+        ? MacDesignTokens.Colors.textPrimary
+        : MacDesignTokens.Colors.textMuted
+    )
+    .padding(.horizontal, 6)
+    .padding(.vertical, 4)
+    .background(
+      Color.primary.opacity(isHeaderHovered ? MacDesignTokens.Control.hoverOpacity : 0),
+      in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+    )
     .contentShape(Rectangle())
+    .padding(.leading, -6)
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHeaderHovered)
   }
 
-  private func elapsedSeconds(from start: Date, to end: Date) -> Int {
-    max(1, Int(end.timeIntervalSince(start).rounded(.down)))
+  private func copyReasoning() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    copied = true
+    copyResetTask?.cancel()
+    copyResetTask = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(1.2))
+      guard !Task.isCancelled else { return }
+      copied = false
+    }
   }
 }
 

@@ -19,11 +19,27 @@ final class MacLiveMessagePresentation {
   @ObservationIgnored private var reasoningAppliedRevision = 0
   @ObservationIgnored private var answerCompleteRequested = false
   @ObservationIgnored private var reasoningCompleteRequested = false
+  @ObservationIgnored private var isReasoningRenderEnabled = false
   @ObservationIgnored private var answerRenderTask: Task<Void, Never>?
   @ObservationIgnored private var reasoningRenderTask: Task<Void, Never>?
 
   init(messageID: ChatMessageID) {
     self.messageID = messageID
+  }
+
+  /// Reasoning disclosures start collapsed, so skip rich Markdown streaming
+  /// parses until the user actually expands the reasoning block.
+  func setReasoningRenderEnabled(_ enabled: Bool) {
+    guard isReasoningRenderEnabled != enabled else { return }
+    isReasoningRenderEnabled = enabled
+    if enabled {
+      if !reasoning.isEmpty, reasoningAppliedRevision < reasoningRenderRevision {
+        scheduleReasoningRender()
+      }
+    } else {
+      reasoningRenderTask?.cancel()
+      reasoningRenderTask = nil
+    }
   }
 
   @discardableResult
@@ -51,7 +67,9 @@ final class MacLiveMessagePresentation {
     if reasoningChanged {
       reasoningRenderRevision &+= 1
       reasoningCompleteRequested = reasoningCompleteRequested || complete
-      scheduleReasoningRender()
+      if isReasoningRenderEnabled {
+        scheduleReasoningRender()
+      }
     }
     return true
   }
@@ -126,7 +144,7 @@ final class MacLiveMessagePresentation {
         }
       }
       reasoningRenderTask = nil
-      if !Task.isCancelled, reasoningAppliedRevision < reasoningRenderRevision {
+      if !Task.isCancelled, isReasoningRenderEnabled, reasoningAppliedRevision < reasoningRenderRevision {
         scheduleReasoningRender()
       }
     }
