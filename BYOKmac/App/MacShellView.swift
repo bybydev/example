@@ -12,28 +12,18 @@ struct MacShellView: View {
 
   @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
   @Environment(PurchaseManager.self) private var purchaseManager
-  @Environment(MacProGateCenter.self) private var proGateCenter
-  @Environment(\.controlActiveState) private var controlActiveState
   @Environment(\.macToastCenter) private var toastCenter
   @State private var sidebarVisible = true
   @State private var navigation = MacChatNavigation()
   @State private var didSelectInitialChat = false
-  @State private var toolsConversationID: ConversationID?
-  @State private var chatSettingsConversationID: ConversationID?
   @State private var searchText = ""
   @State private var pendingSearchFocus = false
   @State private var composerFocusRequestID = 0
-  @State private var showingChatTools = false
-  @State private var showingChatSettings = false
-  @State private var renameTarget: ChatConversation?
-  @State private var deleteTarget: ChatConversation?
+  @State private var modals = MacShellModalCoordinator()
   @State private var pendingAttachmentsByKey: [String: [ChatAttachment]] = [:]
   @State private var didRestorePendingAttachments = false
   @State private var sendingKeys: Set<String> = []
   @State private var importingAttachmentCountsByKey: [String: Int] = [:]
-  @State private var activeUpsellFeature: MacProFeature?
-  @State private var pendingUpsellFeature: MacProFeature?
-  @State private var upsellFallbackTask: Task<Void, Never>?
 
   var body: some View {
     Group {
@@ -78,8 +68,8 @@ struct MacShellView: View {
             )
           }
         },
-        rename: { renameTarget = $0 },
-        delete: { deleteTarget = $0 }
+        rename: { modals.renameTarget = $0 },
+        delete: { modals.deleteTarget = $0 }
       )
     } content: {
       MacChatPane(
@@ -103,12 +93,10 @@ struct MacShellView: View {
         toggleSidebar: { sidebarVisible.toggle() },
         manageProviders: { utilitySheets.present(.providers) },
         configureTools: {
-          toolsConversationID = paneConversationID
-          showingChatTools = true
+          modals.presentChatTools(for: paneConversationID)
         },
         openChatSettings: {
-          chatSettingsConversationID = paneConversationID
-          showingChatSettings = true
+          modals.presentChatSettings(for: paneConversationID)
         },
         openProjects: { projectID in
           if let projectID {
@@ -120,7 +108,7 @@ struct MacShellView: View {
         openAnalytics: { utilitySheets.presentAnalytics(conversationID: paneConversationID) },
         renameConversation: {
           if let conversation = chats.conversation(paneConversationID) ?? chats.summary(paneConversationID) {
-            renameTarget = conversation
+            modals.renameTarget = conversation
           }
         },
         exportMarkdown: {
@@ -132,7 +120,7 @@ struct MacShellView: View {
         },
         deleteConversation: {
           if let conversation = chats.conversation(paneConversationID) ?? chats.summary(paneConversationID) {
-            deleteTarget = conversation
+            modals.deleteTarget = conversation
           }
         },
         startNewChat: { startNewChat(chats: chats, forceReset: true) },
@@ -228,8 +216,6 @@ struct MacShellView: View {
       }
     }
     .onDisappear {
-      upsellFallbackTask?.cancel()
-      upsellFallbackTask = nil
       model.canExportActiveConversation = false
     }
     .task {
@@ -276,17 +262,6 @@ struct MacShellView: View {
         providers: providers
       )
     }
-    .onChange(of: proGateCenter.upsellRequestID) { _, _ in
-      handleProUpsellRequest()
-    }
-    .onChange(of: utilitySheets.destination) { _, destination in
-      guard destination == nil, let pending = pendingUpsellFeature else { return }
-      pendingUpsellFeature = nil
-      Task { @MainActor in
-        try? await Task.sleep(for: .milliseconds(250))
-        activeUpsellFeature = pending
-      }
-    }
     .onReceive(NotificationCenter.default.publisher(for: .macOpenConversationFromLibrary)) { notification in
       guard let rawValue = notification.object as? String else { return }
       let conversationID = ConversationID(rawValue: rawValue)
@@ -302,96 +277,26 @@ struct MacShellView: View {
       else { return }
       navigation.navigateToMessage(request)
     }
-    .sheet(isPresented: $showingChatSettings) {
-      let project: ChatProject? = if let chatSettingsConversationID {
-        model.workspace?.project(for: chatSettingsConversationID)
-      } else {
-        model.workspace?.project(chats.newChatProjectID)
-      }
-      MacChatSettingsView(
-        chats: chats,
+    .background {
+      MacShellModalPresenterHost(
+        model: model,
         providers: providers,
-        conversationID: chatSettingsConversationID,
-        project: project
-      )
-    }
-    .sheet(isPresented: $showingChatTools) {
-      let target = chats.target(for: toolsConversationID)
-      let modelSupportsTools = target.map {
-        providers.capabilities(accountID: $0.accountID, modelID: $0.modelID)[.tools] != .unsupported
-      } ?? true
-      let draftProjectID = toolsConversationID == nil ? chats.newChatProjectID : nil
-      let project = toolsConversationID.flatMap { model.workspace?.project(for: $0) }
-        ?? model.workspace?.project(draftProjectID)
-      MacChatToolsView(
+        chats: chats,
         mcp: mcp,
-        conversationID: toolsConversationID,
-        projectID: draftProjectID,
-        draftConfiguration: toolsConversationID == nil
-          ? Binding(
-              get: { chats.newChatMCPConfiguration },
-              set: { chats.setNewChatMCPConfiguration($0) }
-            )
-          : nil,
-        presets: project?.projectToolPresets ?? [],
-        isGenerating: chats.isGenerating(toolsConversationID),
-        modelSupportsTools: modelSupportsTools,
-        manageServers: {
-          showingChatTools = false
-          utilitySheets.present(.mcpServers)
+        navigation: navigation,
+        modals: modals,
+        onConfirmDelete: { target in
+          confirmDeleteConversation(target, chats: chats, mcp: mcp)
         }
       )
     }
-    .sheet(item: $renameTarget) { conversation in
-      MacRenameConversationSheet(conversation: conversation) { title in
-        await chats.renameConversation(conversation.id, title: title)
-      }
-    }
-    .sheet(item: $activeUpsellFeature) { feature in
-      MacProUpsellSheet(feature: feature)
-    }
-    .confirmationDialog(
-      deleteDialogTitle,
-      isPresented: deleteDialogPresented,
-      titleVisibility: .visible
-    ) {
-      Button("Delete Conversation", role: .destructive) {
-        confirmDeleteConversation(chats: chats, mcp: mcp)
-      }
-      Button("Cancel", role: .cancel) {
-        deleteTarget = nil
-      }
-    } message: {
-      Text("This removes the conversation and its chat-specific project/tool references. This cannot be undone.")
-    }
-    .alert(
-      "Chat Error",
-      isPresented: chatErrorPresented(chats: chats, mcp: mcp)
-    ) {
-      Button("OK") {
-        clearChatErrors(chats: chats, mcp: mcp)
-      }
-    } message: {
-      Text(chatErrorMessage(chats: chats, mcp: mcp))
-    }
   }
 
-  private var deleteDialogTitle: String {
-    guard let target = deleteTarget else { return "Delete conversation?" }
-    let title = target.title.isEmpty ? "New Chat" : target.title
-    return "Delete \"\(title)\"?"
-  }
-
-  private var deleteDialogPresented: Binding<Bool> {
-    Binding(
-      get: { deleteTarget != nil },
-      set: { if !$0 { deleteTarget = nil } }
-    )
-  }
-
-  private func confirmDeleteConversation(chats: MacChatSessionModel, mcp: MacMCPModel) {
-    guard let target = deleteTarget else { return }
-    deleteTarget = nil
+  private func confirmDeleteConversation(
+    _ target: ChatConversation,
+    chats: MacChatSessionModel,
+    mcp: MacMCPModel
+  ) {
     Task { @MainActor in
       if await chats.deleteConversation(target.id) {
         await model.workspace?.reload()
@@ -406,43 +311,6 @@ struct MacShellView: View {
         navigation.removeDeletedConversations(validIDs: chats.conversationSummaries.map(\.id))
       }
     }
-  }
-
-  private var rootWorkspaceErrorMessage: String? {
-    guard utilitySheets.destination == nil else { return nil }
-    return model.workspace?.errorMessage
-  }
-
-  private func chatErrorPresented(
-    chats: MacChatSessionModel,
-    mcp: MacMCPModel
-  ) -> Binding<Bool> {
-    Binding(
-      get: {
-        navigation.errorMessage != nil
-          || chats.errorMessage != nil
-          || mcp.errorMessage != nil
-          || rootWorkspaceErrorMessage != nil
-      },
-      set: { if !$0 { clearChatErrors(chats: chats, mcp: mcp) } }
-    )
-  }
-
-  private func clearChatErrors(chats: MacChatSessionModel, mcp: MacMCPModel) {
-    navigation.errorMessage = nil
-    chats.errorMessage = nil
-    mcp.errorMessage = nil
-    if utilitySheets.destination == nil {
-      model.workspace?.errorMessage = nil
-    }
-  }
-
-  private func chatErrorMessage(chats: MacChatSessionModel, mcp: MacMCPModel) -> String {
-    navigation.errorMessage
-      ?? chats.errorMessage
-      ?? mcp.errorMessage
-      ?? rootWorkspaceErrorMessage
-      ?? "Unknown error"
   }
 
   private func stepSelectedConversation(delta: Int, chats: MacChatSessionModel) {
@@ -715,6 +583,189 @@ struct MacShellView: View {
     didRestorePendingAttachments = true
     guard let store = model.pendingAttachmentStore else { return }
     pendingAttachmentsByKey = await store.snapshot()
+  }
+}
+
+@MainActor
+@Observable
+private final class MacShellModalCoordinator {
+  var chatSettingsConversationID: ConversationID?
+  var showingChatSettings = false
+  var toolsConversationID: ConversationID?
+  var showingChatTools = false
+  var renameTarget: ChatConversation?
+  var deleteTarget: ChatConversation?
+
+  func presentChatSettings(for conversationID: ConversationID?) {
+    chatSettingsConversationID = conversationID
+    showingChatSettings = true
+  }
+
+  func presentChatTools(for conversationID: ConversationID?) {
+    toolsConversationID = conversationID
+    showingChatTools = true
+  }
+}
+
+@MainActor
+private struct MacShellModalPresenterHost: View {
+  let model: MacAppModel
+  let providers: MacProviderModel
+  let chats: MacChatSessionModel
+  let mcp: MacMCPModel
+  let navigation: MacChatNavigation
+  @Bindable var modals: MacShellModalCoordinator
+  let onConfirmDelete: (ChatConversation) -> Void
+
+  @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
+  @Environment(MacProGateCenter.self) private var proGateCenter
+  @Environment(\.controlActiveState) private var controlActiveState
+  @State private var activeUpsellFeature: MacProFeature?
+  @State private var pendingUpsellFeature: MacProFeature?
+  @State private var upsellFallbackTask: Task<Void, Never>?
+
+  var body: some View {
+    Color.clear
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+      .onDisappear {
+        upsellFallbackTask?.cancel()
+        upsellFallbackTask = nil
+      }
+      .onChange(of: proGateCenter.upsellRequestID) { _, _ in
+        handleProUpsellRequest()
+      }
+      .onChange(of: utilitySheets.destination) { _, destination in
+        guard destination == nil, let pending = pendingUpsellFeature else { return }
+        pendingUpsellFeature = nil
+        Task { @MainActor in
+          try? await Task.sleep(for: .milliseconds(250))
+          activeUpsellFeature = pending
+        }
+      }
+      .sheet(isPresented: $modals.showingChatSettings) {
+        let conversationID = modals.chatSettingsConversationID
+        let project: ChatProject? = if let conversationID {
+          model.workspace?.project(for: conversationID)
+        } else {
+          model.workspace?.project(chats.newChatProjectID)
+        }
+        MacChatSettingsView(
+          chats: chats,
+          providers: providers,
+          conversationID: conversationID,
+          project: project
+        )
+      }
+      .sheet(isPresented: $modals.showingChatTools) {
+        let conversationID = modals.toolsConversationID
+        let target = chats.target(for: conversationID)
+        let modelSupportsTools = target.map {
+          providers.capabilities(accountID: $0.accountID, modelID: $0.modelID)[.tools] != .unsupported
+        } ?? true
+        let draftProjectID = conversationID == nil ? chats.newChatProjectID : nil
+        let project = conversationID.flatMap { model.workspace?.project(for: $0) }
+          ?? model.workspace?.project(draftProjectID)
+        MacChatToolsView(
+          mcp: mcp,
+          conversationID: conversationID,
+          projectID: draftProjectID,
+          draftConfiguration: conversationID == nil
+            ? Binding(
+                get: { chats.newChatMCPConfiguration },
+                set: { chats.setNewChatMCPConfiguration($0) }
+              )
+            : nil,
+          presets: project?.projectToolPresets ?? [],
+          isGenerating: chats.isGenerating(conversationID),
+          modelSupportsTools: modelSupportsTools,
+          manageServers: {
+            modals.showingChatTools = false
+            utilitySheets.present(.mcpServers)
+          }
+        )
+      }
+      .sheet(item: $modals.renameTarget) { conversation in
+        MacRenameConversationSheet(conversation: conversation) { title in
+          await chats.renameConversation(conversation.id, title: title)
+        }
+      }
+      .sheet(item: $activeUpsellFeature) { feature in
+        MacProUpsellSheet(feature: feature)
+      }
+      .confirmationDialog(
+        deleteDialogTitle,
+        isPresented: deleteDialogPresented,
+        titleVisibility: .visible
+      ) {
+        Button("Delete Conversation", role: .destructive) {
+          guard let target = modals.deleteTarget else { return }
+          modals.deleteTarget = nil
+          onConfirmDelete(target)
+        }
+        Button("Cancel", role: .cancel) {
+          modals.deleteTarget = nil
+        }
+      } message: {
+        Text("This removes the conversation and its chat-specific project/tool references. This cannot be undone.")
+      }
+      .alert(
+        "Chat Error",
+        isPresented: chatErrorPresented
+      ) {
+        Button("OK") {
+          clearChatErrors()
+        }
+      } message: {
+        Text(chatErrorMessage)
+      }
+  }
+
+  private var deleteDialogTitle: String {
+    guard let target = modals.deleteTarget else { return "Delete conversation?" }
+    let title = target.title.isEmpty ? "New Chat" : target.title
+    return "Delete \"\(title)\"?"
+  }
+
+  private var deleteDialogPresented: Binding<Bool> {
+    Binding(
+      get: { modals.deleteTarget != nil },
+      set: { if !$0 { modals.deleteTarget = nil } }
+    )
+  }
+
+  private var rootWorkspaceErrorMessage: String? {
+    guard utilitySheets.destination == nil else { return nil }
+    return model.workspace?.errorMessage
+  }
+
+  private var chatErrorPresented: Binding<Bool> {
+    Binding(
+      get: {
+        navigation.errorMessage != nil
+          || chats.errorMessage != nil
+          || mcp.errorMessage != nil
+          || rootWorkspaceErrorMessage != nil
+      },
+      set: { if !$0 { clearChatErrors() } }
+    )
+  }
+
+  private func clearChatErrors() {
+    navigation.errorMessage = nil
+    chats.errorMessage = nil
+    mcp.errorMessage = nil
+    if utilitySheets.destination == nil {
+      model.workspace?.errorMessage = nil
+    }
+  }
+
+  private var chatErrorMessage: String {
+    navigation.errorMessage
+      ?? chats.errorMessage
+      ?? mcp.errorMessage
+      ?? rootWorkspaceErrorMessage
+      ?? "Unknown error"
   }
 
   private func handleProUpsellRequest() {

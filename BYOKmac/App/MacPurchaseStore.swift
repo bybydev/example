@@ -961,12 +961,24 @@ struct MacProUpsellSheet: View {
 
 @MainActor
 private struct MacProUpsellPresenterModifier: ViewModifier {
+  func body(content: Content) -> some View {
+    content
+      .background {
+        MacProUpsellPresenterHost()
+      }
+  }
+}
+
+@MainActor
+private struct MacProUpsellPresenterHost: View {
   @Environment(MacProGateCenter.self) private var proGateCenter: MacProGateCenter?
   @Environment(\.controlActiveState) private var controlActiveState
   @State private var activeFeature: MacProFeature?
 
-  func body(content: Content) -> some View {
-    content
+  var body: some View {
+    Color.clear
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
       .onChange(of: proGateCenter?.upsellRequestID ?? 0) { _, _ in
         guard controlActiveState == .key,
           let claimed = proGateCenter?.claimPendingUpsell()

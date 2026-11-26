@@ -123,20 +123,63 @@ struct MacSecondarySurfacesView: View {
     MacShellView(model: model)
       .id(model.runtimeGeneration)
       .overlay(alignment: .top) {
-        if utilitySheets.destination == nil {
-          MacToastOverlay(center: toastCenter)
-        }
+        MacRootToastOverlayHost(
+          workspace: workspace,
+          mcp: mcp,
+          utilitySheets: utilitySheets,
+          toastCenter: toastCenter
+        )
       }
-      .onChange(of: workspace.statusMessage) { _, message in
-        guard let message else { return }
-        toastCenter.showStatus(message)
-        workspace.statusMessage = nil
+      .background {
+        MacUtilitySheetPresenterHost(
+          model: model,
+          workspace: workspace,
+          mcp: mcp,
+          chats: chats,
+          utilitySheets: utilitySheets,
+          toastCenter: toastCenter
+        )
       }
-      .onChange(of: mcp.statusMessage) { _, message in
-        guard let message else { return }
-        toastCenter.showStatus(message)
-        mcp.statusMessage = nil
+  }
+}
+
+private struct MacRootToastOverlayHost: View {
+  let workspace: MacWorkspaceModel
+  let mcp: MacMCPModel
+  let utilitySheets: MacUtilitySheetCoordinator
+  let toastCenter: MacToastCenter
+
+  var body: some View {
+    Group {
+      if utilitySheets.destination == nil {
+        MacToastOverlay(center: toastCenter)
       }
+    }
+    .onChange(of: workspace.statusMessage) { _, message in
+      guard let message else { return }
+      toastCenter.showStatus(message)
+      workspace.statusMessage = nil
+    }
+    .onChange(of: mcp.statusMessage) { _, message in
+      guard let message else { return }
+      toastCenter.showStatus(message)
+      mcp.statusMessage = nil
+    }
+  }
+}
+
+private struct MacUtilitySheetPresenterHost: View {
+  let model: MacAppModel
+  let workspace: MacWorkspaceModel
+  let mcp: MacMCPModel
+  let chats: MacChatSessionModel
+  let utilitySheets: MacUtilitySheetCoordinator
+  let toastCenter: MacToastCenter
+
+  var body: some View {
+    Color.clear
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
       .sheet(
         item: Binding(
           get: { utilitySheets.destination },
@@ -157,7 +200,7 @@ struct MacSecondarySurfacesView: View {
         }
       ) { destination in
         MacUtilitySheetContainer(destination: destination) {
-          utilityContent(destination, workspace: workspace, mcp: mcp, chats: chats)
+          utilityContent(destination)
         }
         .environment(workspace)
         .environment(mcp)
@@ -169,10 +212,7 @@ struct MacSecondarySurfacesView: View {
 
   @ViewBuilder
   private func utilityContent(
-    _ destination: MacUtilitySheetDestination,
-    workspace: MacWorkspaceModel,
-    mcp: MacMCPModel,
-    chats: MacChatSessionModel
+    _ destination: MacUtilitySheetDestination
   ) -> some View {
     switch destination {
     case .providers:

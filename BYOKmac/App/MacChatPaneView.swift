@@ -1,6 +1,7 @@
 import AppKit
 import BYOKchatProviderCore
 import MacAppFoundation
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 import os
@@ -112,7 +113,7 @@ struct MacChatPane: View {
   @Environment(MacWorkspaceModel.self) private var workspace
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var composerHeight: CGFloat = 0
-  @State private var showingPromptsPicker = false
+  @State private var modalState = MacChatPaneModalState()
   @State private var showingTargetPopover = false
   @State private var dismissedOmittedBannerKey: String?
   @State private var revealedConversationIDs: Set<ConversationID> = []
@@ -239,7 +240,7 @@ struct MacChatPane: View {
         enabledToolCount: enabledToolCount,
         sidebarVisible: sidebarVisible,
         toggleSidebar: toggleSidebar,
-        openPrompts: { showingPromptsPicker = true },
+        openPrompts: { modalState.showingPromptsPicker = true },
         openChatSettings: openChatSettings,
         openTools: configureTools,
         openProject: { openProjects(headerProject?.id) },
@@ -308,7 +309,7 @@ struct MacChatPane: View {
               openChatSettings: openChatSettings,
               configureTools: configureTools,
               openProjects: { openProjects(activeProject?.id) },
-              openPrompts: { showingPromptsPicker = true },
+              openPrompts: { modalState.showingPromptsPicker = true },
               applyPromptPreset: applyPromptPreset,
               onInitialLayoutReady: {
                 if let id = retained.id {
@@ -434,21 +435,13 @@ struct MacChatPane: View {
       .clipped()
     }
     .background(MacDesignTokens.Colors.canvas)
-    .sheet(isPresented: $showingPromptsPicker) {
-      let accessibleActiveProject = activeProject.flatMap {
-        workspace.isProjectRestricted($0.id) ? nil : $0
-      }
-      MacChatPromptsPickerSheet(
-        activeProject: accessibleActiveProject,
-        allProjects: workspace.accessibleProjects(),
-        openProjects: {
-          showingPromptsPicker = false
-          openProjects(activeProject?.id)
-        },
-        applyPreset: { preset in
-          showingPromptsPicker = false
-          applyPromptPreset(preset)
-        }
+    .background {
+      MacChatPromptsSheetHost(
+        modalState: modalState,
+        workspace: workspace,
+        activeProject: activeProject,
+        openProjects: openProjects,
+        applyPromptPreset: applyPromptPreset
       )
     }
   }
@@ -461,6 +454,44 @@ struct MacChatPane: View {
     ) else { return }
     chats.setDraft(merged, conversationID: conversationID)
     focusComposer()
+  }
+}
+
+@MainActor
+@Observable
+private final class MacChatPaneModalState {
+  var showingPromptsPicker = false
+}
+
+@MainActor
+private struct MacChatPromptsSheetHost: View {
+  @Bindable var modalState: MacChatPaneModalState
+  let workspace: MacWorkspaceModel
+  let activeProject: ChatProject?
+  let openProjects: (ProjectID?) -> Void
+  let applyPromptPreset: (ProjectPromptPreset) -> Void
+
+  var body: some View {
+    Color.clear
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+      .sheet(isPresented: $modalState.showingPromptsPicker) {
+        let accessibleActiveProject = activeProject.flatMap {
+          workspace.isProjectRestricted($0.id) ? nil : $0
+        }
+        MacChatPromptsPickerSheet(
+          activeProject: accessibleActiveProject,
+          allProjects: workspace.accessibleProjects(),
+          openProjects: {
+            modalState.showingPromptsPicker = false
+            openProjects(activeProject?.id)
+          },
+          applyPreset: { preset in
+            modalState.showingPromptsPicker = false
+            applyPromptPreset(preset)
+          }
+        )
+      }
   }
 }
 
@@ -1283,24 +1314,7 @@ private struct MacTranscriptView: View {
   @State private var visibleMessageLimit = MacChatMessageWindowPolicy.initialVisibleCount
   @State private var isLoadingEarlierMessages = false
   @State private var pendingEarlierAnchorID: ChatMessageID?
-  @State private var activeRowSheet: ActiveRowSheet?
-  @State private var showingRegenerateConfirmation = false
-
-  private enum ActiveRowSheet: Identifiable {
-    case details(ChatMessage)
-    case edit(ChatMessage)
-    case previewAttachment(ChatAttachment, ChatMessage)
-    case saveImages(ChatMessage, [MacResponseImageCandidate])
-
-    var id: String {
-      switch self {
-      case .details(let message): "details-\(message.id.rawValue)"
-      case .edit(let message): "edit-\(message.id.rawValue)"
-      case .previewAttachment(let attachment, let message): "attachment-\(message.id.rawValue)-\(attachment.id)"
-      case .saveImages(let message, _): "save-images-\(message.id.rawValue)"
-      }
-    }
-  }
+  @State private var modalState = MacTranscriptModalState()
 
   private struct PendingScrollTarget: Equatable {
     let token = UUID()
@@ -1452,12 +1466,12 @@ private struct MacTranscriptView: View {
                     message: message,
                     failureContext: failureContextLabel(for: message, accountsByID: accountsByID),
                     isLatestAssistant: isLatestAssistant,
-                    onShowDetails: { activeRowSheet = .details($0) },
-                    onEditMessage: { activeRowSheet = .edit($0) },
+                    onShowDetails: { modalState.activeRowSheet = .details($0) },
+                    onEditMessage: { modalState.activeRowSheet = .edit($0) },
                     onPreviewAttachment: { attachment, owner in
-                      activeRowSheet = .previewAttachment(attachment, owner)
+                      modalState.activeRowSheet = .previewAttachment(attachment, owner)
                     },
-                    onSaveImages: { activeRowSheet = .saveImages(message, $0) },
+                    onSaveImages: { modalState.activeRowSheet = .saveImages(message, $0) },
                     onRequestRegenerate: requestRegeneration
                   )
                 }
@@ -1664,89 +1678,21 @@ private struct MacTranscriptView: View {
           .accessibilityLabel("Scroll to bottom of chat")
         }
       }
-      .sheet(item: $activeRowSheet) { sheet in
-        rowModalContent(for: sheet)
-      }
-      .confirmationDialog(
-        "Regenerate this response?",
-        isPresented: $showingRegenerateConfirmation,
-        titleVisibility: .visible
-      ) {
-        Button("Regenerate") {
-          regenerate(confirmingUncertainCompletion: true)
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text("The provider may have completed the previous request even though BYOKchat could not confirm it. Regenerating can create another billable response.")
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func rowModalContent(for sheet: ActiveRowSheet) -> some View {
-    switch sheet {
-    case .details(let message):
-      MacMessageDetailsView(
-        message: message,
-        providers: providers,
-        conversation: chats.conversation(conversationID),
-        toolDisplayName: mcp.toolDisplayName
-      )
-
-    case .edit(let message):
-      if let conversationID {
-        MacEditAndResendView(
+      .background {
+        MacTranscriptModalHost(
+          modalState: modalState,
+          providers: providers,
           chats: chats,
+          mcp: mcp,
+          workspace: workspace,
+          toastCenter: toastCenter,
           conversationID: conversationID,
-          original: message.content,
           chooseTarget: chooseTarget,
           manageProviders: manageProviders,
-          save: { value in
-            await chats.editAndResend(
-              conversationID: conversationID,
-              messageID: message.id,
-              text: value
-            )
+          onConfirmRegenerate: {
+            regenerate(confirmingUncertainCompletion: true)
           }
         )
-      }
-
-    case .previewAttachment(let attachment, let owner):
-      let isStreamingOwner = owner.status == .pending || owner.status == .streaming
-      MacAttachmentPreviewSheet(
-        attachment: attachment,
-        loadData: { id in
-          await chats.attachmentData(id)
-        },
-        saveToLibrary: (conversationID != nil && !isStreamingOwner)
-          ? {
-            guard let conversationID else { return nil }
-            let ok = await workspace.saveStoredAttachmentToLibrary(
-              attachment,
-              conversationID: conversationID,
-              messageID: owner.id
-            )
-            if ok { return nil }
-            return workspace.consumeErrorMessage() ?? "Could not save attachment to Library."
-          }
-          : nil
-      )
-
-    case .saveImages(let message, let candidates):
-      if let conversationID {
-        MacResponseImageSaveSheet(
-          candidates: candidates,
-          conversationID: conversationID,
-          messageID: message.id,
-          workspace: workspace
-        ) { savedCount in
-          guard savedCount > 0 else { return }
-          toastCenter?.success(
-            savedCount == 1
-              ? "Saved 1 image to Library"
-              : "Saved \(savedCount) images to Library"
-          )
-        }
       }
     }
   }
@@ -1754,7 +1700,7 @@ private struct MacTranscriptView: View {
   private func requestRegeneration() {
     guard let conversationID else { return }
     if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
-      showingRegenerateConfirmation = true
+      modalState.showingRegenerateConfirmation = true
     } else {
       regenerate(confirmingUncertainCompletion: false)
     }
@@ -2238,6 +2184,133 @@ private struct MacTranscriptView: View {
       withAnimation(.easeOut(duration: 0.18), scroll)
     } else {
       scroll()
+    }
+  }
+}
+
+private enum MacTranscriptRowSheet: Identifiable {
+  case details(ChatMessage)
+  case edit(ChatMessage)
+  case previewAttachment(ChatAttachment, ChatMessage)
+  case saveImages(ChatMessage, [MacResponseImageCandidate])
+
+  var id: String {
+    switch self {
+    case .details(let message): "details-\(message.id.rawValue)"
+    case .edit(let message): "edit-\(message.id.rawValue)"
+    case .previewAttachment(let attachment, let message): "attachment-\(message.id.rawValue)-\(attachment.id)"
+    case .saveImages(let message, _): "save-images-\(message.id.rawValue)"
+    }
+  }
+}
+
+@MainActor
+@Observable
+private final class MacTranscriptModalState {
+  var activeRowSheet: MacTranscriptRowSheet?
+  var showingRegenerateConfirmation = false
+}
+
+@MainActor
+private struct MacTranscriptModalHost: View {
+  @Bindable var modalState: MacTranscriptModalState
+  let providers: MacProviderModel
+  let chats: MacChatSessionModel
+  let mcp: MacMCPModel
+  let workspace: MacWorkspaceModel
+  let toastCenter: MacToastCenter?
+  let conversationID: ConversationID?
+  let chooseTarget: () -> Void
+  let manageProviders: () -> Void
+  let onConfirmRegenerate: () -> Void
+
+  var body: some View {
+    Color.clear
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
+      .sheet(item: $modalState.activeRowSheet) { sheet in
+        rowModalContent(for: sheet)
+      }
+      .confirmationDialog(
+        "Regenerate this response?",
+        isPresented: $modalState.showingRegenerateConfirmation,
+        titleVisibility: .visible
+      ) {
+        Button("Regenerate") {
+          onConfirmRegenerate()
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("The provider may have completed the previous request even though BYOKchat could not confirm it. Regenerating can create another billable response.")
+      }
+  }
+
+  @ViewBuilder
+  private func rowModalContent(for sheet: MacTranscriptRowSheet) -> some View {
+    switch sheet {
+    case .details(let message):
+      MacMessageDetailsView(
+        message: message,
+        providers: providers,
+        conversation: chats.conversation(conversationID),
+        toolDisplayName: mcp.toolDisplayName
+      )
+
+    case .edit(let message):
+      if let conversationID {
+        MacEditAndResendView(
+          chats: chats,
+          conversationID: conversationID,
+          original: message.content,
+          chooseTarget: chooseTarget,
+          manageProviders: manageProviders,
+          save: { value in
+            await chats.editAndResend(
+              conversationID: conversationID,
+              messageID: message.id,
+              text: value
+            )
+          }
+        )
+      }
+
+    case .previewAttachment(let attachment, let owner):
+      let isStreamingOwner = owner.status == .pending || owner.status == .streaming
+      MacAttachmentPreviewSheet(
+        attachment: attachment,
+        loadData: { id in
+          await chats.attachmentData(id)
+        },
+        saveToLibrary: (conversationID != nil && !isStreamingOwner)
+          ? {
+            guard let conversationID else { return nil }
+            let ok = await workspace.saveStoredAttachmentToLibrary(
+              attachment,
+              conversationID: conversationID,
+              messageID: owner.id
+            )
+            if ok { return nil }
+            return workspace.consumeErrorMessage() ?? "Could not save attachment to Library."
+          }
+          : nil
+      )
+
+    case .saveImages(let message, let candidates):
+      if let conversationID {
+        MacResponseImageSaveSheet(
+          candidates: candidates,
+          conversationID: conversationID,
+          messageID: message.id,
+          workspace: workspace
+        ) { savedCount in
+          guard savedCount > 0 else { return }
+          toastCenter?.success(
+            savedCount == 1
+              ? "Saved 1 image to Library"
+              : "Saved \(savedCount) images to Library"
+          )
+        }
+      }
     }
   }
 }
