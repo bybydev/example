@@ -418,7 +418,7 @@ final class MacProviderModel {
     }
 
     let shouldClearCredential =
-      clearCredential || (updated.kind == .openAICompatible && updated.authChoice == .none)
+      clearCredential || (updated.kind == .openAICompatible && updated.authChoice == ProviderAuthentication.none)
     if shouldClearCredential {
       do {
         try await accountManager.setCredential(nil, accountID: accountID)
@@ -593,17 +593,25 @@ final class MacProviderModel {
   /// Refreshes all ready, unrestricted accounts whose discovery cache is stale (>24h).
   /// Errors are absorbed per account and subject to the 15m retry backoff.
   func refreshReadyAccountsIfNeeded(now: Date = .now) async {
-    let candidates = accounts.filter {
-      isReady($0) && !isProviderRestricted($0.id) && $0.definition.modelsPath != nil
+    let accountIDs = accounts
+      .filter { isReady($0) && !isProviderRestricted($0.id) && $0.definition.modelsPath != nil }
+      .map(\.id)
+    guard !accountIDs.isEmpty else { return }
+
+    let tasks: [Task<Void, Never>] = accountIDs.map { accountID in
+      Task { @MainActor [weak self] in
+        guard let self, !Task.isCancelled else { return }
+        _ = try? await self.refreshModelsIfNeeded(accountID: accountID, force: false, now: now)
+      }
     }
-    guard !candidates.isEmpty else { return }
-    await withTaskGroup(of: Void.self) { group in
-      for account in candidates {
-        let accountID = account.id
-        group.addTask { @MainActor [weak self] in
-          guard let self, !Task.isCancelled else { return }
-          _ = try? await self.refreshModelsIfNeeded(accountID: accountID, force: false, now: now)
-        }
+
+    await withTaskCancellationHandler {
+      for task in tasks {
+        await task.value
+      }
+    } onCancel: {
+      for task in tasks {
+        task.cancel()
       }
     }
   }

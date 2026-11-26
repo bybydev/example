@@ -1135,7 +1135,7 @@ struct MacTargetPickerView: View {
       ?? fallbackTarget?.accountID
       ?? enabledAccounts.first?.id
     let seedModelID: ModelID?
-    if let initialAccount, let initialTarget {
+    if initialAccount != nil, let initialTarget {
       seedModelID = initialTarget.modelID
     } else if let seedAccountID {
       seedModelID = providers.usableModelID(for: seedAccountID)
