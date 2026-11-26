@@ -8,6 +8,7 @@ enum MacStartupStage: String, Sendable, Equatable {
   case preparingStorage = "Preparing local data"
   case composingServices = "Preparing shared services"
   case preparingFiles = "Checking file storage"
+  case loadingWorkspace = "Loading workspace"
   case loadingProviders = "Loading connections"
   case loadingProjects = "Loading projects"
   case loadingTools = "Loading tools"
@@ -23,19 +24,26 @@ struct MacStartupFailure: Sendable, Equatable {
   let message: String
   let details: String
   let occurredAt: Date
+  let dataDirectoryPath: String
 
-  init(stage: MacStartupStage, error: any Error, occurredAt: Date = .now) {
+  init(
+    stage: MacStartupStage,
+    error: any Error,
+    occurredAt: Date = .now,
+    dataDirectoryPath: String = MacStorageEnvironment.current.rootDirectory.path
+  ) {
     self.stage = stage
     message = error.localizedDescription
     details = String(describing: error)
     self.occurredAt = occurredAt
+    self.dataDirectoryPath = dataDirectoryPath
   }
 
   var title: String {
     switch stage {
     case .preparingStorage, .composingServices, .preparingFiles, .recovering:
       "Couldn't Prepare BYOKchat"
-    case .loadingProviders, .loadingProjects, .loadingTools, .loadingChats,
+    case .loadingWorkspace, .loadingProviders, .loadingProjects, .loadingTools, .loadingChats,
       .loadingLibrary, .reconciling, .maintenance:
       "Couldn't Start BYOKchat"
     }
@@ -51,7 +59,7 @@ struct MacStartupFailure: Sendable, Equatable {
     Date: \(occurredAt.ISO8601Format())
     Message: \(message)
     Details: \(details)
-    Data directory: \(MacStorageEnvironment.current.rootDirectory.path)
+    Data directory: \(dataDirectoryPath)
     """
   }
 }
@@ -72,6 +80,8 @@ private extension MacStartupStage {
       "startup_services_failed"
     case .preparingFiles:
       "startup_files_failed"
+    case .loadingWorkspace:
+      "startup_workspace_failed"
     case .loadingProviders:
       "startup_providers_failed"
     case .loadingProjects:
@@ -144,10 +154,18 @@ final class MacAppModel {
   private(set) var conversationSearchRequestID = 0
   private(set) var sidebarToggleRequestID = 0
   private(set) var exportMarkdownRequestID = 0
+  private(set) var runtimeGeneration = 0
+  var canExportActiveConversation = false
 
   private let coreServicesFactory: MacCoreServicesFactory
-  private var catalogRefreshTask: Task<Void, Never>?
-  private var postStartupMaintenanceTask: Task<Void, Never>?
+  @ObservationIgnored private var catalogRefreshTask: Task<Void, Never>?
+  @ObservationIgnored private var postStartupMaintenanceTask: Task<Void, Never>?
+  @ObservationIgnored private var orphanSweepTask: Task<Void, Never>?
+  @ObservationIgnored private var isSweepingOrphans = false
+  @ObservationIgnored private var isReloading = false
+  @ObservationIgnored private var isFullTextSearchEnabled = false
+  @ObservationIgnored private var lastReconciledEntitlement: MacProEntitlementAccess?
+  @ObservationIgnored private var lastReconciledGeneration = -1
 
   private struct StagedStartupError: Error {
     let stage: MacStartupStage
@@ -176,6 +194,10 @@ final class MacAppModel {
     return false
   }
 
+  var hasPendingWorkToFlush: Bool {
+    chats?.hasPendingStateToFlush == true
+  }
+
   func start() async {
     guard case .idle = startupState else { return }
     await performStart()
@@ -195,11 +217,23 @@ final class MacAppModel {
         environment: storageEnvironment
       )
       MacPurchaseStore.restrictions.clear()
+      if storageEnvironment.userDefaultsSuiteName == nil {
+        preferences.clearPinnedConversations()
+      } else {
+        MacSidebarPinStore.clear(in: storageEnvironment.makeUserDefaults())
+      }
+      ModelCatalogRegistry.resetToBundled()
       clearRuntimeModels()
       await performStart()
     } catch {
       MacAppAnalytics.reportError("workspace_recovery_failed", component: "startup")
-      startupState = .failed(MacStartupFailure(stage: .recovering, error: error))
+      startupState = .failed(
+        MacStartupFailure(
+          stage: .recovering,
+          error: error,
+          dataDirectoryPath: storageEnvironment.rootDirectory.path
+        )
+      )
     }
   }
 
@@ -211,13 +245,64 @@ final class MacAppModel {
     }
   }
 
+  func flushPendingState() async {
+    await chats?.flushPendingState()
+  }
+
+  func setFullTextSearchEnabled(_ enabled: Bool) async {
+    isFullTextSearchEnabled = enabled
+    if let chats {
+      await chats.setFullTextSearchEnabled(enabled)
+    } else if let store = coreServices?.conversationStore {
+      await store.setFullTextSearchEnabled(enabled)
+    }
+  }
+
+  func reconcileProEntitlement(
+    _ access: MacProEntitlementAccess,
+    forceTargetRefresh: Bool = false
+  ) {
+    if !forceTargetRefresh,
+      lastReconciledEntitlement == access,
+      lastReconciledGeneration == runtimeGeneration
+    {
+      return
+    }
+    lastReconciledEntitlement = access
+    lastReconciledGeneration = runtimeGeneration
+
+    if access == .pro {
+      // Once the user legitimately unlocks Pro, restored resources become
+      // normal existing resources and remain usable under downgrade semantics.
+      MacPurchaseStore.restrictions.clear()
+    }
+
+    chats?.refreshNewChatTargetAfterProviderChanges()
+  }
+
+  func handleApplicationDidBecomeActive() {
+    guard isReady, let providers else { return }
+    scheduleBackgroundCatalogRefresh(for: providers)
+  }
+
   /// Refreshes product models after an import or destructive data mutation while
   /// keeping the shared service graph and persistent Settings models alive.
   func reloadAfterDataMutation() async throws {
+    guard !isReloading else { return }
     guard let services = coreServices else {
       await performStart()
       return
     }
+
+    isReloading = true
+    defer { isReloading = false }
+
+    postStartupMaintenanceTask?.cancel()
+    postStartupMaintenanceTask = nil
+    catalogRefreshTask?.cancel()
+    catalogRefreshTask = nil
+    orphanSweepTask?.cancel()
+    orphanSweepTask = nil
 
     let pendingStore = MacPendingAttachmentStore(
       environment: storageEnvironment,
@@ -243,16 +328,22 @@ final class MacAppModel {
     try await chatsLoad
     try await libraryLoad
 
+    await conversationStore.setFullTextSearchEnabled(isFullTextSearchEnabled)
+
     pendingAttachmentStore = pendingStore
     providers = providerModel
 
-    let conversations = Self.sortedConversations(await conversationStore.conversationSummaries())
-    chats = MacChatSessionModel(
+    let conversations = await conversationStore.conversationSummaries()
+    let chatModel = MacChatSessionModel(
       services: services,
       providers: providerModel,
       preferences: preferences,
       initialSummaries: conversations
     )
+    chatModel.onFileReferencesChanged = { [weak self] in
+      self?.scheduleOrphanFileSweep()
+    }
+    chats = chatModel
 
     try await projectWorkspace.reconcileConversationIDs(Set(conversations.map(\.id)))
 
@@ -265,10 +356,7 @@ final class MacAppModel {
     try await mcpLoad
 
     workspaceModel.onFileReferencesChanged = { [weak self] in
-      guard let self, let services = self.coreServices else { return }
-      Task { @MainActor in
-        try? await self.sweepOrphanFiles(services: services)
-      }
+      self?.scheduleOrphanFileSweep()
     }
     mcpModel.onProjectStateChanged = { [weak workspaceModel] in
       await workspaceModel?.reload()
@@ -279,6 +367,8 @@ final class MacAppModel {
     try await sweepOrphanFiles(services: services)
     await diagnostics?.load()
 
+    canExportActiveConversation = false
+    runtimeGeneration &+= 1
     startupState = .ready
     scheduleBackgroundCatalogRefresh(for: providerModel)
   }
@@ -378,7 +468,7 @@ final class MacAppModel {
       let services = try coreServicesFactory(storageEnvironment)
       coreServices = services
 
-      currentStage = .loadingChats
+      currentStage = .loadingWorkspace
       startupState = .loading(currentStage)
 
       let pendingStore = MacPendingAttachmentStore(
@@ -415,16 +505,22 @@ final class MacAppModel {
       try await chatsLoad
       try await libraryLoad
 
+      await conversationStore.setFullTextSearchEnabled(isFullTextSearchEnabled)
+
       pendingAttachmentStore = pendingStore
       providers = providerModel
 
-      let conversations = Self.sortedConversations(await conversationStore.conversationSummaries())
-      chats = MacChatSessionModel(
+      let conversations = await conversationStore.conversationSummaries()
+      let chatModel = MacChatSessionModel(
         services: services,
         providers: providerModel,
         preferences: preferences,
         initialSummaries: conversations
       )
+      chatModel.onFileReferencesChanged = { [weak self] in
+        self?.scheduleOrphanFileSweep()
+      }
+      chats = chatModel
 
       currentStage = .reconciling
       startupState = .loading(currentStage)
@@ -440,10 +536,7 @@ final class MacAppModel {
       try await mcpLoad
 
       workspaceModel.onFileReferencesChanged = { [weak self] in
-        guard let self, let services = self.coreServices else { return }
-        Task { @MainActor in
-          try? await self.sweepOrphanFiles(services: services)
-        }
+        self?.scheduleOrphanFileSweep()
       }
       mcpModel.onProjectStateChanged = { [weak workspaceModel] in
         await workspaceModel?.reload()
@@ -454,6 +547,8 @@ final class MacAppModel {
       dataManagement = MacDataManagementModel(app: self, services: services)
       diagnostics = MacDiagnosticsModel(recorder: services.telemetryRecorder)
 
+      canExportActiveConversation = false
+      runtimeGeneration &+= 1
       startupState = .ready
       schedulePostStartupMaintenance(services: services, providerModel: providerModel)
     } catch let staged as StagedStartupError {
@@ -464,7 +559,13 @@ final class MacAppModel {
         )
       }
       clearRuntimeModels()
-      startupState = .failed(MacStartupFailure(stage: staged.stage, error: staged.underlying))
+      startupState = .failed(
+        MacStartupFailure(
+          stage: staged.stage,
+          error: staged.underlying,
+          dataDirectoryPath: storageEnvironment.rootDirectory.path
+        )
+      )
     } catch {
       MacAppAnalytics.reportError(currentStage.analyticsErrorCode, component: "startup")
       if lastRecoveryBackupURL == nil {
@@ -473,7 +574,13 @@ final class MacAppModel {
         )
       }
       clearRuntimeModels()
-      startupState = .failed(MacStartupFailure(stage: currentStage, error: error))
+      startupState = .failed(
+        MacStartupFailure(
+          stage: currentStage,
+          error: error,
+          dataDirectoryPath: storageEnvironment.rootDirectory.path
+        )
+      )
     }
   }
 
@@ -488,8 +595,9 @@ final class MacAppModel {
     }
   }
 
-  /// Runs non-critical disk, SQLite maintenance, orphan blob sweeps, and remote
-  /// catalog refreshes at utility priority after the main window is interactive.
+  /// Runs non-critical disk, SQLite maintenance, idle orphan blob sweeps, and
+  /// staggered remote catalog refreshes at utility priority after the main window
+  /// is interactive.
   private func schedulePostStartupMaintenance(
     services: BYOKCoreServices,
     providerModel: MacProviderModel
@@ -499,7 +607,7 @@ final class MacAppModel {
     let fileBlobStore = services.fileBlobStore
     let telemetryRecorder = services.telemetryRecorder
     postStartupMaintenanceTask = Task(priority: .utility) { @MainActor [weak self, weak providerModel] in
-      try? await Task.sleep(for: .milliseconds(500))
+      try? await Task.sleep(for: .milliseconds(750))
       guard let self, !Task.isCancelled else { return }
 
       if self.lastRecoveryBackupURL == nil {
@@ -513,13 +621,14 @@ final class MacAppModel {
       guard !Task.isCancelled else { return }
       try? await fileBlobStore.fillUnknownMetadata()
       guard !Task.isCancelled else { return }
-      if let currentServices = self.coreServices {
-        try? await self.sweepOrphanFiles(services: currentServices)
-      }
+      await self.sweepOrphanFilesIfIdle()
       guard !Task.isCancelled else { return }
 
       await telemetryRecorder.performMaintenance()
-      guard !Task.isCancelled, let providerModel else { return }
+      guard !Task.isCancelled else { return }
+
+      try? await Task.sleep(for: .seconds(1))
+      guard !Task.isCancelled, let providerModel, self.providers === providerModel else { return }
 
       self.scheduleBackgroundCatalogRefresh(for: providerModel)
     }
@@ -537,11 +646,39 @@ final class MacAppModel {
     }
   }
 
+  /// Coalesces rapid file/chat/project deletions into one idle orphan sweep.
+  private func scheduleOrphanFileSweep() {
+    orphanSweepTask?.cancel()
+    orphanSweepTask = Task(priority: .utility) { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(250))
+      guard !Task.isCancelled else { return }
+      await self?.sweepOrphanFilesIfIdle()
+    }
+  }
+
+  private var canSweepOrphanFiles: Bool {
+    !isSweepingOrphans
+      && !isReloading
+      && (chats?.activeConversationIDs.isEmpty ?? true)
+      && !(workspace?.isBusy ?? false)
+      && !(dataManagement?.isBusy ?? false)
+      && !(providers?.isBusy ?? false)
+  }
+
+  /// Reclaims unreferenced attachment blobs and orphaned thumbnails only when
+  /// no reference-owning store or streaming generation has a live write in flight.
+  func sweepOrphanFilesIfIdle() async {
+    guard canSweepOrphanFiles, let services = coreServices else { return }
+    try? await sweepOrphanFiles(services: services)
+  }
+
   private func clearRuntimeModels() {
     postStartupMaintenanceTask?.cancel()
     postStartupMaintenanceTask = nil
     catalogRefreshTask?.cancel()
     catalogRefreshTask = nil
+    orphanSweepTask?.cancel()
+    orphanSweepTask = nil
     mcp?.stopInteractionObservers()
     coreServices = nil
     providers = nil
@@ -551,9 +688,14 @@ final class MacAppModel {
     dataManagement = nil
     diagnostics = nil
     pendingAttachmentStore = nil
+    canExportActiveConversation = false
   }
 
   private func sweepOrphanFiles(services: BYOKCoreServices) async throws {
+    guard !isSweepingOrphans else { return }
+    isSweepingOrphans = true
+    defer { isSweepingOrphans = false }
+
     var referenced = await services.conversationStore.referencedAttachmentIDs()
     referenced.formUnion(await services.projectWorkspace.referencedFileIDs())
     referenced.formUnion(await services.libraryStore.referencedEntryIDs())
@@ -563,14 +705,9 @@ final class MacAppModel {
 
     let stored = try await services.fileBlobStore.storedIDs()
     let orphans = stored.subtracting(referenced)
-    guard !orphans.isEmpty else { return }
-    try await services.fileBlobStore.deleteIDs(orphans)
-  }
-
-  private static func sortedConversations(_ values: [ChatConversation]) -> [ChatConversation] {
-    values.sorted { lhs, rhs in
-      if lhs.updatedAt == rhs.updatedAt { return lhs.id.rawValue > rhs.id.rawValue }
-      return lhs.updatedAt > rhs.updatedAt
+    if !orphans.isEmpty {
+      try await services.fileBlobStore.deleteIDs(orphans)
     }
+    await services.fileBlobStore.sweepOrphanedDerivatives()
   }
 }

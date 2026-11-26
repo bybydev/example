@@ -596,8 +596,15 @@ final class MacProviderModel {
     let candidates = accounts.filter {
       isReady($0) && !isProviderRestricted($0.id) && $0.definition.modelsPath != nil
     }
-    for account in candidates {
-      _ = try? await refreshModelsIfNeeded(accountID: account.id, force: false, now: now)
+    guard !candidates.isEmpty else { return }
+    await withTaskGroup(of: Void.self) { group in
+      for account in candidates {
+        let accountID = account.id
+        group.addTask { @MainActor [weak self] in
+          guard let self, !Task.isCancelled else { return }
+          _ = try? await self.refreshModelsIfNeeded(accountID: accountID, force: false, now: now)
+        }
+      }
     }
   }
 

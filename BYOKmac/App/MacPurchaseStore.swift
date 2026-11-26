@@ -544,6 +544,7 @@ final class MacProGateCenter {
   private(set) var feature: MacProFeature?
 
   @ObservationIgnored private var handledUpsellRequestID = 0
+  @ObservationIgnored private var handledPaywallRequestID = 0
 
   init() {}
 
@@ -565,6 +566,14 @@ final class MacProGateCenter {
 
   func openPaywall() {
     requestID &+= 1
+  }
+
+  /// Atomically claims the latest paywall open request so duplicate scene
+  /// modifiers do not invoke `openWindow` twice for the same request.
+  func claimPendingPaywallOpen() -> Bool {
+    guard handledPaywallRequestID != requestID else { return false }
+    handledPaywallRequestID = requestID
+    return true
   }
 }
 

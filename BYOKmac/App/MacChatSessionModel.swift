@@ -127,6 +127,7 @@ final class MacChatSessionModel {
   private(set) var newChatMCPConfiguration: MCPChatToolConfiguration?
   var errorMessage: String?
   var onSummariesChanged: (([ChatConversation]) -> Void)?
+  var onFileReferencesChanged: (() -> Void)?
 
   private let store: ConversationStore
   private let runtime: ChatRuntime
@@ -180,6 +181,23 @@ final class MacChatSessionModel {
 
   var sendsOnReturn: Bool { preferences.sendOnReturn }
   var defaultSystemPrompt: String { preferences.defaultSystemPrompt }
+  var hasPendingStateToFlush: Bool { !draftTasks.isEmpty || !activeConversationIDs.isEmpty }
+
+  func setFullTextSearchEnabled(_ enabled: Bool) async {
+    await store.setFullTextSearchEnabled(enabled)
+  }
+
+  /// Flushes debounced draft writes and any in-flight streaming responses to
+  /// durable storage (called on app deactivation and termination).
+  func flushPendingState() async {
+    let pendingDraftIDs = Array(draftTasks.keys)
+    for conversationID in pendingDraftIDs {
+      let pendingValue = draftValues[conversationID] ?? ""
+      cancelDraftPersistence(for: conversationID)
+      try? await store.setDraft(pendingValue, conversationID: conversationID)
+    }
+    await runtime.flushActiveGenerations()
+  }
 
   func effectiveSystemPrompt(for conversationID: ConversationID?, project: ChatProject?) -> String {
     if let conversationID {
@@ -624,6 +642,7 @@ final class MacChatSessionModel {
         errorMessage = "Conversation deleted, but some related cleanup needs attention. "
           + warnings.joined(separator: " ")
       }
+      onFileReferencesChanged?()
       return true
     } catch {
       setDraft(draftBeforeDelete, conversationID: id)

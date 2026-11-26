@@ -121,6 +121,7 @@ struct MacSecondarySurfacesView: View {
     chats: MacChatSessionModel
   ) -> some View {
     MacShellView(model: model)
+      .id(model.runtimeGeneration)
       .overlay(alignment: .top) {
         if utilitySheets.destination == nil {
           MacToastOverlay(center: toastCenter)

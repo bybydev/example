@@ -37,7 +37,7 @@ struct MacCommands: Commands {
         model.requestExportMarkdown()
       }
       .keyboardShortcut("e", modifiers: [.command, .shift])
-      .disabled(!model.isReady || model.chats?.conversationSummaries.isEmpty != false)
+      .disabled(!model.isReady || !model.canExportActiveConversation)
 
       Divider()
 
@@ -53,7 +53,6 @@ struct MacCommands: Commands {
       Button("Reveal BYOKchat Data in Finder") {
         model.revealDataDirectory()
       }
-      .disabled(!model.isReady)
     }
   }
 }

@@ -1,12 +1,12 @@
 import AppKit
-import MacAppFoundation
 import SwiftUI
 
 struct MacStartupView: View {
   let model: MacAppModel
 
-  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var confirmStartFresh = false
+  @State private var copiedDiagnostics = false
+  @State private var copyFeedbackTask: Task<Void, Never>?
 
   var body: some View {
     Group {
@@ -16,16 +16,17 @@ struct MacStartupView: View {
       case .loading(let stage):
         loadingView(stage: stage)
       case .ready:
-        if purchaseManager.entitlementState == .checking {
-          entitlementLoadingView
-        } else {
-          MacSecondarySurfacesView(model: model)
-        }
+        MacSecondarySurfacesView(model: model)
       case .failed(let failure):
         failureView(failure: failure)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(MacDesignTokens.Colors.canvas, ignoresSafeAreaEdges: .all)
+    .onDisappear {
+      copyFeedbackTask?.cancel()
+      copyFeedbackTask = nil
+    }
   }
 
   private func loadingView(stage: MacStartupStage) -> some View {
@@ -34,84 +35,79 @@ struct MacStartupView: View {
         .controlSize(.large)
       Text("BYOKchat")
         .font(.title2.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
       Text(stage.rawValue)
-        .foregroundStyle(.secondary)
-    }
-    .padding(40)
-  }
-
-  private var entitlementLoadingView: some View {
-    VStack(spacing: 14) {
-      ProgressView()
-        .controlSize(.large)
-      Text("BYOKchat")
-        .font(.title2.weight(.semibold))
-      Text("Checking BYOK Pro status…")
-        .foregroundStyle(.secondary)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
     }
     .padding(40)
   }
 
   private func failureView(failure: MacStartupFailure) -> some View {
-    VStack(spacing: 18) {
-      Image(systemName: "exclamationmark.triangle")
-        .font(.system(size: 34))
-        .foregroundStyle(.secondary)
+    ScrollView {
+      VStack(spacing: 18) {
+        Image(systemName: "exclamationmark.triangle")
+          .font(.system(size: 34))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
-      VStack(spacing: 6) {
-        Text(failure.title)
-          .font(.title2.weight(.semibold))
-        Text(failure.stage.rawValue)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-        Text(failure.message)
-          .multilineTextAlignment(.center)
-          .foregroundStyle(.secondary)
-          .textSelection(.enabled)
+        VStack(spacing: 6) {
+          Text(failure.title)
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          Text(failure.stage.rawValue)
+            .font(.callout)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          Text(failure.message)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .textSelection(.enabled)
+        }
+        .frame(maxWidth: 520)
+
+        HStack(spacing: 10) {
+          Button("Try Again") {
+            Task { await model.retryStartup() }
+          }
+          .buttonStyle(MacActionButtonStyle(.primary))
+          .keyboardShortcut(.defaultAction)
+
+          Button("Show Data in Finder") {
+            model.revealDataDirectory()
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+
+          Button(copiedDiagnostics ? "Copied Diagnostics" : "Copy Diagnostics") {
+            copyDiagnostics(failure.diagnosticText)
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+
+          Button("Start Fresh, Keep Backup") {
+            confirmStartFresh = true
+          }
+          .buttonStyle(MacActionButtonStyle(.destructive))
+        }
+
+        if model.lastRecoveryBackupURL != nil {
+          Button("Show Recovery Backup", systemImage: "clock.arrow.circlepath") {
+            model.revealRecoveryBackup()
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+        }
+
+        DisclosureGroup("Technical Details") {
+          Text(failure.diagnosticText)
+            .font(.caption.monospaced())
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .textSelection(.enabled)
+            .frame(maxWidth: 600, alignment: .leading)
+            .padding(.top, 8)
+        }
+        .frame(maxWidth: 600)
       }
-      .frame(maxWidth: 520)
-
-      HStack(spacing: 10) {
-        Button("Try Again") {
-          Task { await model.retryStartup() }
-        }
-        .buttonStyle(MacActionButtonStyle(.primary))
-        .keyboardShortcut(.defaultAction)
-
-        Button("Show Data in Finder") {
-          model.revealDataDirectory()
-        }
-        .buttonStyle(MacActionButtonStyle(.secondary))
-
-        Button("Copy Diagnostics") {
-          copyDiagnostics(failure.diagnosticText)
-        }
-        .buttonStyle(MacActionButtonStyle(.secondary))
-
-        Button("Start Fresh, Keep Backup") {
-          confirmStartFresh = true
-        }
-        .buttonStyle(MacActionButtonStyle(.destructive))
-      }
-
-      if model.lastRecoveryBackupURL != nil {
-        Button("Show Recovery Backup", systemImage: "clock.arrow.circlepath") {
-          model.revealRecoveryBackup()
-        }
-        .buttonStyle(MacActionButtonStyle(.secondary))
-      }
-
-      DisclosureGroup("Technical Details") {
-        Text(failure.diagnosticText)
-          .font(.caption.monospaced())
-          .foregroundStyle(.secondary)
-          .textSelection(.enabled)
-          .frame(maxWidth: 600, alignment: .leading)
-          .padding(.top, 8)
-      }
-      .frame(maxWidth: 600)
+      .frame(maxWidth: .infinity)
+      .padding(.top, 56)
+      .padding(.horizontal, 40)
+      .padding(.bottom, 40)
     }
-    .padding(40)
     .confirmationDialog(
       "Start with a fresh workspace?",
       isPresented: $confirmStartFresh,
@@ -129,5 +125,12 @@ struct MacStartupView: View {
   private func copyDiagnostics(_ value: String) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(value, forType: .string)
+    copiedDiagnostics = true
+    copyFeedbackTask?.cancel()
+    copyFeedbackTask = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(2))
+      guard !Task.isCancelled else { return }
+      copiedDiagnostics = false
+    }
   }
 }

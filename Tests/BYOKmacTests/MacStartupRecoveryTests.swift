@@ -191,6 +191,119 @@ struct MacStartupRecoveryTests {
     #expect(app.lastRecoveryBackupURL != nil)
     #expect(app.dataManagement != nil)
   }
+
+  @Test("Startup failure diagnostics include the configured storage environment path")
+  func startupFailureDiagnosticsUseEnvironmentPath() async {
+    let context = makeMacStartupTestContext()
+    defer { context.cleanup() }
+
+    let app = MacAppModel(
+      storageEnvironment: context.storage,
+      coreServicesFactory: { _ in throw MacStartupRecoveryTestError.injected }
+    )
+
+    await app.start()
+    guard case .failed(let failure) = app.startupState else {
+      Issue.record("Expected startup to fail")
+      return
+    }
+    #expect(failure.dataDirectoryPath == context.storage.rootDirectory.path)
+    #expect(failure.diagnosticText.contains(context.storage.rootDirectory.path))
+  }
+
+  @Test("Full-text search enablement persists across startup and data-mutation reload")
+  func fullTextSearchEnablementSyncsAcrossLifecycle() async throws {
+    let context = makeMacStartupTestContext()
+    defer { context.cleanup() }
+
+    let app = MacAppModel(
+      storageEnvironment: context.storage,
+      coreServicesFactory: { try makeIsolatedServices(environment: $0) }
+    )
+
+    await app.setFullTextSearchEnabled(true)
+    await app.start()
+
+    let services = try #require(app.coreServices)
+    #expect(await services.conversationStore.searchIndexStatus().isEnabled)
+    let initialGeneration = app.runtimeGeneration
+    #expect(initialGeneration > 0)
+
+    try await app.reloadAfterDataMutation()
+    #expect(app.runtimeGeneration == initialGeneration + 1)
+    #expect(await services.conversationStore.searchIndexStatus().isEnabled)
+
+    await app.setFullTextSearchEnabled(false)
+    #expect(!(await services.conversationStore.searchIndexStatus().isEnabled))
+  }
+
+  @Test("Flushing pending state persists debounced conversation drafts immediately")
+  func flushPendingStatePersistsDebouncedDrafts() async throws {
+    let context = makeMacStartupTestContext()
+    defer { context.cleanup() }
+
+    let app = MacAppModel(
+      storageEnvironment: context.storage,
+      coreServicesFactory: { try makeIsolatedServices(environment: $0) }
+    )
+    await app.start()
+
+    let services = try #require(app.coreServices)
+    let chats = try #require(app.chats)
+    let conversation = try await services.conversationStore.createConversation(
+      providerID: BuiltInProviders.openAIID,
+      accountID: ProviderAccountID(rawValue: "acct-draft"),
+      modelID: ModelID(rawValue: "gpt-4o")
+    )
+
+    chats.setDraft("Unsaved draft before quit", conversationID: conversation.id)
+    #expect(app.hasPendingWorkToFlush)
+
+    await app.flushPendingState()
+    #expect(!app.hasPendingWorkToFlush)
+
+    let persisted = try await services.conversationStore.conversation(id: conversation.id)
+    #expect(persisted.draftText == "Unsaved draft before quit")
+  }
+
+  @Test("Idle orphan sweep reclaims unreferenced blobs and derived thumbnails, skipping when busy")
+  func idleOrphanSweepRespectsBusyStateAndSweepsDerivatives() async throws {
+    let context = makeMacStartupTestContext()
+    defer { context.cleanup() }
+
+    let app = MacAppModel(
+      storageEnvironment: context.storage,
+      coreServicesFactory: { try makeIsolatedServices(environment: $0) }
+    )
+    await app.start()
+
+    let services = try #require(app.coreServices)
+    let workspace = try #require(app.workspace)
+
+    try await services.fileBlobStore.writeIfAbsent(
+      "orphan-blob",
+      data: Data("orphan".utf8),
+      metadata: nil
+    )
+    let derivedDir = context.storage.layout.derivedThumbnailsDirectory
+    try FileManager.default.createDirectory(at: derivedDir, withIntermediateDirectories: true)
+    let orphanThumb = derivedDir.appendingPathComponent("orphan-blob-256", isDirectory: false)
+    let standaloneOrphanThumb = derivedDir.appendingPathComponent("stale-thumb-only-256", isDirectory: false)
+    try Data("thumb".utf8).write(to: orphanThumb)
+    try Data("stale".utf8).write(to: standaloneOrphanThumb)
+
+    workspace.isBusy = true
+    await app.sweepOrphanFilesIfIdle()
+    #expect(try await services.fileBlobStore.storedIDs().contains("orphan-blob"))
+    #expect(FileManager.default.fileExists(atPath: orphanThumb.path))
+    #expect(FileManager.default.fileExists(atPath: standaloneOrphanThumb.path))
+
+    workspace.isBusy = false
+    await app.sweepOrphanFilesIfIdle()
+    #expect(!(try await services.fileBlobStore.storedIDs().contains("orphan-blob")))
+    #expect(!FileManager.default.fileExists(atPath: orphanThumb.path))
+    #expect(!FileManager.default.fileExists(atPath: standaloneOrphanThumb.path))
+  }
 }
 
 private enum MacStartupRecoveryTestError: Error {

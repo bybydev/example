@@ -89,6 +89,10 @@ targets:
     info:
       path: BYOKmac/Resources/Info.plist
       properties:
+        CFBundleDisplayName: BYOK Chat
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.productivity
         ITSAppUsesNonExemptEncryption: false
         NSLocalNetworkUsageDescription: BYOK Chat uses your local network to connect to local AI servers such as Ollama or LM Studio on your network.
         NSAppTransportSecurity:
@@ -102,7 +106,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: NO
-        MARKETING_VERSION: 0.1
+        MARKETING_VERSION: 1.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 6.0
         SWIFT_STRICT_CONCURRENCY: complete

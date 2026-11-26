@@ -226,6 +226,7 @@ struct MacShellView: View {
     .onDisappear {
       upsellFallbackTask?.cancel()
       upsellFallbackTask = nil
+      model.canExportActiveConversation = false
     }
     .task {
       await restorePendingAttachmentsIfNeeded()
@@ -235,7 +236,8 @@ struct MacShellView: View {
         try await chats.prepareConversation(id)
       }
     }
-    .onChange(of: persistedMessageCount(for: navigation.displayedID, chats: chats)) { _, _ in
+    .onChange(of: persistedMessageCount(for: navigation.displayedID, chats: chats), initial: true) { _, count in
+      model.canExportActiveConversation = navigation.displayedID != nil && count > 0
       guard let displayedID = navigation.displayedID else { return }
       Task { @MainActor in
         await clearPersistedPendingAttachments(
@@ -396,12 +398,22 @@ struct MacShellView: View {
     }
   }
 
+  private var rootWorkspaceErrorMessage: String? {
+    guard utilitySheets.destination == nil else { return nil }
+    return model.workspace?.errorMessage
+  }
+
   private func chatErrorPresented(
     chats: MacChatSessionModel,
     mcp: MacMCPModel
   ) -> Binding<Bool> {
     Binding(
-      get: { navigation.errorMessage != nil || chats.errorMessage != nil || mcp.errorMessage != nil },
+      get: {
+        navigation.errorMessage != nil
+          || chats.errorMessage != nil
+          || mcp.errorMessage != nil
+          || rootWorkspaceErrorMessage != nil
+      },
       set: { if !$0 { clearChatErrors(chats: chats, mcp: mcp) } }
     )
   }
@@ -410,10 +422,17 @@ struct MacShellView: View {
     navigation.errorMessage = nil
     chats.errorMessage = nil
     mcp.errorMessage = nil
+    if utilitySheets.destination == nil {
+      model.workspace?.errorMessage = nil
+    }
   }
 
   private func chatErrorMessage(chats: MacChatSessionModel, mcp: MacMCPModel) -> String {
-    navigation.errorMessage ?? chats.errorMessage ?? mcp.errorMessage ?? "Unknown error"
+    navigation.errorMessage
+      ?? chats.errorMessage
+      ?? mcp.errorMessage
+      ?? rootWorkspaceErrorMessage
+      ?? "Unknown error"
   }
 
   private func startNewChat(chats: MacChatSessionModel, forceReset: Bool = false) {

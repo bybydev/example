@@ -309,6 +309,8 @@ struct MacProAccessTests {
 
     gate.openPaywall()
     #expect(gate.requestID == 1)
+    #expect(gate.claimPendingPaywallOpen())
+    #expect(!gate.claimPendingPaywallOpen())
   }
 
   @Test("Free title search filters titles case- and diacritic-insensitively without message deep links")

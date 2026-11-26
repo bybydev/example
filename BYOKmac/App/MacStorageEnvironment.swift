@@ -105,6 +105,8 @@ enum MacStorageRecovery {
       )
     }
 
+    ModelCatalogRegistry.resetToBundled()
+
     return MacStorageResetResult(backupURL: backup, cleanupWarnings: warnings)
   }
 

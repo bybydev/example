@@ -11,9 +11,50 @@ enum BYOKmacWindowID {
   #endif
 }
 
+@MainActor
+final class BYOKmacAppDelegate: NSObject, NSApplicationDelegate {
+  weak var model: MacAppModel?
+  private var hasRepliedToTermination = false
+
+  func applicationDidResignActive(_ notification: Notification) {
+    Task { @MainActor [weak self] in
+      await self?.model?.flushPendingState()
+    }
+  }
+
+  func applicationDidBecomeActive(_ notification: Notification) {
+    model?.handleApplicationDidBecomeActive()
+  }
+
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard let model, model.hasPendingWorkToFlush else { return .terminateNow }
+    hasRepliedToTermination = false
+
+    let timeoutTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .seconds(2))
+      self?.completeTermination(sender)
+    }
+
+    Task { @MainActor [weak self] in
+      await model.flushPendingState()
+      timeoutTask.cancel()
+      self?.completeTermination(sender)
+    }
+
+    return .terminateLater
+  }
+
+  private func completeTermination(_ sender: NSApplication) {
+    guard !hasRepliedToTermination else { return }
+    hasRepliedToTermination = true
+    sender.reply(toApplicationShouldTerminate: true)
+  }
+}
+
 @main
 @MainActor
 struct BYOKmacApp: App {
+  @NSApplicationDelegateAdaptor(BYOKmacAppDelegate.self) private var appDelegate
   @Environment(\.openWindow) private var openWindow
   @State private var model = MacAppModel()
   @State private var proGateCenter = MacProGateCenter.shared
@@ -44,6 +85,9 @@ struct BYOKmacApp: App {
           purchases: purchases,
           proGateCenter: proGateCenter
         )
+        .onAppear {
+          appDelegate.model = model
+        }
         .task {
           await model.start()
         }
@@ -105,12 +149,21 @@ struct BYOKmacApp: App {
     ) {
       MacBYOKOnboardingView(onboarding: onboarding)
         .macAppTheme(model.themeStore, purchaseManager: purchases)
+        .syncMacApplicationAppearance(themeStore: model.themeStore, purchaseManager: purchases)
+        .managesPurchases(purchases)
         .managesAnalytics(analytics)
+        .onAppear {
+          appDelegate.model = model
+        }
+        .task {
+          await model.start()
+        }
     }
 
     Window("BYOK Pro", id: MacWindowID.proPaywall) {
       MacProPaywallWindow(purchaseManager: purchases)
         .macAppTheme(model.themeStore, purchaseManager: purchases)
+        .syncMacApplicationAppearance(themeStore: model.themeStore, purchaseManager: purchases)
         .environment(purchases)
         .managesAnalytics(analytics)
     }
@@ -157,12 +210,19 @@ struct BYOKmacApp: App {
         .environment(purchases)
         .environment(proGateCenter)
         .environment(settingsRouter)
+        .managesPurchases(purchases)
         .managesAnalytics(analytics)
         .managesMacProAccess(
           model: model,
           purchases: purchases,
           proGateCenter: proGateCenter
         )
+        .onAppear {
+          appDelegate.model = model
+        }
+        .task {
+          await model.start()
+        }
     }
   }
 }
@@ -178,25 +238,19 @@ private struct MacProSceneLifecycleModifier: ViewModifier {
   func body(content: Content) -> some View {
     content
       .onChange(of: proGateCenter.requestID) { _, _ in
+        guard proGateCenter.claimPendingPaywallOpen() else { return }
         openWindow(id: MacWindowID.proPaywall)
       }
       .onChange(of: purchases.entitlementState) { _, _ in
-        reconcileEntitlement()
+        model.reconcileProEntitlement(MacProAccess.entitlementAccess)
       }
-      .task {
-        reconcileEntitlement()
+      .task(id: purchases.hasPro) {
+        await model.setFullTextSearchEnabled(purchases.hasPro)
       }
-  }
-
-  private func reconcileEntitlement() {
-    let access = MacProAccess.entitlementAccess
-    if access == .pro {
-      // Once the user legitimately unlocks Pro, restored resources become
-      // normal existing resources and remain usable under downgrade semantics.
-      MacPurchaseStore.restrictions.clear()
-    }
-
-    model.chats?.refreshNewChatTargetAfterProviderChanges()
+      .task(id: model.runtimeGeneration) {
+        model.reconcileProEntitlement(MacProAccess.entitlementAccess)
+        await model.setFullTextSearchEnabled(purchases.hasPro)
+      }
   }
 }
 
