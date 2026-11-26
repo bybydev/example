@@ -165,6 +165,27 @@ struct MacMarkdownMessageContent: View {
         textSize: textSize,
         isComplete: !(isStreaming && isTrailingBlock)
       )
+
+    case .callout(let kind, let body):
+      MacCalloutAnswerView(
+        kind: kind,
+        bodyText: body,
+        textSize: textSize,
+        muted: muted,
+        findQuery: findQuery,
+        activeFindOccurrence: activeFindOccurrence
+      )
+
+    case .details(let summary, let body, let isComplete):
+      MacDetailsAnswerView(
+        summary: summary,
+        bodyText: body,
+        isComplete: isComplete || !isStreaming,
+        textSize: textSize,
+        muted: muted,
+        findQuery: findQuery,
+        activeFindOccurrence: activeFindOccurrence
+      )
     }
   }
 
@@ -554,6 +575,7 @@ struct MacMarkdownTableView: View {
   @State private var measuredWidth: CGFloat = 0
   @State private var isExpanded = false
   @State private var showFullScreen = false
+  @State private var showCopyPopover = false
   @State private var isCopied = false
   @State private var copyFeedbackRevision = 0
 
@@ -708,25 +730,33 @@ struct MacMarkdownTableView: View {
       .help("Open full screen")
       .disabled(!isComplete)
 
-      Menu {
-        Button("Copy as Markdown", systemImage: "doc.plaintext") {
-          copyTable(table.markdownText)
-        }
-        Button("Copy for Spreadsheets", systemImage: "tablecells") {
-          copyTable(table.tsvText)
-        }
+      Button {
+        showCopyPopover.toggle()
       } label: {
         Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(isCopied ? palette.accentColor : palette.secondaryForeground)
-          .frame(
-            width: MacDesignTokens.Control.iconButtonSize,
-            height: MacDesignTokens.Control.iconButtonSize
-          )
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
+      .buttonStyle(MacIconButtonStyle())
+      .popover(isPresented: $showCopyPopover, arrowEdge: .bottom) {
+        MacThemedActionPopoverContainer(minWidth: 196) {
+          MacThemedPopoverActionRow(
+            title: "Copy as Markdown",
+            systemImage: "doc.plaintext"
+          ) {
+            showCopyPopover = false
+            copyTable(table.markdownText)
+          }
+          MacThemedPopoverActionRow(
+            title: "Copy for Spreadsheets",
+            systemImage: "tablecells"
+          ) {
+            showCopyPopover = false
+            copyTable(table.tsvText)
+          }
+        }
+        .presentationBackground(MacDesignTokens.Colors.surface)
+      }
       .help("Copy table")
       .accessibilityLabel("Copy Table")
     }
@@ -1011,6 +1041,7 @@ struct MacFullScreenTableView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
   @State private var sheetWidth: CGFloat = 760
+  @State private var showCopyPopover = false
   @State private var isCopied = false
   @State private var copyFeedbackRevision = 0
 
@@ -1045,25 +1076,33 @@ struct MacFullScreenTableView: View {
         .buttonStyle(MacIconButtonStyle())
         .help("Share table")
 
-        Menu {
-          Button("Copy as Markdown", systemImage: "doc.plaintext") {
-            copyTable(table.markdownText)
-          }
-          Button("Copy for Spreadsheets", systemImage: "tablecells") {
-            copyTable(table.tsvText)
-          }
+        Button {
+          showCopyPopover.toggle()
         } label: {
           Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
             .font(.system(size: 12.5, weight: .semibold))
             .foregroundStyle(isCopied ? palette.accentColor : palette.secondaryForeground)
-            .frame(
-              width: MacDesignTokens.Control.iconButtonSize,
-              height: MacDesignTokens.Control.iconButtonSize
-            )
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .buttonStyle(MacIconButtonStyle())
+        .popover(isPresented: $showCopyPopover, arrowEdge: .bottom) {
+          MacThemedActionPopoverContainer(minWidth: 196) {
+            MacThemedPopoverActionRow(
+              title: "Copy as Markdown",
+              systemImage: "doc.plaintext"
+            ) {
+              showCopyPopover = false
+              copyTable(table.markdownText)
+            }
+            MacThemedPopoverActionRow(
+              title: "Copy for Spreadsheets",
+              systemImage: "tablecells"
+            ) {
+              showCopyPopover = false
+              copyTable(table.tsvText)
+            }
+          }
+          .presentationBackground(MacDesignTokens.Colors.surface)
+        }
         .help("Copy table")
         .accessibilityLabel("Copy Table")
 
@@ -1655,6 +1694,17 @@ struct MacMarkdownResponseImageView: View {
         .buttonStyle(.plain)
         .help("Click to view full screen")
         .accessibilityLabel("Image")
+        .contextMenu {
+          Button("Open Preview", systemImage: "arrow.up.left.and.arrow.down.right") {
+            openFullScreen(fallbackImage: resolvedImage)
+          }
+          Button("Copy Image", systemImage: "doc.on.doc") {
+            copyInlineImage(fallbackImage: resolvedImage)
+          }
+          Button("Save Image", systemImage: "square.and.arrow.down") {
+            saveInlineImage(fallbackImage: resolvedImage)
+          }
+        }
       } else if isFailed || url == nil {
         HStack(spacing: 8) {
           Image(systemName: "photo.badge.exclamationmark")
@@ -1807,6 +1857,48 @@ struct MacMarkdownResponseImageView: View {
         image: fullImage,
         rawData: rawData
       )
+    }
+  }
+
+  private func copyInlineImage(fallbackImage: NSImage) {
+    Task { @MainActor in
+      let loaded: (data: Data, filename: String, mimeType: String)? = if let url {
+        await MacMarkdownImageSupport.loadBytes(for: url)
+      } else {
+        nil
+      }
+      let pasteboard = NSPasteboard.general
+      pasteboard.clearContents()
+      if let rawData = loaded?.data, let fullImage = NSImage(data: rawData) {
+        pasteboard.writeObjects([fullImage])
+      } else {
+        pasteboard.writeObjects([fallbackImage])
+      }
+    }
+  }
+
+  private func saveInlineImage(fallbackImage: NSImage) {
+    Task { @MainActor in
+      let loaded: (data: Data, filename: String, mimeType: String)? = if let url {
+        await MacMarkdownImageSupport.loadBytes(for: url)
+      } else {
+        nil
+      }
+      let fallbackMeta = url.map(MacMarkdownImageSupport.metadata(for:))
+      let suggestedName = loaded?.filename ?? fallbackMeta?.filename ?? "image.png"
+      let panel = NSSavePanel()
+      panel.canCreateDirectories = true
+      panel.nameFieldStringValue = suggestedName
+      panel.allowedContentTypes = [.png, .jpeg, .webP, .gif]
+      guard panel.runModal() == .OK, let destination = panel.url else { return }
+      if let rawData = loaded?.data {
+        try? rawData.write(to: destination, options: .atomic)
+      } else if let tiff = fallbackImage.tiffRepresentation,
+        let bitmap = NSBitmapImageRep(data: tiff),
+        let png = bitmap.representation(using: .png, properties: [:])
+      {
+        try? png.write(to: destination, options: .atomic)
+      }
     }
   }
 }
@@ -2170,8 +2262,14 @@ struct MacHighlightedCodeBlock: View {
   @AppStorage("byokchat.codeBlock.wordWrap") private var wordWrap = false
   @AppStorage("byokchat.codeBlock.showLineNumbers") private var showLineNumbers = true
   @State private var isExpanded = false
+  @State private var showPreview = false
   @State private var showFullScreen = false
   @State private var copied = false
+
+  private var artifactKind: MacArtifactPreviewSupport.Kind? {
+    guard !isStreaming else { return nil }
+    return MacArtifactPreviewSupport.kind(for: language, content: content)
+  }
 
   private var codeFontSize: CGFloat {
     max(11, textSize - 2)
@@ -2198,9 +2296,27 @@ struct MacHighlightedCodeBlock: View {
           Text("STREAMING")
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .foregroundStyle(theme.textMuted.opacity(0.75))
+        } else if showPreview, artifactKind != nil {
+          Text("SANDBOXED PREVIEW")
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(theme.accent)
         }
         Spacer(minLength: 8)
-        if preview.lineCount >= 2 {
+        if artifactKind != nil {
+          Button {
+            withAnimation(.easeOut(duration: 0.16)) {
+              showPreview.toggle()
+            }
+          } label: {
+            Image(systemName: showPreview ? "chevron.left.forwardslash.chevron.right" : "eye")
+              .font(.system(size: 11.5, weight: .semibold))
+              .foregroundStyle(showPreview ? theme.accent : theme.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .help(showPreview ? "Show code" : "Preview sandboxed artifact")
+          .accessibilityLabel(showPreview ? "Show code" : "Preview artifact")
+        }
+        if !showPreview, preview.lineCount >= 2 {
           Button {
             showLineNumbers.toggle()
           } label: {
@@ -2212,16 +2328,18 @@ struct MacHighlightedCodeBlock: View {
           .help(showLineNumbers ? "Hide line numbers" : "Show line numbers")
           .accessibilityLabel(showLineNumbers ? "Hide line numbers" : "Show line numbers")
         }
-        Button {
-          wordWrap.toggle()
-        } label: {
-          Image(systemName: "arrow.turn.down.left")
-            .font(.system(size: 11.5, weight: .semibold))
-            .foregroundStyle(wordWrap ? theme.accent : theme.textMuted)
+        if !showPreview {
+          Button {
+            wordWrap.toggle()
+          } label: {
+            Image(systemName: "arrow.turn.down.left")
+              .font(.system(size: 11.5, weight: .semibold))
+              .foregroundStyle(wordWrap ? theme.accent : theme.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .help(wordWrap ? "Disable word wrap" : "Wrap long lines")
+          .accessibilityLabel(wordWrap ? "Disable word wrap" : "Wrap long lines")
         }
-        .buttonStyle(MacIconButtonStyle())
-        .help(wordWrap ? "Disable word wrap" : "Wrap long lines")
-        .accessibilityLabel(wordWrap ? "Disable word wrap" : "Wrap long lines")
         if !isStreaming {
           Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") {
             showFullScreen = true
@@ -2249,7 +2367,15 @@ struct MacHighlightedCodeBlock: View {
         .fill(theme.separator.opacity(0.65))
         .frame(height: 0.5)
 
-      if wordWrap {
+      if showPreview, let artifactKind {
+        MacSandboxedArtifactWebView(
+          content: content,
+          kind: artifactKind,
+          isInline: true
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: artifactKind == .svg ? 240 : 320)
+      } else if wordWrap {
         codeBody(preview: preview, displayLineNumbers: displayLineNumbers, wrapped: true)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
@@ -2259,7 +2385,7 @@ struct MacHighlightedCodeBlock: View {
         }
       }
 
-      if preview.isLong && !isStreaming {
+      if !showPreview, preview.isLong && !isStreaming {
         Rectangle()
           .fill(theme.separator.opacity(0.65))
           .frame(height: 0.5)
@@ -2724,6 +2850,11 @@ private struct MacFullScreenCodeView: View {
   @Environment(\.macAppTheme) private var theme
   @AppStorage("byokchat.codeBlock.wordWrap") private var wordWrap = false
   @AppStorage("byokchat.codeBlock.showLineNumbers") private var showLineNumbers = true
+  @State private var showPreview = false
+
+  private var artifactKind: MacArtifactPreviewSupport.Kind? {
+    MacArtifactPreviewSupport.kind(for: language, content: content)
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -2731,23 +2862,42 @@ private struct MacFullScreenCodeView: View {
         Text(language?.uppercased() ?? "CODE")
           .font(.headline.monospaced())
           .foregroundStyle(theme.textPrimary)
+        if showPreview, artifactKind != nil {
+          Text("SANDBOXED PREVIEW")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(theme.accent)
+        }
         Spacer()
-        Button {
-          showLineNumbers.toggle()
-        } label: {
-          Image(systemName: "number")
-            .foregroundStyle(showLineNumbers ? theme.accent : theme.textMuted)
+        if artifactKind != nil {
+          Button {
+            withAnimation(.easeOut(duration: 0.16)) {
+              showPreview.toggle()
+            }
+          } label: {
+            Image(systemName: showPreview ? "chevron.left.forwardslash.chevron.right" : "eye")
+              .foregroundStyle(showPreview ? theme.accent : theme.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .help(showPreview ? "Show code" : "Preview sandboxed artifact")
         }
-        .buttonStyle(MacIconButtonStyle())
-        .help(showLineNumbers ? "Hide line numbers" : "Show line numbers")
-        Button {
-          wordWrap.toggle()
-        } label: {
-          Image(systemName: "arrow.turn.down.left")
-            .foregroundStyle(wordWrap ? theme.accent : theme.textMuted)
+        if !showPreview {
+          Button {
+            showLineNumbers.toggle()
+          } label: {
+            Image(systemName: "number")
+              .foregroundStyle(showLineNumbers ? theme.accent : theme.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .help(showLineNumbers ? "Hide line numbers" : "Show line numbers")
+          Button {
+            wordWrap.toggle()
+          } label: {
+            Image(systemName: "arrow.turn.down.left")
+              .foregroundStyle(wordWrap ? theme.accent : theme.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .help(wordWrap ? "Disable word wrap" : "Wrap long lines")
         }
-        .buttonStyle(MacIconButtonStyle())
-        .help(wordWrap ? "Disable word wrap" : "Wrap long lines")
         ShareLink(item: content) {
           Image(systemName: "square.and.arrow.up")
         }
@@ -2771,23 +2921,33 @@ private struct MacFullScreenCodeView: View {
         .fill(theme.separator)
         .frame(height: 0.75)
 
-      ScrollView(wordWrap ? [.vertical] : [.horizontal, .vertical]) {
-        MacHighlightedCodeText(
-          code: content,
-          language: language,
-          colorScheme: colorScheme,
-          fontSize: fontSize,
-          showLineNumbers: showLineNumbers,
-          wrapped: wordWrap,
-          accentColor: theme.accent,
-          textColor: theme.textPrimary,
-          gutterColor: theme.textMuted.opacity(0.65),
-          dividerColor: theme.separator.opacity(0.55)
+      if showPreview, let artifactKind {
+        MacSandboxedArtifactWebView(
+          content: content,
+          kind: artifactKind,
+          isInline: false
         )
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.canvas)
+      } else {
+        ScrollView(wordWrap ? [.vertical] : [.horizontal, .vertical]) {
+          MacHighlightedCodeText(
+            code: content,
+            language: language,
+            colorScheme: colorScheme,
+            fontSize: fontSize,
+            showLineNumbers: showLineNumbers,
+            wrapped: wordWrap,
+            accentColor: theme.accent,
+            textColor: theme.textPrimary,
+            gutterColor: theme.textMuted.opacity(0.65),
+            dividerColor: theme.separator.opacity(0.55)
+          )
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(18)
+        }
+        .background(theme.codeSurface)
       }
-      .background(theme.codeSurface)
     }
     .frame(
       minWidth: MacDesignTokens.Sheet.previewMinWidth,
@@ -2802,25 +2962,218 @@ private struct MacFullScreenCodeView: View {
 
 struct MacMathAnswerView: View {
   let expression: String
+  var textSize: CGFloat? = nil
+
+  @Environment(\.macAppTheme) private var theme
+  @Environment(\.macTranscriptFontSize) private var transcriptFontSize
+  @State private var isHovered = false
+  @State private var copied = false
+
+  private var resolvedFontSize: CGFloat {
+    textSize ?? transcriptFontSize
+  }
 
   var body: some View {
-    LaTeX("$$\(expression)$$")
-      .blockMode(.blockViews)
-      .renderingStyle(.redactedOriginal)
-      .renderingAnimation(.easeOut(duration: 0.18))
-      .errorMode(.original)
-      .imageRenderingMode(.template)
-      .imageAccessibility(.sre)
-      .font(.body)
-      .foregroundStyle(.primary)
-      .frame(maxWidth: .infinity, alignment: .center)
-      .padding(.horizontal, 12)
-      .padding(.vertical, 14)
-      .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
-      .overlay {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+    ZStack(alignment: .topTrailing) {
+      MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+        LaTeX("$$\(expression)$$")
+          .blockMode(.blockViews)
+          .renderingStyle(.redactedOriginal)
+          .renderingAnimation(.easeOut(duration: 0.18))
+          .errorMode(.original)
+          .imageRenderingMode(.template)
+          .imageAccessibility(.sre)
+          .font(.system(size: resolvedFontSize))
+          .foregroundStyle(theme.textPrimary)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 14)
+          .frame(maxWidth: .infinity, alignment: .center)
       }
+
+      if isHovered || copied {
+        Button {
+          copyExpression()
+        } label: {
+          Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(copied ? theme.accent : theme.textMuted)
+            .frame(width: 24, height: 24)
+            .background(theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(theme.separator.opacity(0.75), lineWidth: 0.6)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(7)
+        .help(copied ? "Copied LaTeX" : "Copy LaTeX")
+        .accessibilityLabel(copied ? "LaTeX copied" : "Copy LaTeX")
+      }
+    }
+    .background(theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(theme.separator, lineWidth: 0.85)
+    }
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+  }
+
+  private func copyExpression() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(expression, forType: .string)
+    copied = true
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(1.2))
+      copied = false
+    }
+  }
+}
+
+// MARK: - GFM Callouts & HTML Details
+
+struct MacCalloutAnswerView: View {
+  let kind: MacCalloutKind
+  let bodyText: String
+  var textSize: CGFloat = 15
+  var muted: Bool = false
+  var findQuery: String = ""
+  var activeFindOccurrence: Int? = nil
+
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macAppTheme) private var theme
+
+  private var tintColor: Color {
+    switch kind {
+    case .note: theme.accent
+    case .tip: Color.green
+    case .important: Color.purple
+    case .warning: Color.orange
+    case .caution: theme.destructive
+    }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 6) {
+        Image(systemName: kind.systemImage)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(tintColor)
+        Text(kind.title)
+          .font(.system(size: max(12, textSize - 2), weight: .semibold))
+          .foregroundStyle(tintColor)
+      }
+
+      MacMarkdownMessageContent(
+        text: bodyText,
+        textSize: textSize,
+        muted: muted,
+        findQuery: findQuery,
+        activeFindOccurrence: activeFindOccurrence
+      )
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.leading, 14)
+    .padding(.trailing, 12)
+    .padding(.vertical, 10)
+    .background(
+      tintColor.opacity(colorScheme == .dark ? 0.11 : 0.065),
+      in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+    )
+    .overlay(alignment: .leading) {
+      RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+        .fill(tintColor.opacity(0.82))
+        .frame(width: 3)
+        .padding(.vertical, 6)
+        .padding(.leading, 3)
+    }
+    .overlay {
+      RoundedRectangle(cornerRadius: 9, style: .continuous)
+        .stroke(tintColor.opacity(0.22), lineWidth: 0.75)
+    }
+  }
+}
+
+struct MacDetailsAnswerView: View {
+  let summary: String
+  let bodyText: String
+  var isComplete: Bool = true
+  var textSize: CGFloat = 15
+  var muted: Bool = false
+  var findQuery: String = ""
+  var activeFindOccurrence: Int? = nil
+
+  @Environment(\.macAppTheme) private var theme
+  @State private var isExpanded = false
+  @State private var isHeaderHovered = false
+
+  private var autoExpandedForFind: Bool {
+    !isExpanded
+      && !findQuery.isEmpty
+      && MacTranscriptFindSupport.containsMatch(in: bodyText, query: findQuery)
+  }
+
+  var body: some View {
+    let expanded = isExpanded || autoExpandedForFind
+
+    VStack(alignment: .leading, spacing: 0) {
+      Button {
+        withAnimation(.easeOut(duration: 0.16)) {
+          isExpanded.toggle()
+        }
+      } label: {
+        HStack(spacing: 8) {
+          Image(systemName: "chevron.right")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(theme.textMuted)
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+
+          Text(summary)
+            .font(.system(size: max(12.5, textSize - 1.5), weight: .semibold))
+            .foregroundStyle(theme.textPrimary)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+
+          Spacer(minLength: 8)
+
+          if !isComplete {
+            Text("STREAMING")
+              .font(.system(size: 9, weight: .semibold, design: .monospaced))
+              .foregroundStyle(theme.textMuted.opacity(0.75))
+          }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isHeaderHovered ? theme.selection.opacity(0.42) : Color.clear)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .onHover { isHeaderHovered = $0 }
+      .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHeaderHovered)
+
+      if expanded, !bodyText.isEmpty {
+        Rectangle()
+          .fill(theme.separator.opacity(0.65))
+          .frame(height: 0.5)
+
+        MacMarkdownMessageContent(
+          text: bodyText,
+          textSize: textSize,
+          muted: muted,
+          findQuery: findQuery,
+          activeFindOccurrence: activeFindOccurrence
+        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+      }
+    }
+    .background(theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(theme.separator, lineWidth: 0.85)
+    }
   }
 }
 
@@ -3672,6 +4025,7 @@ private struct MacFullScreenMermaidView: View {
   @State private var statusBanner: String?
   @State private var statusBannerRevision = 0
   @State private var saveErrorMessage: String?
+  @State private var showSharePopover = false
 
   private var title: String {
     if let title = analysis.title, !title.isEmpty {
@@ -3855,34 +4209,47 @@ private struct MacFullScreenMermaidView: View {
         .help("Save image…")
       }
 
-      Menu {
-        if let renderedImage {
-          ShareLink(
-            item: Image(nsImage: renderedImage),
-            preview: SharePreview(title, image: Image(nsImage: renderedImage))
-          ) {
-            Label("Share Image", systemImage: "photo")
-          }
-        }
-        ShareLink(item: source) {
-          Label("Share Mermaid Source", systemImage: "doc.plaintext")
-        }
-        Button("Copy Mermaid Source", systemImage: "doc.on.doc") {
-          NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(source, forType: .string)
-          showStatusBanner("Copied Mermaid Source")
-        }
+      Button {
+        showSharePopover.toggle()
       } label: {
         Image(systemName: "square.and.arrow.up")
           .font(.system(size: 12.5, weight: .semibold))
-          .frame(
-            width: MacDesignTokens.Control.iconButtonSize,
-            height: MacDesignTokens.Control.iconButtonSize
-          )
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
+      .buttonStyle(MacIconButtonStyle())
+      .popover(isPresented: $showSharePopover, arrowEdge: .bottom) {
+        MacThemedActionPopoverContainer(minWidth: 200) {
+          if let renderedImage {
+            ShareLink(
+              item: Image(nsImage: renderedImage),
+              preview: SharePreview(title, image: Image(nsImage: renderedImage))
+            ) {
+              MacThemedPopoverActionRowLabel(
+                title: "Share Image",
+                systemImage: "photo"
+              )
+            }
+            .buttonStyle(.plain)
+          }
+          ShareLink(item: source) {
+            MacThemedPopoverActionRowLabel(
+              title: "Share Mermaid Source",
+              systemImage: "doc.plaintext"
+            )
+          }
+          .buttonStyle(.plain)
+          MacThemedPopoverDivider()
+          MacThemedPopoverActionRow(
+            title: "Copy Mermaid Source",
+            systemImage: "doc.on.doc"
+          ) {
+            showSharePopover = false
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(source, forType: .string)
+            showStatusBanner("Copied Mermaid Source")
+          }
+        }
+        .presentationBackground(MacDesignTokens.Colors.surface)
+      }
       .help("Share or copy diagram")
       .accessibilityLabel("Share or Copy Diagram")
 

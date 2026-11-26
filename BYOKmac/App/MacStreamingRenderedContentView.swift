@@ -54,6 +54,18 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
 
     case .table(let table):
       MacMarkdownTableView(table: table, textSize: textSize, isComplete: true)
+
+    case .callout(let kind, let body):
+      MacCalloutAnswerView(kind: kind, bodyText: body, textSize: textSize, muted: muted)
+
+    case .details(let summary, let body, let isComplete):
+      MacDetailsAnswerView(
+        summary: summary,
+        bodyText: body,
+        isComplete: isComplete,
+        textSize: textSize,
+        muted: muted
+      )
     }
   }
 }
@@ -109,6 +121,18 @@ private struct MacStreamingTailBlockView: View {
 
     case .table(let table):
       MacStreamingTableSourceView(rawMarkdown: table.rawMarkdown)
+
+    case .callout(let kind, let body):
+      MacCalloutAnswerView(kind: kind, bodyText: body, textSize: textSize, muted: muted)
+
+    case .details(let summary, let body, let isComplete):
+      MacDetailsAnswerView(
+        summary: summary,
+        bodyText: body,
+        isComplete: isComplete,
+        textSize: textSize,
+        muted: muted
+      )
     }
   }
 }

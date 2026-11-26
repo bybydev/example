@@ -304,11 +304,41 @@ struct MacAnswerSource: Identifiable, Hashable, Sendable {
   }
 }
 
+enum MacCalloutKind: String, Equatable, Hashable, Sendable {
+  case note
+  case tip
+  case important
+  case warning
+  case caution
+
+  var title: String {
+    switch self {
+    case .note: "Note"
+    case .tip: "Tip"
+    case .important: "Important"
+    case .warning: "Warning"
+    case .caution: "Caution"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .note: "info.circle.fill"
+    case .tip: "lightbulb.fill"
+    case .important: "exclamationmark.bubble.fill"
+    case .warning: "exclamationmark.triangle.fill"
+    case .caution: "flame.fill"
+    }
+  }
+}
+
 enum MacAnswerContentBlock: Equatable, Sendable {
   case markdown(String)
   case code(language: String?, content: String, isComplete: Bool)
   case math(String, isComplete: Bool)
   case table(MacParsedMarkdownTable)
+  case callout(kind: MacCalloutKind, body: String)
+  case details(summary: String, body: String, isComplete: Bool)
 }
 
 enum MacAnswerContentParser {
@@ -333,6 +363,7 @@ enum MacAnswerContentParser {
     case markdown
     case fence(startUTF8: Int, opening: FenceOpening)
     case math(startUTF8: Int, terminator: String)
+    case details(startUTF8: Int)
   }
 
   private enum MarkdownContinuationKind: Equatable {
@@ -452,6 +483,26 @@ enum MacAnswerContentParser {
         continue
       }
 
+      if let parsedCallout = parseCallout(in: lines, startingAt: index) {
+        flushMarkdown()
+        blocks.append(.callout(kind: parsedCallout.kind, body: parsedCallout.body))
+        index = parsedCallout.nextIndex
+        continue
+      }
+
+      if let parsedDetails = parseDetails(in: lines, startingAt: index) {
+        flushMarkdown()
+        blocks.append(
+          .details(
+            summary: parsedDetails.summary,
+            body: parsedDetails.body,
+            isComplete: parsedDetails.isComplete
+          )
+        )
+        index = parsedDetails.nextIndex
+        continue
+      }
+
       markdownLines.append(line)
       index += 1
     }
@@ -476,6 +527,10 @@ enum MacAnswerContentParser {
         markdown = text
       case .table(let table):
         markdown = table.rawMarkdown
+      case .callout(_, let body):
+        markdown = body
+      case .details(_, let body, _):
+        markdown = body
       case .code, .math:
         continue
       }
@@ -535,6 +590,15 @@ enum MacAnswerContentParser {
         }
         continue
 
+      case .details:
+        if isDetailsClosing(trimmed) {
+          stableEndUTF8 = line.endUTF8
+          mode = .markdown
+          markdownKind = nil
+          blankSeenInContinuation = false
+        }
+        continue
+
       case .markdown:
         break
       }
@@ -555,6 +619,20 @@ enum MacAnswerContentParser {
         )
         markdownKind = nil
         blankSeenInContinuation = false
+        continue
+      }
+
+      if isDetailsOpening(trimmed) {
+        if !isDetailsClosing(trimmed) {
+          stableEndUTF8 = max(stableEndUTF8, line.startUTF8)
+          mode = .details(startUTF8: line.startUTF8)
+          markdownKind = nil
+          blankSeenInContinuation = false
+        } else {
+          stableEndUTF8 = line.endUTF8
+          markdownKind = nil
+          blankSeenInContinuation = false
+        }
         continue
       }
 
@@ -1197,6 +1275,113 @@ enum MacAnswerContentParser {
       return .list
     }
     return .ordinary
+  }
+
+  private struct ParsedCalloutSlice {
+    let kind: MacCalloutKind
+    let body: String
+    let nextIndex: Int
+  }
+
+  private struct ParsedDetailsSlice {
+    let summary: String
+    let body: String
+    let isComplete: Bool
+    let nextIndex: Int
+  }
+
+  private static func calloutKind(from trimmedLine: String) -> MacCalloutKind? {
+    guard trimmedLine.hasPrefix(">") else { return nil }
+    let afterArrow = trimmedLine.dropFirst().trimmingCharacters(in: .whitespaces)
+    guard afterArrow.hasPrefix("[!"), afterArrow.hasSuffix("]") else { return nil }
+    let token = afterArrow.dropFirst(2).dropLast().lowercased()
+    return MacCalloutKind(rawValue: token)
+  }
+
+  private static func parseCallout(in lines: [String], startingAt startIndex: Int) -> ParsedCalloutSlice? {
+    let firstTrimmed = lines[startIndex].trimmingCharacters(in: .whitespaces)
+    guard let kind = calloutKind(from: firstTrimmed) else { return nil }
+
+    var bodyLines: [String] = []
+    var cursor = startIndex + 1
+    while cursor < lines.count {
+      let candidate = lines[cursor].trimmingCharacters(in: .whitespaces)
+      guard candidate.hasPrefix(">") else { break }
+      let stripped = candidate.dropFirst()
+      bodyLines.append(stripped.hasPrefix(" ") ? String(stripped.dropFirst()) : String(stripped))
+      cursor += 1
+    }
+
+    let body = trimBlankLines(bodyLines.joined(separator: "\n"))
+    guard !body.isEmpty else { return nil }
+    return ParsedCalloutSlice(kind: kind, body: body, nextIndex: cursor)
+  }
+
+  private static func isDetailsOpening(_ trimmedLine: String) -> Bool {
+    let lowered = trimmedLine.lowercased()
+    guard lowered.hasPrefix("<details") else { return false }
+    let afterTag = lowered.dropFirst("<details".count)
+    return afterTag.first == ">" || afterTag.first?.isWhitespace == true
+  }
+
+  private static func isDetailsClosing(_ trimmedLine: String) -> Bool {
+    trimmedLine.lowercased().contains("</details>")
+  }
+
+  private static func parseDetails(in lines: [String], startingAt startIndex: Int) -> ParsedDetailsSlice? {
+    let firstTrimmed = lines[startIndex].trimmingCharacters(in: .whitespaces)
+    guard isDetailsOpening(firstTrimmed) else { return nil }
+
+    var collected: [String] = []
+    var cursor = startIndex
+    var isComplete = false
+
+    // Handle single-line `<details><summary>...</summary>...</details>` as well as multi-line.
+    while cursor < lines.count {
+      let line = lines[cursor]
+      collected.append(line)
+      if isDetailsClosing(line.trimmingCharacters(in: .whitespaces)) {
+        isComplete = true
+        cursor += 1
+        break
+      }
+      cursor += 1
+    }
+
+    var raw = collected.joined(separator: "\n")
+    // Strip opening `<details ...>`
+    if let openEnd = raw.range(of: ">") {
+      raw = String(raw[openEnd.upperBound...])
+    }
+    // Strip closing `</details>`
+    if let closeRange = raw.range(of: "</details>", options: [.caseInsensitive, .backwards]) {
+      raw = String(raw[..<closeRange.lowerBound])
+    }
+
+    var summary = "Details"
+    if let summaryStart = raw.range(of: "<summary", options: .caseInsensitive),
+      let summaryOpenEnd = raw.range(of: ">", range: summaryStart.upperBound..<raw.endIndex),
+      let summaryClose = raw.range(
+        of: "</summary>",
+        options: .caseInsensitive,
+        range: summaryOpenEnd.upperBound..<raw.endIndex
+      )
+    {
+      let extracted = plainTableCellText(String(raw[summaryOpenEnd.upperBound..<summaryClose.lowerBound]))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if !extracted.isEmpty {
+        summary = extracted
+      }
+      raw.removeSubrange(summaryStart.lowerBound..<summaryClose.upperBound)
+    }
+
+    let body = trimBlankLines(raw)
+    return ParsedDetailsSlice(
+      summary: summary,
+      body: body,
+      isComplete: isComplete,
+      nextIndex: cursor
+    )
   }
 
   private static func trimBlankLines(_ value: String) -> String {

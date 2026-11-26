@@ -260,6 +260,12 @@ struct MacShellView: View {
       sidebarVisible = true
       pendingSearchFocus = true
     }
+    .onChange(of: model.previousChatRequestID) { _, _ in
+      stepSelectedConversation(delta: -1, chats: chats)
+    }
+    .onChange(of: model.nextChatRequestID) { _, _ in
+      stepSelectedConversation(delta: 1, chats: chats)
+    }
     .onChange(of: model.sidebarToggleRequestID) { _, _ in
       sidebarVisible.toggle()
     }
@@ -437,6 +443,29 @@ struct MacShellView: View {
       ?? mcp.errorMessage
       ?? rootWorkspaceErrorMessage
       ?? "Unknown error"
+  }
+
+  private func stepSelectedConversation(delta: Int, chats: MacChatSessionModel) {
+    let summaries = chats.conversationSummaries
+    guard !summaries.isEmpty else { return }
+    let pinnedRaw = UserDefaults.standard.string(forKey: MacSidebarPinStore.storageKey) ?? ""
+    let pinnedIDs = MacSidebarPinStore.parse(pinnedRaw)
+    let orderedIDs = summaries
+      .filter { pinnedIDs.contains($0.id.rawValue) }
+      .map(\.id)
+      + summaries
+      .filter { !pinnedIDs.contains($0.id.rawValue) }
+      .map(\.id)
+    guard !orderedIDs.isEmpty else { return }
+
+    if let currentID = navigation.requestedID,
+      let currentIndex = orderedIDs.firstIndex(of: currentID)
+    {
+      let nextIndex = (currentIndex + delta + orderedIDs.count) % orderedIDs.count
+      navigation.requestedID = orderedIDs[nextIndex]
+    } else {
+      navigation.requestedID = delta >= 0 ? orderedIDs.first : orderedIDs.last
+    }
   }
 
   private func startNewChat(chats: MacChatSessionModel, forceReset: Bool = false) {

@@ -2632,8 +2632,21 @@ private struct MacMCPScrollableCodeBlock: View {
   let maxHeight: CGFloat
   @Binding var copied: Bool
 
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macAppTheme) private var theme
+
   private var needsScrolling: Bool {
     text.count > 450 || text.components(separatedBy: .newlines).count > 10
+  }
+
+  private var highlightedJSON: AttributedString {
+    MacJSONSyntaxHighlighter.highlight(
+      text,
+      isDark: colorScheme == .dark,
+      accentColor: theme.accent,
+      textColor: theme.textPrimary,
+      mutedColor: theme.textMuted
+    )
   }
 
   var body: some View {
@@ -2649,12 +2662,12 @@ private struct MacMCPScrollableCodeBlock: View {
         }
       }
       .background(
-        MacDesignTokens.Colors.canvas.opacity(0.75),
+        theme.codeSurface,
         in: RoundedRectangle(cornerRadius: 7, style: .continuous)
       )
       .overlay {
         RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.65), lineWidth: 0.5)
+          .stroke(theme.separator.opacity(0.65), lineWidth: 0.5)
       }
 
       Button {
@@ -2668,24 +2681,87 @@ private struct MacMCPScrollableCodeBlock: View {
       } label: {
         Image(systemName: copied ? "checkmark" : "doc.on.doc")
           .font(.system(size: 10.5, weight: .semibold))
-          .foregroundStyle(copied ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
+          .foregroundStyle(copied ? theme.accent : theme.textMuted)
           .frame(width: 22, height: 22)
-          .background(MacDesignTokens.Colors.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 5))
+          .background(theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: 5))
+          .overlay {
+            RoundedRectangle(cornerRadius: 5)
+              .stroke(theme.separator.opacity(0.6), lineWidth: 0.5)
+          }
       }
       .buttonStyle(.plain)
       .padding(5)
-      .help(copied ? "Copied" : "Copy")
-      .accessibilityLabel(copied ? "Copied" : "Copy")
+      .help(copied ? "Copied" : "Copy payload")
+      .accessibilityLabel(copied ? "Copied" : "Copy payload")
     }
   }
 
   private var codeText: some View {
-    Text(text)
-      .font(.system(size: 11, design: .monospaced))
+    Text(highlightedJSON)
+      .font(.system(size: 11.5, design: .monospaced))
       .textSelection(.enabled)
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(8)
       .padding(.trailing, 28)
+  }
+}
+
+enum MacJSONSyntaxHighlighter {
+  private static let tokenRegex = try? NSRegularExpression(
+    pattern: #"("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"#
+  )
+
+  static func highlight(
+    _ source: String,
+    isDark: Bool,
+    accentColor: Color,
+    textColor: Color,
+    mutedColor: Color
+  ) -> AttributedString {
+    var attributed = AttributedString(source)
+    attributed.foregroundColor = textColor
+
+    guard let regex = tokenRegex, !source.isEmpty else { return attributed }
+
+    let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return attributed }
+
+    let fullRange = NSRange(source.startIndex..<source.endIndex, in: source)
+    let stringColor = isDark ? Color(red: 0.56, green: 0.84, blue: 0.55) : Color(red: 0.12, green: 0.50, blue: 0.22)
+    let numberColor = isDark ? Color(red: 0.96, green: 0.72, blue: 0.44) : Color(red: 0.74, green: 0.36, blue: 0.05)
+    let keywordColor = isDark ? Color(red: 0.82, green: 0.62, blue: 0.98) : Color(red: 0.55, green: 0.20, blue: 0.76)
+
+    for match in regex.matches(in: source, range: fullRange) {
+      guard let swiftRange = Range(match.range, in: source),
+        let attrLower = AttributedString.Index(swiftRange.lowerBound, within: attributed),
+        let attrUpper = AttributedString.Index(swiftRange.upperBound, within: attributed)
+      else { continue }
+
+      if match.range(at: 1).location != NSNotFound {
+        if match.range(at: 2).location != NSNotFound {
+          if let keyRange = Range(match.range(at: 1), in: source),
+            let keyLower = AttributedString.Index(keyRange.lowerBound, within: attributed),
+            let keyUpper = AttributedString.Index(keyRange.upperBound, within: attributed)
+          {
+            attributed[keyLower..<keyUpper].foregroundColor = accentColor
+          }
+          if let colonRange = Range(match.range(at: 2), in: source),
+            let colonLower = AttributedString.Index(colonRange.lowerBound, within: attributed),
+            let colonUpper = AttributedString.Index(colonRange.upperBound, within: attributed)
+          {
+            attributed[colonLower..<colonUpper].foregroundColor = mutedColor
+          }
+        } else {
+          attributed[attrLower..<attrUpper].foregroundColor = stringColor
+        }
+      } else if match.range(at: 3).location != NSNotFound {
+        attributed[attrLower..<attrUpper].foregroundColor = keywordColor
+      } else {
+        attributed[attrLower..<attrUpper].foregroundColor = numberColor
+      }
+    }
+
+    return attributed
   }
 }
 

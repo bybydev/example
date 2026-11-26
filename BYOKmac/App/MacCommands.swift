@@ -78,6 +78,20 @@ struct MacCommands: Commands {
 
       Divider()
 
+      Button("Previous Chat") {
+        model.requestPreviousChat()
+      }
+      .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+      .disabled(!model.isReady)
+
+      Button("Next Chat") {
+        model.requestNextChat()
+      }
+      .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+      .disabled(!model.isReady)
+
+      Divider()
+
       Button("Export Conversation as Markdown…") {
         model.requestExportMarkdown()
       }

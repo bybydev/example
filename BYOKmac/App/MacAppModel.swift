@@ -155,6 +155,8 @@ final class MacAppModel {
   private(set) var inChatFindRequestID = 0
   private(set) var inChatFindNextRequestID = 0
   private(set) var inChatFindPreviousRequestID = 0
+  private(set) var previousChatRequestID = 0
+  private(set) var nextChatRequestID = 0
   private(set) var sidebarToggleRequestID = 0
   private(set) var exportMarkdownRequestID = 0
   private(set) var runtimeGeneration = 0
@@ -446,6 +448,16 @@ final class MacAppModel {
   func requestInChatFindPrevious() {
     guard isReady else { return }
     inChatFindPreviousRequestID &+= 1
+  }
+
+  func requestPreviousChat() {
+    guard isReady else { return }
+    previousChatRequestID &+= 1
+  }
+
+  func requestNextChat() {
+    guard isReady else { return }
+    nextChatRequestID &+= 1
   }
 
   func requestSidebarToggle() {

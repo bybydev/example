@@ -93,6 +93,16 @@ final class MacPreparedAnswer: @unchecked Sendable {
           markdown[table.rawMarkdown] = MarkdownContent(table.rawMarkdown)
         }
 
+      case .callout(_, let body):
+        if markdown[body] == nil {
+          markdown[body] = MarkdownContent(body)
+        }
+
+      case .details(_, let body, _):
+        if !body.isEmpty, markdown[body] == nil {
+          markdown[body] = MarkdownContent(body)
+        }
+
       case .code, .math:
         break
       }

@@ -3710,7 +3710,7 @@ private struct MacAssistantMessageActions: View {
     guard let blocks = preparedAnswer?.blocks else { return false }
     return blocks.contains { block in
       switch block {
-      case .code, .table, .math: true
+      case .code, .table, .math, .callout, .details: true
       case .markdown: false
       }
     }

@@ -202,4 +202,112 @@ struct MacTranscriptRendererSupportTests {
     #expect(matches[0].url.absoluteString == "HTTPS://SWIFT.ORG/docs")
     #expect(matches[1].url.absoluteString == "https://www.apple.com/macos")
   }
+
+  @Test("Parses GFM callouts and HTML details disclosures and extracts links from both")
+  func calloutAndDetailsParsing() {
+    let text = """
+    > [!WARNING]
+    > Check [Apple Docs](https://developer.apple.com) before migrating.
+    > Second line of warning.
+
+    <details>
+    <summary>Advanced Configuration</summary>
+
+    See https://swift.org/package-manager for details.
+    </details>
+    """
+
+    let blocks = MacAnswerContentParser.parse(text)
+    #expect(blocks.count == 2)
+
+    guard case .callout(let kind, let calloutBody) = blocks[0] else {
+      Issue.record("Expected callout block")
+      return
+    }
+    #expect(kind == .warning)
+    #expect(calloutBody.contains("Apple Docs"))
+    #expect(calloutBody.contains("Second line"))
+
+    guard case .details(let summary, let detailsBody, let isComplete) = blocks[1] else {
+      Issue.record("Expected details block")
+      return
+    }
+    #expect(summary == "Advanced Configuration")
+    #expect(detailsBody.contains("swift.org/package-manager"))
+    #expect(isComplete)
+
+    let sources = MacAnswerContentParser.sources(in: blocks)
+    #expect(sources.count == 2)
+    #expect(sources[0].url.absoluteString == "https://developer.apple.com")
+    #expect(sources[1].url.absoluteString == "https://swift.org/package-manager")
+
+    let streamingSplit = MacAnswerContentParser.splitStreamingSource(
+      "Intro paragraph.\n\n<details>\n<summary>Logs</summary>\nLine 1"
+    )
+    #expect(streamingSplit.stable.contains("Intro paragraph."))
+    #expect(streamingSplit.tail.contains("<details>"))
+  }
+
+  @Test("Sandboxed HTML and SVG artifact preview enforces strict CSP")
+  func sandboxedArtifactPreviewSupport() {
+    #expect(MacArtifactPreviewSupport.kind(for: "html", content: "<h1>Hi</h1>") == .html)
+    #expect(MacArtifactPreviewSupport.kind(for: "svg", content: "<svg></svg>") == .svg)
+    #expect(MacArtifactPreviewSupport.kind(for: "xml", content: "<svg viewBox='0 0 10 10'></svg>") == .svg)
+    #expect(MacArtifactPreviewSupport.kind(for: "swift", content: "let x = 1") == nil)
+
+    let fragmentDoc = MacArtifactPreviewSupport.sandboxedDocument(
+      for: "<p>Hello</p>",
+      kind: .html,
+      isDark: true
+    )
+    #expect(fragmentDoc.contains("Content-Security-Policy"))
+    #expect(fragmentDoc.contains("default-src 'none'"))
+    #expect(fragmentDoc.contains("<p>Hello</p>"))
+
+    let fullDoc = MacArtifactPreviewSupport.sandboxedDocument(
+      for: "<html><head><title>Demo</title></head><body>Hi</body></html>",
+      kind: .html,
+      isDark: false
+    )
+    #expect(fullDoc.contains("Content-Security-Policy"))
+    #expect(fullDoc.contains("<title>Demo</title>"))
+
+    let svgDoc = MacArtifactPreviewSupport.sandboxedDocument(
+      for: "<svg width=\"20\" height=\"20\"></svg>",
+      kind: .svg,
+      isDark: false
+    )
+    #expect(svgDoc.contains("Content-Security-Policy"))
+    #expect(svgDoc.contains("<svg width=\"20\" height=\"20\"></svg>"))
+  }
+
+  @Test("JSON syntax highlighter preserves text for valid JSON and plain text")
+  func jsonSyntaxHighlighterPreservesContent() {
+    let payload = """
+    {
+      "query": "swift 6",
+      "limit": 10,
+      "ok": true,
+      "error": null
+    }
+    """
+    let highlighted = MacJSONSyntaxHighlighter.highlight(
+      payload,
+      isDark: true,
+      accentColor: .accentColor,
+      textColor: .primary,
+      mutedColor: .secondary
+    )
+    #expect(String(highlighted.characters) == payload)
+
+    let plain = "plain tool output"
+    let plainResult = MacJSONSyntaxHighlighter.highlight(
+      plain,
+      isDark: false,
+      accentColor: .accentColor,
+      textColor: .primary,
+      mutedColor: .secondary
+    )
+    #expect(String(plainResult.characters) == plain)
+  }
 }

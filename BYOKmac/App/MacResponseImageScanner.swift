@@ -45,6 +45,10 @@ enum MacResponseImageScanner {
         rawMarkdown = text
       case .table(let table):
         rawMarkdown = table.rawMarkdown
+      case .callout(_, let body):
+        rawMarkdown = body
+      case .details(_, let body, _):
+        rawMarkdown = body
       case .code, .math:
         continue
       }
@@ -90,6 +94,10 @@ enum MacResponseImageScanner {
         rawMarkdown = text
       case .table(let table):
         rawMarkdown = table.rawMarkdown
+      case .callout(_, let body):
+        rawMarkdown = body
+      case .details(_, let body, _):
+        rawMarkdown = body
       case .code, .math:
         continue
       }

@@ -306,6 +306,8 @@ public actor ChatRuntime {
         let requestStartedAt = requestClock.now
         var lastPersist = requestStartedAt
         var firstTokenMilliseconds: Double?
+        var reasoningStartedAt: ContinuousClock.Instant?
+        var reasoningEndedAt: ContinuousClock.Instant?
         let requestIndex = toolRoundCount + 1
 
         let request = ProviderRequest(
@@ -355,6 +357,9 @@ public actor ChatRuntime {
             case .textDelta(let value):
               try Task.checkCancellation()
               visibleText += value
+              if !value.isEmpty, reasoningStartedAt != nil, reasoningEndedAt == nil {
+                reasoningEndedAt = requestClock.now
+              }
               continuation.yield(.textDelta(messageID: turn.assistantMessage.id, value: value))
               if firstTokenMilliseconds == nil, !value.isEmpty {
                 let milliseconds = ChatRuntimeTelemetry.milliseconds(
@@ -371,6 +376,9 @@ public actor ChatRuntime {
             case .reasoningDelta(let value):
               try Task.checkCancellation()
               reasoningText += value
+              if !value.isEmpty, reasoningStartedAt == nil {
+                reasoningStartedAt = requestClock.now
+              }
               continuation.yield(.reasoningDelta(messageID: turn.assistantMessage.id, value: value))
               if firstTokenMilliseconds == nil, !value.isEmpty {
                 let milliseconds = ChatRuntimeTelemetry.milliseconds(
@@ -396,6 +404,17 @@ public actor ChatRuntime {
               var completedResponse = value
               if completedResponse.text.isEmpty { completedResponse.text = visibleText }
               if completedResponse.reasoning.isEmpty { completedResponse.reasoning = reasoningText }
+              if let reasoningStartedAt,
+                !completedResponse.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              {
+                let end = reasoningEndedAt ?? requestClock.now
+                let duration = reasoningStartedAt.duration(to: end)
+                let seconds = Double(duration.components.seconds)
+                  + Double(duration.components.attoseconds) / 1e18
+                completedResponse.metadata["reasoningDurationSeconds"] = String(
+                  max(1, Int(seconds.rounded()))
+                )
+              }
               completedStepUsage = completedResponse.usage ?? stepUsage
               let completedAt = Date.now
               // A request straddling a rate boundary is only a partial estimate.

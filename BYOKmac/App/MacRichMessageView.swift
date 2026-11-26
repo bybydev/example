@@ -196,6 +196,7 @@ struct MacRichMessageView: View {
           text: message.reasoning,
           isStreaming: isStreaming && message.content.isEmpty,
           textSize: max(11, transcriptFontSize - 2),
+          persistedDurationSeconds: message.metadata["reasoningDurationSeconds"].flatMap(Int.init),
           streamingSnapshot: livePresentation?.reasoningSnapshot,
           onExpandedChange: { expanded in
             chats.livePresentations[storedMessage.id]?.setReasoningRenderEnabled(expanded)
@@ -554,6 +555,7 @@ private struct MacReasoningDisclosure: View {
   let text: String
   let isStreaming: Bool
   var textSize: CGFloat = 13
+  var persistedDurationSeconds: Int? = nil
   let streamingSnapshot: MacStreamingAnswerSnapshot?
   var onExpandedChange: ((Bool) -> Void)? = nil
 
@@ -572,12 +574,14 @@ private struct MacReasoningDisclosure: View {
     text: String,
     isStreaming: Bool,
     textSize: CGFloat = 13,
+    persistedDurationSeconds: Int? = nil,
     streamingSnapshot: MacStreamingAnswerSnapshot? = nil,
     onExpandedChange: ((Bool) -> Void)? = nil
   ) {
     self.text = text
     self.isStreaming = isStreaming
     self.textSize = textSize
+    self.persistedDurationSeconds = persistedDurationSeconds
     self.streamingSnapshot = streamingSnapshot
     self.onExpandedChange = onExpandedChange
     _reasoningStartedAt = State(initialValue: isStreaming ? .now : nil)
@@ -746,6 +750,9 @@ private struct MacReasoningDisclosure: View {
             to: reasoningFinishedAt
           )
           Text("Thought for \(MacReasoningDurationFormatter.format(seconds: elapsed))")
+            .monospacedDigit()
+        } else if let persistedDurationSeconds, persistedDurationSeconds > 0 {
+          Text("Thought for \(MacReasoningDurationFormatter.format(seconds: persistedDurationSeconds))")
             .monospacedDigit()
         } else {
           Text("Thought")

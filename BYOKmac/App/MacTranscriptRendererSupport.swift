@@ -622,6 +622,26 @@ enum MacSelectableMarkdownBuilder {
           result.append(renderCodeBlock(language: "math", content: expression, rawMarkdown: rawMarkdown, style: style))
         case .table(let table):
           result.append(renderTableBlock(table, style: style))
+        case .callout(let kind, let body):
+          let prefix = "> [!\(kind.rawValue.uppercased())]\n"
+          let rendered = renderMarkdownBlock("**\(kind.title)**\n\n\(body)", style: style)
+          let mutable = NSMutableAttributedString(attributedString: rendered)
+          let rawLines = body.components(separatedBy: .newlines).map { "> \($0)" }.joined(separator: "\n")
+          mutable.addAttribute(
+            markdownSourceAttributeKey,
+            value: prefix + rawLines,
+            range: NSRange(location: 0, length: mutable.length)
+          )
+          result.append(mutable)
+        case .details(let summary, let body, _):
+          let rendered = renderMarkdownBlock("**\(summary)**\n\n\(body)", style: style)
+          let mutable = NSMutableAttributedString(attributedString: rendered)
+          mutable.addAttribute(
+            markdownSourceAttributeKey,
+            value: "<details>\n<summary>\(summary)</summary>\n\n\(body)\n</details>",
+            range: NSRange(location: 0, length: mutable.length)
+          )
+          result.append(mutable)
         }
       }
     } else {
