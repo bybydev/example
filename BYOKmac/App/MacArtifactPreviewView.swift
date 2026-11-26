@@ -116,7 +116,7 @@ struct MacSandboxedArtifactWebView: NSViewRepresentable {
 
   @Environment(\.colorScheme) private var colorScheme
 
-  private struct LoadKey: Equatable {
+  fileprivate struct LoadKey: Equatable {
     let content: String
     let kind: MacArtifactPreviewSupport.Kind
     let isDark: Bool
