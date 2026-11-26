@@ -359,6 +359,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         payload: .array(reasoningDetailValues)
       )
       : nil
+    var citations: [ChatCitation] = []
+    appendCitations(from: message?.annotations, topLevelURLs: decoded.citations, into: &citations)
     guard
       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -377,7 +379,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       usage: decoded.usage?.normalized,
       metadata: responseMetadata(response.headers, decoded),
       toolCalls: toolCalls,
-      toolContinuation: toolContinuation
+      toolContinuation: toolContinuation,
+      citations: citations
     )
   }
 
@@ -417,6 +420,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           var metadata = responseMetadata(stream.headers, nil)
           var toolFragments: [Int: OpenAIToolCallAccumulator] = [:]
           var reasoningDetailsAccumulator = OpenRouterReasoningDetailsAccumulator()
+          var citations: [ChatCitation] = []
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -433,7 +437,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
                 completed: &completed,
                 metadata: &metadata,
                 toolFragments: &toolFragments,
-                reasoningDetailsAccumulator: &reasoningDetailsAccumulator
+                reasoningDetailsAccumulator: &reasoningDetailsAccumulator,
+                citations: &citations
               )
             }
           }
@@ -450,7 +455,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
               completed: &completed,
               metadata: &metadata,
               toolFragments: &toolFragments,
-              reasoningDetailsAccumulator: &reasoningDetailsAccumulator
+              reasoningDetailsAccumulator: &reasoningDetailsAccumulator,
+              citations: &citations
             )
           }
           guard completed || finishReason != nil else {
@@ -485,7 +491,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
                 usage: usage,
                 metadata: metadata,
                 toolCalls: toolCalls,
-                toolContinuation: toolContinuation
+                toolContinuation: toolContinuation,
+                citations: citations
               )
             )
           )
@@ -510,7 +517,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     completed: inout Bool,
     metadata: inout [String: String],
     toolFragments: inout [Int: OpenAIToolCallAccumulator],
-    reasoningDetailsAccumulator: inout OpenRouterReasoningDetailsAccumulator
+    reasoningDetailsAccumulator: inout OpenRouterReasoningDetailsAccumulator,
+    citations: inout [ChatCitation]
   ) throws {
     if event.data == "[DONE]" {
       completed = true
@@ -568,6 +576,33 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         if let value = fragment.function?.name { accumulator.name = value }
         if let value = fragment.function?.arguments { accumulator.arguments += value }
         toolFragments[index] = accumulator
+      }
+      appendCitations(
+        from: choice.delta.annotations ?? choice.message?.annotations,
+        topLevelURLs: decoded.citations,
+        into: &citations
+      )
+    } else if let urls = decoded.citations {
+      appendCitations(from: nil, topLevelURLs: urls, into: &citations)
+    }
+  }
+
+  private func appendCitations(
+    from annotations: [MessageAnnotationWire]?,
+    topLevelURLs: [String]?,
+    into citations: inout [ChatCitation]
+  ) {
+    for annotation in annotations ?? [] {
+      guard let citation = annotation.normalizedCitation else { continue }
+      if !citations.contains(citation) {
+        citations.append(citation)
+      }
+    }
+    for rawURL in topLevelURLs ?? [] {
+      let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { continue }
+      if !citations.contains(where: { $0.url == trimmed }) {
+        citations.append(ChatCitation(url: trimmed))
       }
     }
   }

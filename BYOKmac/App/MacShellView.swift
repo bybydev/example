@@ -93,6 +93,9 @@ struct MacShellView: View {
         retainedConversations: navigation.retainedConversations,
         navigationTarget: navigation.messageTarget,
         composerFocusRequestID: composerFocusRequestID,
+        inChatFindRequestID: model.inChatFindRequestID,
+        inChatFindNextRequestID: model.inChatFindNextRequestID,
+        inChatFindPreviousRequestID: model.inChatFindPreviousRequestID,
         attachments: pendingAttachments(for: paneConversationID),
         isSending: sendingKeys.contains(attachmentKey(paneConversationID)),
         isImportingAttachments: (importingAttachmentCountsByKey[attachmentKey(paneConversationID)] ?? 0) > 0,
@@ -210,6 +213,7 @@ struct MacShellView: View {
           }
         }
       )
+      .environment(\.macTranscriptFontSize, CGFloat(model.preferences.transcriptFontSize))
     }
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {

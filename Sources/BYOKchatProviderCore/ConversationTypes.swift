@@ -119,6 +119,35 @@ public enum ChatMessageStatus: String, Codable, Sendable {
   case interrupted
 }
 
+public struct ChatCitation: Codable, Sendable, Equatable, Hashable, Identifiable {
+  public var url: String
+  public var title: String?
+  public var snippet: String?
+  public var startIndex: Int?
+  public var endIndex: Int?
+
+  public var id: String {
+    if let startIndex, let endIndex {
+      return "\(url)#\(startIndex)-\(endIndex)"
+    }
+    return url
+  }
+
+  public init(
+    url: String,
+    title: String? = nil,
+    snippet: String? = nil,
+    startIndex: Int? = nil,
+    endIndex: Int? = nil
+  ) {
+    self.url = url
+    self.title = title
+    self.snippet = snippet
+    self.startIndex = startIndex
+    self.endIndex = endIndex
+  }
+}
+
 public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
   public var id: ChatMessageID
   public var role: ChatMessageRole
@@ -126,6 +155,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
   public var reasoning: String
   public var attachments: [ChatAttachment]?
   public var toolRounds: [ChatToolRound]?
+  public var citations: [ChatCitation]?
   public var createdAt: Date
   public var updatedAt: Date
   public var status: ChatMessageStatus
@@ -147,6 +177,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     reasoning: String = "",
     attachments: [ChatAttachment]? = nil,
     toolRounds: [ChatToolRound]? = nil,
+    citations: [ChatCitation]? = nil,
     createdAt: Date = .now,
     updatedAt: Date = .now,
     status: ChatMessageStatus,
@@ -167,6 +198,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     self.reasoning = reasoning
     self.attachments = attachments
     self.toolRounds = toolRounds
+    self.citations = citations
     self.createdAt = createdAt
     self.updatedAt = updatedAt
     self.status = status

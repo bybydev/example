@@ -173,6 +173,14 @@ private struct MacAnswerSourcePopoverRow: View {
               .truncationMode(.tail)
 
             subtitleView
+
+            if let snippet = source.snippet, !snippet.isEmpty {
+              Text(snippet)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.textMuted.opacity(0.85))
+                .lineLimit(2)
+                .padding(.top, 1)
+            }
           }
 
           Spacer(minLength: 4)
@@ -259,5 +267,109 @@ private struct MacAnswerSourcePopoverRow: View {
         .lineLimit(1)
         .truncationMode(.middle)
     }
+  }
+}
+
+struct MacInlineCitationChipsRow: View {
+  let sources: [MacAnswerSource]
+
+  @Environment(\.macAppTheme) private var theme
+  @State private var showingAllPopover = false
+
+  private static let maxVisibleChips = 4
+
+  var body: some View {
+    let visible = Array(sources.prefix(Self.maxVisibleChips))
+    let overflowCount = max(0, sources.count - visible.count)
+
+    HStack(spacing: 6) {
+      ForEach(Array(visible.enumerated()), id: \.element.id) { index, source in
+        MacInlineCitationChip(index: index + 1, source: source)
+      }
+
+      if overflowCount > 0 {
+        Button {
+          showingAllPopover.toggle()
+        } label: {
+          Text("+\(overflowCount) more")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(showingAllPopover ? theme.textPrimary : theme.textMuted)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(
+              showingAllPopover ? theme.selection.opacity(0.65) : theme.surface,
+              in: Capsule()
+            )
+            .overlay {
+              Capsule()
+                .stroke(theme.separator.opacity(0.75), lineWidth: 0.65)
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showingAllPopover, arrowEdge: .bottom) {
+          MacAnswerSourcesPopover(sources: sources) {
+            showingAllPopover = false
+          }
+          .presentationBackground(theme.surface)
+        }
+      }
+    }
+  }
+}
+
+private struct MacInlineCitationChip: View {
+  let index: Int
+  let source: MacAnswerSource
+
+  @Environment(\.macAppTheme) private var theme
+  @State private var isHovered = false
+
+  var body: some View {
+    Button {
+      guard MacAnswerContentParser.isValidBrowsableURL(source.url) else { return }
+      NSWorkspace.shared.open(source.url)
+    } label: {
+      HStack(spacing: 5) {
+        Text("\(index)")
+          .font(.system(size: 9.5, weight: .bold, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(theme.accent)
+          .frame(width: 15, height: 15)
+          .background(theme.accent.opacity(0.14), in: Circle())
+
+        Text(source.host)
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(isHovered ? theme.textPrimary : theme.textMuted)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+      .padding(.leading, 4)
+      .padding(.trailing, 8)
+      .frame(height: 24)
+      .frame(maxWidth: 168)
+      .background(
+        isHovered ? theme.selection.opacity(0.65) : theme.surface,
+        in: Capsule()
+      )
+      .overlay {
+        Capsule()
+          .stroke(
+            isHovered ? theme.accent.opacity(0.45) : theme.separator.opacity(0.75),
+            lineWidth: 0.65
+          )
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help(tooltipText)
+  }
+
+  private var tooltipText: String {
+    if let snippet = source.snippet, !snippet.isEmpty {
+      return "\(source.displayTitle) — \(snippet)"
+    }
+    return "\(source.displayTitle) (\(source.url.absoluteString))"
   }
 }

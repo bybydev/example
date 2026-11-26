@@ -136,6 +136,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     let text = decoded.content.compactMap { $0.type == "text" ? $0.text : nil }.joined()
     let reasoning = decoded.content.compactMap { $0.type == "thinking" ? $0.thinking : nil }.joined()
     let toolCalls = try decoded.content.compactMap(normalizedToolCall)
+    let citations = collectAnthropicCitations(from: decoded.content)
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !toolCalls.isEmpty
@@ -159,7 +160,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       finishReason: decoded.stopReason,
       usage: decoded.usage?.normalized,
       toolCalls: toolCalls,
-      toolContinuation: anthropicContinuation(content: decoded.content, hasToolCalls: !toolCalls.isEmpty)
+      toolContinuation: anthropicContinuation(content: decoded.content, hasToolCalls: !toolCalls.isEmpty),
+      citations: citations
     )
   }
 
@@ -196,6 +198,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
           var completed = false
           var toolFragments: [Int: AnthropicToolAccumulator] = [:]
           var thinkingFragments: [Int: AnthropicThinkingAccumulator] = [:]
+          var citations: [ChatCitation] = []
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -211,7 +214,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
                 finishReason: &finishReason,
                 completed: &completed,
                 toolFragments: &toolFragments,
-                thinkingFragments: &thinkingFragments
+                thinkingFragments: &thinkingFragments,
+                citations: &citations
               )
             }
           }
@@ -227,7 +231,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
               finishReason: &finishReason,
               completed: &completed,
               toolFragments: &toolFragments,
-              thinkingFragments: &thinkingFragments
+              thinkingFragments: &thinkingFragments,
+              citations: &citations
             )
           }
 
@@ -261,7 +266,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
                 toolContinuation: anthropicContinuation(
                   thinkingFragments: thinkingFragments,
                   hasToolCalls: !toolCalls.isEmpty
-                )
+                ),
+                citations: citations
               )
             )
           )
@@ -285,7 +291,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     finishReason: inout String?,
     completed: inout Bool,
     toolFragments: inout [Int: AnthropicToolAccumulator],
-    thinkingFragments: inout [Int: AnthropicThinkingAccumulator]
+    thinkingFragments: inout [Int: AnthropicThinkingAccumulator],
+    citations: inout [ChatCitation]
   ) throws {
     guard let payload = event.data.data(using: .utf8) else { throw ProviderError.invalidResponse }
     let decoded: AnthropicStreamEvent
@@ -321,12 +328,24 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
             redactedData: redactedData
           )
         }
+        for citation in block.citations ?? [] {
+          if let normalized = citation.normalizedCitation(endIndex: text.utf16.count),
+            !citations.contains(normalized)
+          {
+            citations.append(normalized)
+          }
+        }
       }
     case "content_block_delta":
       guard let delta = decoded.delta else { return }
       if delta.type == "text_delta", let value = delta.text, !value.isEmpty {
         text += value
         continuation.yield(.textDelta(value))
+      } else if delta.type == "citations_delta",
+        let normalized = delta.citation?.normalizedCitation(endIndex: text.utf16.count),
+        !citations.contains(normalized)
+      {
+        citations.append(normalized)
       } else if delta.type == "thinking_delta", let value = delta.thinking, !value.isEmpty {
         reasoning += value
         if let index = decoded.index {
@@ -730,6 +749,24 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     }
   }
 
+  private func collectAnthropicCitations(from blocks: [AnthropicContentBlock]) -> [ChatCitation] {
+    var citations: [ChatCitation] = []
+    var textOffset = 0
+    for block in blocks {
+      if block.type == "text", let value = block.text {
+        textOffset += value.utf16.count
+      }
+      for wire in block.citations ?? [] {
+        if let normalized = wire.normalizedCitation(endIndex: textOffset > 0 ? textOffset : nil),
+          !citations.contains(normalized)
+        {
+          citations.append(normalized)
+        }
+      }
+    }
+    return citations
+  }
+
   private func mergeUsage(_ current: ProviderUsage?, _ incoming: ProviderUsage) -> ProviderUsage {
     ProviderUsage(
       inputTokens: incoming.inputTokens ?? current?.inputTokens,
@@ -820,6 +857,28 @@ private struct AnthropicMessageResponse: Decodable {
   }
 }
 
+private struct AnthropicCitationWire: Decodable {
+  var type: String?
+  var url: String?
+  var title: String?
+  var citedText: String?
+
+  enum CodingKeys: String, CodingKey {
+    case type, url, title
+    case citedText = "cited_text"
+  }
+
+  func normalizedCitation(endIndex: Int?) -> ChatCitation? {
+    guard let url, !url.isEmpty else { return nil }
+    return ChatCitation(
+      url: url,
+      title: title,
+      snippet: citedText,
+      endIndex: endIndex
+    )
+  }
+}
+
 private struct AnthropicContentBlock: Decodable {
   var type: String
   var text: String?
@@ -829,6 +888,7 @@ private struct AnthropicContentBlock: Decodable {
   var id: String?
   var name: String?
   var input: JSONValue?
+  var citations: [AnthropicCitationWire]?
 }
 
 private struct AnthropicUsage: Decodable {
@@ -902,9 +962,10 @@ private struct AnthropicStreamDelta: Decodable {
   var signature: String?
   var partialJSON: String?
   var stopReason: String?
+  var citation: AnthropicCitationWire?
 
   enum CodingKeys: String, CodingKey {
-    case type, text, thinking, signature
+    case type, text, thinking, signature, citation
     case partialJSON = "partial_json"
     case stopReason = "stop_reason"
   }

@@ -634,6 +634,7 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
     var text = ""
     var reasoning = ""
     var toolCalls: [ChatToolCall] = []
+    var citations: [ChatCitation] = []
 
     for item in output {
       guard case .object(let value) = item else { continue }
@@ -642,7 +643,27 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
         for part in arrayValue(value["content"]) ?? [] {
           guard case .object(let content) = part else { continue }
           switch stringValue(content["type"]) {
-          case "output_text": text += stringValue(content["text"]) ?? ""
+          case "output_text":
+            let baseOffset = text.utf16.count
+            text += stringValue(content["text"]) ?? ""
+            for annotation in arrayValue(content["annotations"]) ?? [] {
+              guard case .object(let ann) = annotation,
+                stringValue(ann["type"]) == "url_citation",
+                let url = stringValue(ann["url"]),
+                !url.isEmpty
+              else { continue }
+              let startIndex = intValue(ann["start_index"]).map { baseOffset + $0 }
+              let endIndex = intValue(ann["end_index"]).map { baseOffset + $0 }
+              citations.append(
+                ChatCitation(
+                  url: url,
+                  title: stringValue(ann["title"]),
+                  snippet: stringValue(ann["content"]),
+                  startIndex: startIndex,
+                  endIndex: endIndex
+                )
+              )
+            }
           case "refusal": text += stringValue(content["refusal"]) ?? ""
           default: break
           }
@@ -756,7 +777,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       usage: usage,
       metadata: metadata,
       toolCalls: toolCalls,
-      toolContinuation: providerContinuation
+      toolContinuation: providerContinuation,
+      citations: citations
     )
   }
 

@@ -902,6 +902,7 @@ public actor ConversationStore {
       message.usage = response.usage
       message.providerContinuation = response.toolContinuation
       message.metadata = response.metadata
+      message.citations = response.citations.isEmpty ? nil : response.citations
       message.status = .complete
       message.errorCode = nil
       message.errorDescription = nil

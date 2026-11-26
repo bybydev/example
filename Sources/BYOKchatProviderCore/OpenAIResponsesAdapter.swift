@@ -490,6 +490,7 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
     var text = ""
     var reasoning = ""
     var toolCalls: [ChatToolCall] = []
+    var citations: [ChatCitation] = []
 
     for item in output {
       guard case .object(let value) = item else { continue }
@@ -499,7 +500,27 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
           guard case .object(let content) = part else { continue }
           switch content["type"]?.stringValue {
           case "output_text":
-            text += content["text"]?.stringValue ?? ""
+            let baseOffset = text.utf16.count
+            let chunk = content["text"]?.stringValue ?? ""
+            text += chunk
+            for annotation in content["annotations"]?.arrayValue ?? [] {
+              guard case .object(let ann) = annotation,
+                ann["type"]?.stringValue == "url_citation",
+                let url = ann["url"]?.stringValue,
+                !url.isEmpty
+              else { continue }
+              let startIndex = ann["start_index"]?.intValue.map { baseOffset + $0 }
+              let endIndex = ann["end_index"]?.intValue.map { baseOffset + $0 }
+              citations.append(
+                ChatCitation(
+                  url: url,
+                  title: ann["title"]?.stringValue,
+                  snippet: ann["content"]?.stringValue,
+                  startIndex: startIndex,
+                  endIndex: endIndex
+                )
+              )
+            }
           case "refusal":
             text += content["refusal"]?.stringValue ?? ""
           default:
@@ -603,7 +624,8 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
       usage: usage,
       metadata: metadata,
       toolCalls: toolCalls,
-      toolContinuation: providerContinuation
+      toolContinuation: providerContinuation,
+      citations: citations
     )
   }
 

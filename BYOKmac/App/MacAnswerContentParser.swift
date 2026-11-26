@@ -273,6 +273,8 @@ struct MacMarkdownMathSegment: Equatable, Sendable {
 struct MacAnswerSource: Identifiable, Hashable, Sendable {
   let url: URL
   let title: String?
+  var snippet: String? = nil
+  var isProviderCitation: Bool = false
 
   var id: String { url.absoluteString }
 
@@ -1529,7 +1531,7 @@ enum MacAnswerContentParser {
     return url
   }
 
-  private static func normalizedURLKey(_ url: URL) -> String {
+  static func normalizedURLKey(_ url: URL) -> String {
     guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
       return url.absoluteString
     }

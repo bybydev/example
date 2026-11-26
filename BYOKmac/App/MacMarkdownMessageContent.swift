@@ -20,6 +20,9 @@ struct MacMarkdownMessageContent: View {
   /// Renders body and inline code in the theme's muted foreground (used for
   /// secondary reasoning traces so they stay visually subordinate to answers).
   var muted = false
+  /// Optional in-conversation find query and active match index for highlighting.
+  var findQuery: String = ""
+  var activeFindOccurrence: Int? = nil
 
   @State private var completedAnswer: MacPreparedAnswer?
   @Environment(\.macAppTheme) private var appTheme
@@ -135,7 +138,10 @@ struct MacMarkdownMessageContent: View {
         MacHighlightedCodeBlock(
           language: language,
           content: content,
-          isStreaming: isStreaming && !isComplete
+          isStreaming: isStreaming && !isComplete,
+          textSize: textSize,
+          findQuery: findQuery,
+          activeFindOccurrence: activeFindOccurrence
         )
       }
 
@@ -200,6 +206,16 @@ struct MacMarkdownMessageContent: View {
         .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+    } else if !isStreaming, MacSelectableMarkdownBuilder.canRenderNatively(segment.text) {
+      MacSelectableMarkdownTextView(
+        source: segment.text,
+        includeStructuredBlocks: false,
+        textSize: textSize,
+        muted: muted,
+        findQuery: findQuery,
+        activeFindOccurrence: activeFindOccurrence
+      )
+      .frame(maxWidth: .infinity, alignment: .leading)
     } else {
       Markdown(segment.markdownContent ?? MarkdownContent(segment.text))
         .markdownImageProvider(MacMarkdownResponseImageProvider())
@@ -2145,11 +2161,21 @@ struct MacHighlightedCodeBlock: View {
   let language: String?
   let content: String
   var isStreaming = false
+  var textSize: CGFloat = 15
+  var findQuery: String = ""
+  var activeFindOccurrence: Int? = nil
 
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macAppTheme) private var theme
+  @AppStorage("byokchat.codeBlock.wordWrap") private var wordWrap = false
+  @AppStorage("byokchat.codeBlock.showLineNumbers") private var showLineNumbers = true
   @State private var isExpanded = false
   @State private var showFullScreen = false
   @State private var copied = false
+
+  private var codeFontSize: CGFloat {
+    max(11, textSize - 2)
+  }
 
   private var languageLabel: String {
     let value = language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -2158,63 +2184,85 @@ struct MacHighlightedCodeBlock: View {
 
   var body: some View {
     let preview = Self.preview(for: content, isExpanded: isExpanded, isStreaming: isStreaming)
+    let displayLineNumbers = showLineNumbers && preview.lineCount >= 2
 
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
+      HStack(spacing: 6) {
         Circle()
-          .fill(Color.accentColor)
+          .fill(theme.accent)
           .frame(width: 6, height: 6)
         Text(languageLabel)
           .font(.system(size: 11, weight: .semibold, design: .monospaced))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.textMuted)
         if isStreaming {
           Text("STREAMING")
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(theme.textMuted.opacity(0.75))
         }
-        Spacer()
+        Spacer(minLength: 8)
+        if preview.lineCount >= 2 {
+          Button {
+            showLineNumbers.toggle()
+          } label: {
+            Image(systemName: "number")
+              .font(.system(size: 11.5, weight: .semibold))
+              .foregroundStyle(showLineNumbers ? theme.accent : theme.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .help(showLineNumbers ? "Hide line numbers" : "Show line numbers")
+          .accessibilityLabel(showLineNumbers ? "Hide line numbers" : "Show line numbers")
+        }
+        Button {
+          wordWrap.toggle()
+        } label: {
+          Image(systemName: "arrow.turn.down.left")
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(wordWrap ? theme.accent : theme.textMuted)
+        }
+        .buttonStyle(MacIconButtonStyle())
+        .help(wordWrap ? "Disable word wrap" : "Wrap long lines")
+        .accessibilityLabel(wordWrap ? "Disable word wrap" : "Wrap long lines")
         if !isStreaming {
           Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") {
             showFullScreen = true
           }
           .labelStyle(.iconOnly)
+          .font(.system(size: 11.5, weight: .semibold))
+          .foregroundStyle(theme.textMuted)
+          .buttonStyle(MacIconButtonStyle())
           .help("Open code")
         }
         Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
           copyCode()
         }
         .labelStyle(.iconOnly)
+        .font(.system(size: 11.5, weight: .semibold))
+        .foregroundStyle(copied ? theme.accent : theme.textMuted)
+        .buttonStyle(MacIconButtonStyle())
         .help(copied ? "Copied" : "Copy code")
       }
-      .buttonStyle(.plain)
       .padding(.horizontal, 11)
-      .frame(minHeight: 38)
-      .background(Color.primary.opacity(0.045))
+      .frame(minHeight: 36)
+      .background(theme.surface.opacity(0.72))
 
-      Divider()
+      Rectangle()
+        .fill(theme.separator.opacity(0.65))
+        .frame(height: 0.5)
 
-      MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
-        Group {
-          if isStreaming {
-            Text(preview.displayedContent)
-              .font(.system(size: 13, design: .monospaced))
-              .fixedSize(horizontal: true, vertical: true)
-              .textSelection(.enabled)
-              .padding(13)
-          } else {
-            MacHighlightedCodeText(
-              code: preview.displayedContent,
-              language: language,
-              colorScheme: colorScheme
-            )
-            .padding(13)
-          }
+      if wordWrap {
+        codeBody(preview: preview, displayLineNumbers: displayLineNumbers, wrapped: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+          codeBody(preview: preview, displayLineNumbers: displayLineNumbers, wrapped: false)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
       }
 
       if preview.isLong && !isStreaming {
-        Divider()
+        Rectangle()
+          .fill(theme.separator.opacity(0.65))
+          .frame(height: 0.5)
         Button {
           isExpanded.toggle()
         } label: {
@@ -2225,19 +2273,60 @@ struct MacHighlightedCodeBlock: View {
           .font(.caption.weight(.medium))
           .frame(maxWidth: .infinity)
           .frame(height: 34)
+          .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.textMuted)
       }
     }
-    .background(Color(nsColor: .textBackgroundColor))
+    .background(theme.codeSurface)
     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+        .stroke(theme.separator, lineWidth: 0.85)
     }
     .sheet(isPresented: $showFullScreen) {
-      MacFullScreenCodeView(language: language, content: content)
+      MacFullScreenCodeView(
+        language: language,
+        content: content,
+        fontSize: codeFontSize
+      )
+    }
+  }
+
+  @ViewBuilder
+  private func codeBody(
+    preview: Preview,
+    displayLineNumbers: Bool,
+    wrapped: Bool
+  ) -> some View {
+    if isStreaming {
+      MacPlainCodeLinesView(
+        code: preview.displayedContent,
+        fontSize: codeFontSize,
+        showLineNumbers: displayLineNumbers,
+        wrapped: wrapped,
+        textColor: theme.textPrimary,
+        gutterColor: theme.textMuted.opacity(0.65),
+        dividerColor: theme.separator.opacity(0.55)
+      )
+      .padding(13)
+    } else {
+      MacHighlightedCodeText(
+        code: preview.displayedContent,
+        language: language,
+        colorScheme: colorScheme,
+        fontSize: codeFontSize,
+        showLineNumbers: displayLineNumbers,
+        wrapped: wrapped,
+        findQuery: findQuery,
+        activeFindOccurrence: activeFindOccurrence,
+        accentColor: theme.accent,
+        textColor: theme.textPrimary,
+        gutterColor: theme.textMuted.opacity(0.65),
+        dividerColor: theme.separator.opacity(0.55)
+      )
+      .padding(13)
     }
   }
 
@@ -2252,44 +2341,185 @@ struct MacHighlightedCodeBlock: View {
   }
 }
 
+private struct MacPlainCodeLinesView: View {
+  let code: String
+  let fontSize: CGFloat
+  let showLineNumbers: Bool
+  let wrapped: Bool
+  let textColor: Color
+  let gutterColor: Color
+  let dividerColor: Color
+
+  var body: some View {
+    let lines = code.split(separator: "\n", omittingEmptySubsequences: false)
+    let gutterWidth = max(20, CGFloat(String(lines.count).count) * (fontSize * 0.65) + 6)
+    let codeFont = Font.custom("Menlo-Regular", size: fontSize)
+
+    if showLineNumbers && wrapped {
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
+          HStack(alignment: .top, spacing: 0) {
+            Text("\(idx + 1)")
+              .font(codeFont)
+              .monospacedDigit()
+              .foregroundStyle(gutterColor)
+              .frame(width: gutterWidth, alignment: .trailing)
+              .padding(.trailing, 10)
+              .textSelection(.disabled)
+            Text(line.isEmpty ? " " : String(line))
+              .font(codeFont)
+              .foregroundStyle(textColor)
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .textSelection(.enabled)
+          }
+        }
+      }
+    } else if showLineNumbers {
+      let gutter = (1...max(1, lines.count)).map(String.init).joined(separator: "\n")
+      HStack(alignment: .top, spacing: 0) {
+        Text(gutter)
+          .font(codeFont)
+          .monospacedDigit()
+          .multilineTextAlignment(.trailing)
+          .foregroundStyle(gutterColor)
+          .fixedSize(horizontal: true, vertical: true)
+          .frame(minWidth: gutterWidth, alignment: .trailing)
+          .padding(.trailing, 10)
+          .textSelection(.disabled)
+
+        Rectangle()
+          .fill(dividerColor)
+          .frame(width: 0.5)
+          .padding(.trailing, 10)
+
+        Text(code)
+          .font(codeFont)
+          .foregroundStyle(textColor)
+          .fixedSize(horizontal: true, vertical: true)
+          .textSelection(.enabled)
+      }
+    } else {
+      Text(code)
+        .font(codeFont)
+        .foregroundStyle(textColor)
+        .fixedSize(horizontal: !wrapped, vertical: true)
+        .textSelection(.enabled)
+    }
+  }
+}
+
 private struct MacHighlightedCodeText: View {
   private struct RenderKey: Equatable {
     let code: String
     let language: String?
     let isDark: Bool
+    let fontSize: Int
   }
 
   let code: String
   let language: String?
   let colorScheme: ColorScheme
+  var fontSize: CGFloat = 13
+  var showLineNumbers: Bool = false
+  var wrapped: Bool = false
+  var findQuery: String = ""
+  var activeFindOccurrence: Int? = nil
+  var accentColor: Color = .accentColor
+  var textColor: Color = .primary
+  var gutterColor: Color = .secondary
+  var dividerColor: Color = Color.primary.opacity(0.14)
 
   @State private var highlighted: AttributedString?
   @State private var highlightedKey: RenderKey?
 
   var body: some View {
     let key = renderKey
-    let resolved = (highlightedKey == key ? highlighted : nil)
+    let rawResolved = (highlightedKey == key ? highlighted : nil)
       ?? MacSyntaxHighlighting.shared.cached(
         code: code,
         language: language,
-        isDark: colorScheme == .dark
+        isDark: colorScheme == .dark,
+        fontSize: fontSize
       )
+    let baseAttributed: AttributedString = {
+      var attr = rawResolved ?? {
+        var plain = AttributedString(code)
+        plain.font = .custom("Menlo-Regular", size: fontSize)
+        plain.foregroundColor = textColor
+        return plain
+      }()
+      if !findQuery.isEmpty {
+        attr = MacTranscriptFindSupport.applyHighlights(
+          to: attr,
+          query: findQuery,
+          highlightColor: accentColor.opacity(colorScheme == .dark ? 0.34 : 0.24),
+          activeColor: accentColor.opacity(colorScheme == .dark ? 0.62 : 0.48),
+          activeOccurrence: activeFindOccurrence
+        )
+      }
+      return attr
+    }()
+
+    let lines = code.split(separator: "\n", omittingEmptySubsequences: false)
+    let gutterWidth = max(20, CGFloat(String(lines.count).count) * (fontSize * 0.65) + 6)
+    let codeFont = Font.custom("Menlo-Regular", size: fontSize)
 
     Group {
-      if let resolved {
-        Text(resolved)
+      if showLineNumbers && wrapped {
+        let attributedLines = splitAttributedLines(baseAttributed)
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(Array(attributedLines.enumerated()), id: \.offset) { idx, lineAttr in
+            HStack(alignment: .top, spacing: 0) {
+              Text("\(idx + 1)")
+                .font(codeFont)
+                .monospacedDigit()
+                .foregroundStyle(gutterColor)
+                .frame(width: gutterWidth, alignment: .trailing)
+                .padding(.trailing, 10)
+                .textSelection(.disabled)
+              Text(lineAttr.characters.isEmpty ? AttributedString(" ") : lineAttr)
+                .font(codeFont)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+          }
+        }
+      } else if showLineNumbers {
+        let gutter = (1...max(1, lines.count)).map(String.init).joined(separator: "\n")
+        HStack(alignment: .top, spacing: 0) {
+          Text(gutter)
+            .font(codeFont)
+            .monospacedDigit()
+            .multilineTextAlignment(.trailing)
+            .foregroundStyle(gutterColor)
+            .fixedSize(horizontal: true, vertical: true)
+            .frame(minWidth: gutterWidth, alignment: .trailing)
+            .padding(.trailing, 10)
+            .textSelection(.disabled)
+
+          Rectangle()
+            .fill(dividerColor)
+            .frame(width: 0.5)
+            .padding(.trailing, 10)
+
+          Text(baseAttributed)
+            .fixedSize(horizontal: true, vertical: true)
+            .textSelection(.enabled)
+        }
       } else {
-        Text(code)
-          .font(.system(size: 13, design: .monospaced))
+        Text(baseAttributed)
+          .fixedSize(horizontal: !wrapped, vertical: true)
+          .textSelection(.enabled)
       }
     }
-    .fixedSize(horizontal: true, vertical: true)
-    .textSelection(.enabled)
     .task(id: key) {
       if let cached = MacSyntaxHighlighting.shared.cached(
         code: code,
         language: language,
-        isDark: colorScheme == .dark
+        isDark: colorScheme == .dark,
+        fontSize: fontSize
       ) {
         highlighted = cached
         highlightedKey = key
@@ -2298,7 +2528,8 @@ private struct MacHighlightedCodeText: View {
       let rendered = await MacSyntaxHighlighting.shared.render(
         code: code,
         language: language,
-        isDark: colorScheme == .dark
+        isDark: colorScheme == .dark,
+        fontSize: fontSize
       )
       guard !Task.isCancelled else { return }
       highlighted = rendered
@@ -2310,8 +2541,26 @@ private struct MacHighlightedCodeText: View {
     RenderKey(
       code: code,
       language: language,
-      isDark: colorScheme == .dark
+      isDark: colorScheme == .dark,
+      fontSize: Int(fontSize.rounded())
     )
+  }
+
+  private func splitAttributedLines(_ source: AttributedString) -> [AttributedString] {
+    var result: [AttributedString] = []
+    var start = source.startIndex
+    var cursor = start
+    while cursor < source.endIndex {
+      if source.characters[cursor] == "\n" {
+        result.append(AttributedString(source[start..<cursor]))
+        start = source.index(afterCharacter: cursor)
+        cursor = start
+      } else {
+        cursor = source.index(afterCharacter: cursor)
+      }
+    }
+    result.append(AttributedString(source[start..<source.endIndex]))
+    return result
   }
 }
 
@@ -2320,6 +2569,7 @@ private final class MacSyntaxHighlightStorage: @unchecked Sendable {
     let code: String
     let language: String?
     let isDark: Bool
+    let fontSize: Int
   }
 
   private let lock = NSLock()
@@ -2352,14 +2602,38 @@ private actor MacSyntaxHighlighting {
   private nonisolated let storage = MacSyntaxHighlightStorage()
   private var highlighter: Highlighter?
   private var configuredTheme: String?
+  private var configuredFontSize: Int?
 
-  nonisolated func cached(code: String, language: String?, isDark: Bool) -> AttributedString? {
-    storage.value(for: MacSyntaxHighlightStorage.CacheKey(code: code, language: language, isDark: isDark))
+  nonisolated func cached(
+    code: String,
+    language: String?,
+    isDark: Bool,
+    fontSize: CGFloat = 13
+  ) -> AttributedString? {
+    storage.value(
+      for: MacSyntaxHighlightStorage.CacheKey(
+        code: code,
+        language: language,
+        isDark: isDark,
+        fontSize: Int(fontSize.rounded())
+      )
+    )
   }
 
-  func render(code: String, language: String?, isDark: Bool) -> AttributedString? {
+  func render(
+    code: String,
+    language: String?,
+    isDark: Bool,
+    fontSize: CGFloat = 13
+  ) -> AttributedString? {
     guard !Task.isCancelled else { return nil }
-    let key = MacSyntaxHighlightStorage.CacheKey(code: code, language: language, isDark: isDark)
+    let roundedSize = Int(fontSize.rounded())
+    let key = MacSyntaxHighlightStorage.CacheKey(
+      code: code,
+      language: language,
+      isDark: isDark,
+      fontSize: roundedSize
+    )
     if let cached = storage.value(for: key) { return cached }
 
     if highlighter == nil {
@@ -2368,23 +2642,57 @@ private actor MacSyntaxHighlighting {
     guard let highlighter else { return nil }
 
     let themeName = isDark ? "github-dark" : "github"
-    if configuredTheme != themeName {
+    if configuredTheme != themeName || configuredFontSize != roundedSize {
       _ = highlighter.setTheme(
         themeName,
         withFont: "Menlo-Regular",
-        ofSize: 13
+        ofSize: CGFloat(roundedSize)
       )
       configuredTheme = themeName
+      configuredFontSize = roundedSize
     }
 
     guard !Task.isCancelled else { return nil }
-    guard let value = highlighter.highlight(code, as: normalize(language)) else { return nil }
+    let normalizedLanguage = normalize(language)
+    guard let value = highlighter.highlight(code, as: normalizedLanguage) else { return nil }
 
     let mutable = NSMutableAttributedString(attributedString: value)
     mutable.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: mutable.length))
+    if normalizedLanguage == "diff" {
+      applyDiffLineTinting(to: mutable, isDark: isDark)
+    }
     let rendered = AttributedString(mutable)
     storage.insert(rendered, for: key)
     return rendered
+  }
+
+  private func applyDiffLineTinting(to attributed: NSMutableAttributedString, isDark: Bool) {
+    let nsString = attributed.string as NSString
+    var location = 0
+    while location < nsString.length {
+      let lineRange = nsString.lineRange(for: NSRange(location: location, length: 0))
+      let line = nsString.substring(with: lineRange)
+      if line.hasPrefix("+") && !line.hasPrefix("+++") {
+        attributed.addAttribute(
+          .backgroundColor,
+          value: NSColor.systemGreen.withAlphaComponent(isDark ? 0.18 : 0.13),
+          range: lineRange
+        )
+      } else if line.hasPrefix("-") && !line.hasPrefix("---") {
+        attributed.addAttribute(
+          .backgroundColor,
+          value: NSColor.systemRed.withAlphaComponent(isDark ? 0.18 : 0.13),
+          range: lineRange
+        )
+      } else if line.hasPrefix("@@") {
+        attributed.addAttribute(
+          .backgroundColor,
+          value: NSColor.systemBlue.withAlphaComponent(isDark ? 0.15 : 0.09),
+          range: lineRange
+        )
+      }
+      location = lineRange.location + lineRange.length
+    }
   }
 
   private func normalize(_ language: String?) -> String? {
@@ -2400,6 +2708,7 @@ private actor MacSyntaxHighlighting {
     case "c++", "cplusplus": return "cpp"
     case "c#": return "csharp"
     case "html": return "xml"
+    case "patch": return "diff"
     default: return value
     }
   }
@@ -2408,16 +2717,37 @@ private actor MacSyntaxHighlighting {
 private struct MacFullScreenCodeView: View {
   let language: String?
   let content: String
+  var fontSize: CGFloat = 13
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macAppTheme) private var theme
+  @AppStorage("byokchat.codeBlock.wordWrap") private var wordWrap = false
+  @AppStorage("byokchat.codeBlock.showLineNumbers") private var showLineNumbers = true
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 6) {
         Text(language?.uppercased() ?? "CODE")
           .font(.headline.monospaced())
+          .foregroundStyle(theme.textPrimary)
         Spacer()
+        Button {
+          showLineNumbers.toggle()
+        } label: {
+          Image(systemName: "number")
+            .foregroundStyle(showLineNumbers ? theme.accent : theme.textMuted)
+        }
+        .buttonStyle(MacIconButtonStyle())
+        .help(showLineNumbers ? "Hide line numbers" : "Show line numbers")
+        Button {
+          wordWrap.toggle()
+        } label: {
+          Image(systemName: "arrow.turn.down.left")
+            .foregroundStyle(wordWrap ? theme.accent : theme.textMuted)
+        }
+        .buttonStyle(MacIconButtonStyle())
+        .help(wordWrap ? "Disable word wrap" : "Wrap long lines")
         ShareLink(item: content) {
           Image(systemName: "square.and.arrow.up")
         }
@@ -2435,11 +2765,29 @@ private struct MacFullScreenCodeView: View {
           .keyboardShortcut(.cancelAction)
       }
       .padding(14)
-      Divider()
-      ScrollView([.horizontal, .vertical]) {
-        MacHighlightedCodeText(code: content, language: language, colorScheme: colorScheme)
-          .padding(18)
+      .background(theme.surface)
+
+      Rectangle()
+        .fill(theme.separator)
+        .frame(height: 0.75)
+
+      ScrollView(wordWrap ? [.vertical] : [.horizontal, .vertical]) {
+        MacHighlightedCodeText(
+          code: content,
+          language: language,
+          colorScheme: colorScheme,
+          fontSize: fontSize,
+          showLineNumbers: showLineNumbers,
+          wrapped: wordWrap,
+          accentColor: theme.accent,
+          textColor: theme.textPrimary,
+          gutterColor: theme.textMuted.opacity(0.65),
+          dividerColor: theme.separator.opacity(0.55)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
       }
+      .background(theme.codeSurface)
     }
     .frame(
       minWidth: MacDesignTokens.Sheet.previewMinWidth,

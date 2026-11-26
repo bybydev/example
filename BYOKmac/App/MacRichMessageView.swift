@@ -12,6 +12,8 @@ struct MacRichMessageView: View {
   let storedMessage: ChatMessage
   let failureContext: String?
   let isLatestAssistant: Bool
+  var isUnifiedSelectionMode: Bool = false
+  var onExitUnifiedSelection: (() -> Void)? = nil
   let onShowDetails: (ChatMessage) -> Void
   let onEditMessage: (ChatMessage) -> Void
   let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
@@ -19,6 +21,8 @@ struct MacRichMessageView: View {
 
   @Environment(\.macAppTheme) private var theme
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+  @Environment(\.macTranscriptFontSize) private var transcriptFontSize
+  @Environment(\.macTranscriptFind) private var findContext
   @Environment(\.macToastCenter) private var toastCenter
   @Environment(MacWorkspaceModel.self) private var workspace
   @State private var retainedLiveRendering: LiveRendering?
@@ -32,6 +36,8 @@ struct MacRichMessageView: View {
     message: ChatMessage,
     failureContext: String? = nil,
     isLatestAssistant: Bool = false,
+    isUnifiedSelectionMode: Bool = false,
+    onExitUnifiedSelection: (() -> Void)? = nil,
     onShowDetails: @escaping (ChatMessage) -> Void,
     onEditMessage: @escaping (ChatMessage) -> Void,
     onPreviewAttachment: @escaping (ChatAttachment, ChatMessage) -> Void,
@@ -44,6 +50,8 @@ struct MacRichMessageView: View {
     storedMessage = message
     self.failureContext = failureContext
     self.isLatestAssistant = isLatestAssistant
+    self.isUnifiedSelectionMode = isUnifiedSelectionMode
+    self.onExitUnifiedSelection = onExitUnifiedSelection
     self.onShowDetails = onShowDetails
     self.onEditMessage = onEditMessage
     self.onPreviewAttachment = onPreviewAttachment
@@ -131,8 +139,15 @@ struct MacRichMessageView: View {
         }
 
         if !message.content.isEmpty {
-          MacUserMessageTextView(text: message.content)
-            .padding(.top, attachments.isEmpty ? 0 : 2)
+          MacUserMessageTextView(
+            text: message.content,
+            textSize: transcriptFontSize,
+            findQuery: findContext.query,
+            activeFindOccurrence: findContext.activeMessageID == message.id
+              ? findContext.activeOccurrenceInMessage
+              : nil
+          )
+          .padding(.top, attachments.isEmpty ? 0 : 2)
         }
 
         statusView
@@ -148,12 +163,39 @@ struct MacRichMessageView: View {
     }
   }
 
+  private var providerCitationSources: [MacAnswerSource] {
+    guard let citations = message.citations, !citations.isEmpty else { return [] }
+    return MacCitationSupport.mergedSources(
+      structuredCitations: citations,
+      extractedSources: []
+    )
+  }
+
+  private var displayAssistantContent: String {
+    guard !isStreaming,
+      let citations = message.citations,
+      !citations.isEmpty
+    else { return message.content }
+    return MacCitationSupport.annotateInlineCitations(
+      in: message.content,
+      citations: citations,
+      mergedSources: providerCitationSources
+    )
+  }
+
+  private var activeFindOccurrenceForMessage: Int? {
+    findContext.activeMessageID == message.id ? findContext.activeOccurrenceInMessage : nil
+  }
+
   private var assistantMessage: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    let citationSources = providerCitationSources
+    let renderedMarkdown = displayAssistantContent
+    return VStack(alignment: .leading, spacing: 14) {
       if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         MacReasoningDisclosure(
           text: message.reasoning,
           isStreaming: isStreaming && message.content.isEmpty,
+          textSize: max(11, transcriptFontSize - 2),
           streamingSnapshot: livePresentation?.reasoningSnapshot,
           onExpandedChange: { expanded in
             chats.livePresentations[storedMessage.id]?.setReasoningRenderEnabled(expanded)
@@ -181,15 +223,62 @@ struct MacRichMessageView: View {
       if !message.content.isEmpty {
         if let livePresentation {
           if livePresentation.answerSnapshot.revision > 0 {
-            MacStreamingRenderedContentView(snapshot: livePresentation.answerSnapshot)
+            MacStreamingRenderedContentView(
+              snapshot: livePresentation.answerSnapshot,
+              textSize: transcriptFontSize
+            )
           } else {
             Text(message.content)
-              .font(.system(size: 15))
+              .font(.system(size: transcriptFontSize))
               .textSelection(.enabled)
               .fixedSize(horizontal: false, vertical: true)
           }
+        } else if isUnifiedSelectionMode {
+          VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+              Image(systemName: "selection.pin.in.out")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(theme.accent)
+              Text("Unified selection · Right-click to Copy as Markdown")
+                .font(.caption)
+                .foregroundStyle(theme.textMuted)
+              Spacer(minLength: 8)
+              if let onExitUnifiedSelection {
+                Button("Done") {
+                  onExitUnifiedSelection()
+                }
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+              }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
+                .stroke(theme.separator.opacity(0.8), lineWidth: 0.75)
+            }
+
+            MacSelectableMarkdownTextView(
+              source: renderedMarkdown,
+              includeStructuredBlocks: true,
+              textSize: transcriptFontSize,
+              muted: false,
+              findQuery: findContext.query,
+              activeFindOccurrence: activeFindOccurrenceForMessage
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
         } else {
-          MacMarkdownMessageContent(text: message.content)
+          MacMarkdownMessageContent(
+            text: renderedMarkdown,
+            textSize: transcriptFontSize,
+            findQuery: findContext.query,
+            activeFindOccurrence: activeFindOccurrenceForMessage
+          )
+        }
+
+        if !isStreaming, !citationSources.isEmpty {
+          MacInlineCitationChipsRow(sources: citationSources)
         }
       } else if isStreaming && message.reasoning.isEmpty && attachments.isEmpty && toolRounds.isEmpty {
         HStack(spacing: 7) {
@@ -464,11 +553,10 @@ nonisolated enum MacReasoningDurationFormatter {
 private struct MacReasoningDisclosure: View {
   let text: String
   let isStreaming: Bool
+  var textSize: CGFloat = 13
   let streamingSnapshot: MacStreamingAnswerSnapshot?
   var onExpandedChange: ((Bool) -> Void)? = nil
 
-  /// Reasoning body renders one step smaller than the answer text.
-  private static let contentFontSize: CGFloat = 13
   private static let longTraceCollapseThreshold = 600
 
   @State private var expanded = false
@@ -483,11 +571,13 @@ private struct MacReasoningDisclosure: View {
   init(
     text: String,
     isStreaming: Bool,
+    textSize: CGFloat = 13,
     streamingSnapshot: MacStreamingAnswerSnapshot? = nil,
     onExpandedChange: ((Bool) -> Void)? = nil
   ) {
     self.text = text
     self.isStreaming = isStreaming
+    self.textSize = textSize
     self.streamingSnapshot = streamingSnapshot
     self.onExpandedChange = onExpandedChange
     _reasoningStartedAt = State(initialValue: isStreaming ? .now : nil)
@@ -570,7 +660,7 @@ private struct MacReasoningDisclosure: View {
           if streamingSnapshot.revision > 0 {
             MacStreamingRenderedContentView(
               snapshot: streamingSnapshot,
-              textSize: Self.contentFontSize,
+              textSize: textSize,
               muted: true
             )
           } else {
@@ -582,12 +672,12 @@ private struct MacReasoningDisclosure: View {
         } else {
           MacMarkdownMessageContent(
             text: text,
-            textSize: Self.contentFontSize,
+            textSize: textSize,
             muted: true
           )
         }
       }
-      .font(.system(size: Self.contentFontSize))
+      .font(.system(size: textSize))
 
       if showsBottomCollapse {
         Button {
@@ -1039,31 +1129,47 @@ enum MacUserMessageTextSupport {
 
 private struct MacUserMessageTextView: View {
   let text: String
+  var textSize: CGFloat = 15
+  var findQuery: String = ""
+  var activeFindOccurrence: Int? = nil
 
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macAppTheme) private var theme
   @State private var isExpanded = false
 
   var body: some View {
     let preview = MacUserMessageTextSupport.preview(for: text, isExpanded: isExpanded)
     let matches = MacUserMessageTextSupport.linkMatches(in: preview.displayedText)
+    let hasFindMatches = MacTranscriptFindSupport.containsMatch(in: preview.displayedText, query: findQuery)
 
     VStack(alignment: .leading, spacing: 6) {
-      if matches.isEmpty {
+      if matches.isEmpty && !hasFindMatches {
         Text(preview.displayedText)
-          .font(.system(size: 15))
+          .font(.system(size: textSize))
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
       } else {
-        Text(
-          MacUserMessageTextSupport.attributedText(
+        let baseAttributed = matches.isEmpty
+          ? AttributedString(preview.displayedText)
+          : MacUserMessageTextSupport.attributedText(
             preview.displayedText,
             matches: matches,
-            accentColor: MacDesignTokens.Colors.accent
+            accentColor: theme.accent
           )
-        )
-        .font(.system(size: 15))
-        .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
-        .tint(MacDesignTokens.Colors.accent)
+        let highlighted = hasFindMatches
+          ? MacTranscriptFindSupport.applyHighlights(
+            to: baseAttributed,
+            query: findQuery,
+            highlightColor: theme.accent.opacity(colorScheme == .dark ? 0.34 : 0.24),
+            activeColor: theme.accent.opacity(colorScheme == .dark ? 0.62 : 0.48),
+            activeOccurrence: activeFindOccurrence
+          )
+          : baseAttributed
+        Text(highlighted)
+          .font(.system(size: textSize))
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+          .tint(theme.accent)
       }
 
       if preview.isLong {

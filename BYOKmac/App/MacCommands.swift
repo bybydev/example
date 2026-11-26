@@ -24,6 +24,29 @@ struct MacCommands: Commands {
         NSApp.keyWindow?.toggleFullScreen(nil)
       }
       .keyboardShortcut("f", modifiers: [.command, .control])
+
+      Divider()
+
+      Button("Larger Text") {
+        model.preferences.increaseTranscriptFontSize()
+      }
+      .keyboardShortcut("+", modifiers: .command)
+      .disabled(!model.isReady || !model.preferences.canIncreaseTranscriptFontSize)
+
+      Button("Smaller Text") {
+        model.preferences.decreaseTranscriptFontSize()
+      }
+      .keyboardShortcut("-", modifiers: .command)
+      .disabled(!model.isReady || !model.preferences.canDecreaseTranscriptFontSize)
+
+      Button("Actual Size") {
+        model.preferences.resetTranscriptFontSize()
+      }
+      .keyboardShortcut("0", modifiers: .command)
+      .disabled(
+        !model.isReady
+          || model.preferences.transcriptFontSize == MacPreferencesModel.defaultTranscriptFontSize
+      )
     }
 
     CommandMenu("Conversation") {
@@ -32,6 +55,28 @@ struct MacCommands: Commands {
       }
       .keyboardShortcut("k", modifiers: .command)
       .disabled(!model.isReady)
+
+      Divider()
+
+      Button("Find in Conversation…") {
+        model.requestInChatFind()
+      }
+      .keyboardShortcut("f", modifiers: .command)
+      .disabled(!model.isReady)
+
+      Button("Find Next") {
+        model.requestInChatFindNext()
+      }
+      .keyboardShortcut("g", modifiers: .command)
+      .disabled(!model.isReady)
+
+      Button("Find Previous") {
+        model.requestInChatFindPrevious()
+      }
+      .keyboardShortcut("g", modifiers: [.command, .shift])
+      .disabled(!model.isReady)
+
+      Divider()
 
       Button("Export Conversation as Markdown…") {
         model.requestExportMarkdown()

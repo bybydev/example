@@ -87,6 +87,9 @@ struct MacChatPane: View {
   let retainedConversations: [MacPreparedConversation]
   let navigationTarget: MacTranscriptNavigationTarget?
   let composerFocusRequestID: Int
+  var inChatFindRequestID: Int = 0
+  var inChatFindNextRequestID: Int = 0
+  var inChatFindPreviousRequestID: Int = 0
   let attachments: [ChatAttachment]
   let isSending: Bool
   let isImportingAttachments: Bool
@@ -113,6 +116,11 @@ struct MacChatPane: View {
   @State private var showingTargetPopover = false
   @State private var dismissedOmittedBannerKey: String?
   @State private var revealedConversationIDs: Set<ConversationID> = []
+  @State private var showingInChatFind = false
+  @State private var inChatFindQuery = ""
+  @State private var activeFindMatchIndex = 0
+  @State private var inChatFindFocusToken = 0
+  @State private var findScrollTarget: MacTranscriptFindScrollTarget?
 
   private var retainedConversationIDs: Set<ConversationID> {
     Set(retainedConversations.compactMap(\.id))
@@ -159,6 +167,22 @@ struct MacChatPane: View {
       return workspace.project(for: conversationID)
     }
     return workspace.project(chats.newChatProjectID)
+  }
+
+  private func advanceInChatFind(delta: Int, index: MacTranscriptFindIndex) {
+    guard !index.matches.isEmpty else { return }
+    let count = index.matches.count
+    let next = (activeFindMatchIndex + delta % count + count) % count
+    activeFindMatchIndex = next
+    findScrollTarget = MacTranscriptFindScrollTarget(messageID: index.matches[next].messageID)
+  }
+
+  private func closeInChatFind() {
+    showingInChatFind = false
+    inChatFindQuery = ""
+    activeFindMatchIndex = 0
+    findScrollTarget = nil
+    focusComposer()
   }
 
   private var headerProject: ChatProject? {
@@ -249,8 +273,22 @@ struct MacChatPane: View {
         .padding(.vertical, 8)
       }
 
+      let currentMessages = chats.conversation(conversationID)?.messages ?? []
+      let findIndex = showingInChatFind
+        ? MacTranscriptFindSupport.search(query: inChatFindQuery, in: currentMessages)
+        : .empty
+      let clampedFindIndex: Int? = findIndex.matches.isEmpty
+        ? nil
+        : min(max(activeFindMatchIndex, 0), findIndex.matches.count - 1)
+      let activeFindMatch = clampedFindIndex.map { findIndex.matches[$0] }
+      let findContext = MacTranscriptFindContext(
+        query: findIndex.query,
+        activeMessageID: activeFindMatch?.messageID,
+        activeOccurrenceInMessage: activeFindMatch?.occurrenceInMessage
+      )
+
       ZStack(alignment: .bottom) {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
           ForEach(retainedConversations) { retained in
             let isCurrent = retained.id == conversationID
             let isVisible = isCurrent && !showLoadingSkeleton
@@ -264,6 +302,7 @@ struct MacChatPane: View {
               bottomSpace: transcriptBottomSpace,
               isActive: isCurrent,
               navigationTarget: navigationTarget,
+              findScrollTarget: isCurrent ? findScrollTarget : nil,
               chooseTarget: { showingTargetPopover = true },
               manageProviders: manageProviders,
               openChatSettings: openChatSettings,
@@ -279,11 +318,28 @@ struct MacChatPane: View {
             )
             .environment(\.macPreparedAnswers, retained.answers)
             .environment(\.macTranscriptIsActive, isCurrent)
+            .environment(\.macTranscriptFind, isCurrent ? findContext : .empty)
             .opacity(isVisible ? 1 : 0)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
             .disabled(!isCurrent)
             .zIndex(isCurrent ? 1 : 0)
+          }
+
+          if showingInChatFind {
+            MacTranscriptFindBar(
+              query: $inChatFindQuery,
+              focusToken: inChatFindFocusToken,
+              matchIndex: clampedFindIndex,
+              totalMatches: findIndex.totalMatches,
+              onNext: { advanceInChatFind(delta: 1, index: findIndex) },
+              onPrevious: { advanceInChatFind(delta: -1, index: findIndex) },
+              onClose: { closeInChatFind() }
+            )
+            .padding(.top, 12)
+            .padding(.trailing, 18)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .zIndex(3)
           }
 
           ZStack {
@@ -308,6 +364,34 @@ struct MacChatPane: View {
         }
         .onChange(of: retainedConversations.map(\.id)) { _, ids in
           revealedConversationIDs.formIntersection(Set(ids.compactMap { $0 }))
+        }
+        .onChange(of: inChatFindRequestID) { _, _ in
+          showingInChatFind = true
+          inChatFindFocusToken &+= 1
+        }
+        .onChange(of: inChatFindNextRequestID) { _, _ in
+          guard showingInChatFind else { return }
+          advanceInChatFind(delta: 1, index: findIndex)
+        }
+        .onChange(of: inChatFindPreviousRequestID) { _, _ in
+          guard showingInChatFind else { return }
+          advanceInChatFind(delta: -1, index: findIndex)
+        }
+        .onChange(of: inChatFindQuery) { _, _ in
+          activeFindMatchIndex = 0
+          let updated = MacTranscriptFindSupport.search(
+            query: inChatFindQuery,
+            in: chats.conversation(conversationID)?.messages ?? []
+          )
+          if let first = updated.matches.first {
+            findScrollTarget = MacTranscriptFindScrollTarget(messageID: first.messageID)
+          }
+        }
+        .onChange(of: conversationID) { _, _ in
+          if showingInChatFind {
+            activeFindMatchIndex = 0
+            findScrollTarget = nil
+          }
         }
 
         VStack(spacing: 10) {
@@ -1065,6 +1149,103 @@ private struct MacProHeaderButton: View {
   }
 }
 
+private struct MacTranscriptFindScrollTarget: Equatable {
+  let token = UUID()
+  let messageID: ChatMessageID
+}
+
+private struct MacTranscriptFindBar: View {
+  @Binding var query: String
+  let focusToken: Int
+  let matchIndex: Int?
+  let totalMatches: Int
+  let onNext: () -> Void
+  let onPrevious: () -> Void
+  let onClose: () -> Void
+
+  @Environment(\.macAppTheme) private var theme
+  @FocusState private var isFocused: Bool
+
+  private var statusText: String {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+    guard totalMatches > 0, let matchIndex else { return "No matches" }
+    return "\(matchIndex + 1) of \(totalMatches)"
+  }
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "magnifyingglass")
+        .font(.system(size: 11.5, weight: .medium))
+        .foregroundStyle(theme.textMuted)
+
+      TextField("Find in conversation", text: $query)
+        .textFieldStyle(.plain)
+        .font(.system(size: 12.5))
+        .foregroundStyle(theme.textPrimary)
+        .frame(width: 170)
+        .focused($isFocused)
+        .onSubmit {
+          if NSEvent.modifierFlags.contains(.shift) {
+            onPrevious()
+          } else {
+            onNext()
+          }
+        }
+        .onExitCommand(perform: onClose)
+
+      if !statusText.isEmpty {
+        Text(statusText)
+          .font(.system(size: 11, weight: .medium))
+          .monospacedDigit()
+          .foregroundStyle(totalMatches == 0 ? theme.destructive : theme.textMuted)
+          .lineLimit(1)
+      }
+
+      Divider()
+        .frame(height: 14)
+
+      Button("Previous Match", systemImage: "chevron.up", action: onPrevious)
+        .labelStyle(.iconOnly)
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(theme.textMuted)
+        .buttonStyle(MacIconButtonStyle())
+        .disabled(totalMatches == 0)
+        .help("Previous match (⇧⌘G)")
+
+      Button("Next Match", systemImage: "chevron.down", action: onNext)
+        .labelStyle(.iconOnly)
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(theme.textMuted)
+        .buttonStyle(MacIconButtonStyle())
+        .disabled(totalMatches == 0)
+        .help("Next match (⌘G)")
+
+      Button("Close Find", systemImage: "xmark", action: onClose)
+        .labelStyle(.iconOnly)
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(theme.textMuted)
+        .buttonStyle(MacIconButtonStyle())
+        .help("Close find bar (Esc)")
+    }
+    .padding(.leading, 10)
+    .padding(.trailing, 6)
+    .padding(.vertical, 5)
+    .background(theme.surface, in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+        .stroke(theme.separator, lineWidth: 0.85)
+    }
+    .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+    .onAppear {
+      isFocused = true
+    }
+    .onChange(of: focusToken) { _, _ in
+      isFocused = true
+    }
+  }
+}
+
 private struct MacTranscriptView: View {
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
@@ -1074,6 +1255,7 @@ private struct MacTranscriptView: View {
   let bottomSpace: CGFloat
   let isActive: Bool
   let navigationTarget: MacTranscriptNavigationTarget?
+  let findScrollTarget: MacTranscriptFindScrollTarget?
   let chooseTarget: () -> Void
   let manageProviders: () -> Void
   let openChatSettings: () -> Void
@@ -1144,6 +1326,7 @@ private struct MacTranscriptView: View {
     bottomSpace: CGFloat,
     isActive: Bool,
     navigationTarget: MacTranscriptNavigationTarget?,
+    findScrollTarget: MacTranscriptFindScrollTarget? = nil,
     chooseTarget: @escaping () -> Void,
     manageProviders: @escaping () -> Void,
     openChatSettings: @escaping () -> Void,
@@ -1161,6 +1344,7 @@ private struct MacTranscriptView: View {
     self.bottomSpace = bottomSpace
     self.isActive = isActive
     self.navigationTarget = navigationTarget
+    self.findScrollTarget = findScrollTarget
     self.chooseTarget = chooseTarget
     self.manageProviders = manageProviders
     self.openChatSettings = openChatSettings
@@ -1197,6 +1381,7 @@ private struct MacTranscriptView: View {
   private var activeTargetMessageID: ChatMessageID? {
     if let pendingSourceMessageID { return pendingSourceMessageID }
     if let pendingScrollTarget { return pendingScrollTarget.messageID }
+    if let findScrollTarget { return findScrollTarget.messageID }
     if let navigationTarget, navigationTarget.request.conversationID == conversationID {
       return navigationTarget.request.messageID
     }
@@ -1397,6 +1582,11 @@ private struct MacTranscriptView: View {
           if isActive, hasCompletedInitialScroll {
             _ = scrollToPendingSourceMessageIfAvailable(proxy)
           }
+        }
+        .onChange(of: findScrollTarget) { _, target in
+          guard isActive, let target else { return }
+          followsLatest = false
+          pendingScrollTarget = PendingScrollTarget(messageID: target.messageID)
         }
         .task(id: pendingEarlierAnchorID) {
           guard let anchorID = pendingEarlierAnchorID else { return }
@@ -3173,7 +3363,14 @@ private struct MacTranscriptMessageRow: View {
   let onSaveImages: ([MacResponseImageCandidate]) -> Void
   let onRequestRegenerate: () -> Void
 
+  @Environment(\.macTranscriptFind) private var findContext
+  @Environment(\.macAppTheme) private var theme
   @State private var isHovered = false
+  @State private var isUnifiedSelectionMode = false
+
+  private var isActiveFindMessage: Bool {
+    findContext.isActive && findContext.activeMessageID == message.id
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: message.role == .user ? 4 : 8) {
@@ -3185,6 +3382,8 @@ private struct MacTranscriptMessageRow: View {
         message: message,
         failureContext: failureContext,
         isLatestAssistant: isLatestAssistant,
+        isUnifiedSelectionMode: isUnifiedSelectionMode,
+        onExitUnifiedSelection: { isUnifiedSelectionMode = false },
         onShowDetails: onShowDetails,
         onEditMessage: onEditMessage,
         onPreviewAttachment: onPreviewAttachment,
@@ -3208,13 +3407,27 @@ private struct MacTranscriptMessageRow: View {
           isLatestAssistant: isLatestAssistant,
           includeRetry: true,
           hideEmptyContentActions: message.status == .failed,
+          isUnifiedSelectionMode: isUnifiedSelectionMode,
+          onToggleUnifiedSelection: { isUnifiedSelectionMode.toggle() },
           onShowDetails: { onShowDetails(message) },
           onSaveImages: onSaveImages,
           onRequestRegenerate: onRequestRegenerate
         )
       }
     }
+    .padding(.leading, isActiveFindMessage ? 10 : 0)
+    .overlay(alignment: .leading) {
+      if isActiveFindMessage {
+        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+          .fill(theme.accent)
+          .frame(width: 3)
+          .padding(.vertical, 2)
+      }
+    }
     .onHover { isHovered = $0 }
+    .onChange(of: message.id) { _, _ in
+      isUnifiedSelectionMode = false
+    }
   }
 }
 
@@ -3434,6 +3647,8 @@ private struct MacAssistantMessageActions: View {
   let isLatestAssistant: Bool
   var includeRetry: Bool = true
   var hideEmptyContentActions: Bool = false
+  var isUnifiedSelectionMode: Bool = false
+  var onToggleUnifiedSelection: (() -> Void)? = nil
   let onShowDetails: () -> Void
   let onSaveImages: ([MacResponseImageCandidate]) -> Void
   let onRequestRegenerate: () -> Void
@@ -3482,8 +3697,22 @@ private struct MacAssistantMessageActions: View {
   }
 
   private var extractedSources: [MacAnswerSource] {
-    guard showContentActions, hasCopyableContent else { return [] }
-    return preparedAnswer?.sources ?? []
+    guard showContentActions else { return [] }
+    let textSources = hasCopyableContent ? (preparedAnswer?.sources ?? []) : []
+    return MacCitationSupport.mergedSources(
+      structuredCitations: message.citations,
+      extractedSources: textSources
+    )
+  }
+
+  private var hasStructuredBlocks: Bool {
+    guard let blocks = preparedAnswer?.blocks else { return false }
+    return blocks.contains { block in
+      switch block {
+      case .code, .table, .math: true
+      case .markdown: false
+      }
+    }
   }
 
   private var hasSavableImages: Bool {
@@ -3588,11 +3817,26 @@ private struct MacAssistantMessageActions: View {
     let hasSaveAttachments = conversationID != nil && !attachments.isEmpty
     let hasSaveResponse = conversationID != nil && showContentActions && hasCopyableContent
     let hasExportOrShare = showContentActions && hasCopyableContent
+    let canToggleUnifiedSelection =
+      onToggleUnifiedSelection != nil
+      && showContentActions
+      && hasCopyableContent
+      && (hasStructuredBlocks || isUnifiedSelectionMode)
     let hasTopSection =
-      hasReasoning || hasSavableImages
+      hasReasoning || canToggleUnifiedSelection || hasSavableImages
       || hasSaveResponse || hasSaveAttachments || hasExportOrShare
 
     return MacThemedActionPopoverContainer {
+      if canToggleUnifiedSelection, let onToggleUnifiedSelection {
+        MacThemedPopoverActionRow(
+          title: isUnifiedSelectionMode ? "Exit Unified Selection" : "Select Across Blocks",
+          systemImage: "selection.pin.in.out"
+        ) {
+          showingMorePopover = false
+          onToggleUnifiedSelection()
+        }
+      }
+
       if hasReasoning {
         MacThemedPopoverActionRow(
           title: "Copy Reasoning",

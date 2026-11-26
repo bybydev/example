@@ -88,14 +88,68 @@ struct ThinkingTextPartWire: Decodable {
   var text: String?
 }
 
+struct URLCitationWire: Decodable {
+  var url: String?
+  var title: String?
+  var content: String?
+  var startIndex: Int?
+  var endIndex: Int?
+
+  enum CodingKeys: String, CodingKey {
+    case url, title, content
+    case startIndex = "start_index"
+    case endIndex = "end_index"
+  }
+}
+
+struct MessageAnnotationWire: Decodable {
+  var type: String?
+  var urlCitation: URLCitationWire?
+  var url: String?
+  var title: String?
+  var content: String?
+  var startIndex: Int?
+  var endIndex: Int?
+
+  enum CodingKeys: String, CodingKey {
+    case type, url, title, content
+    case urlCitation = "url_citation"
+    case startIndex = "start_index"
+    case endIndex = "end_index"
+  }
+
+  var normalizedCitation: ChatCitation? {
+    if let nested = urlCitation, let url = nested.url, !url.isEmpty {
+      return ChatCitation(
+        url: url,
+        title: nested.title,
+        snippet: nested.content,
+        startIndex: nested.startIndex,
+        endIndex: nested.endIndex
+      )
+    }
+    if type == "url_citation", let url, !url.isEmpty {
+      return ChatCitation(
+        url: url,
+        title: title,
+        snippet: content,
+        startIndex: startIndex,
+        endIndex: endIndex
+      )
+    }
+    return nil
+  }
+}
+
 struct ChatCompletionMessageWire: Decodable {
   var content: MessageContentWire?
   var reasoning: String?
   var reasoningContent: String?
   var reasoningDetails: [ReasoningDetailWire]?
   var toolCalls: [ToolCallWire]?
+  var annotations: [MessageAnnotationWire]?
   enum CodingKeys: String, CodingKey {
-    case content, reasoning
+    case content, reasoning, annotations
     case reasoningContent = "reasoning_content"
     case reasoningDetails = "reasoning_details"
     case toolCalls = "tool_calls"
@@ -210,18 +264,21 @@ struct ChatCompletionDeltaWire: Decodable {
   var reasoningContent: String?
   var reasoningDetails: [ReasoningDetailWire]?
   var toolCalls: [ToolCallWire]?
+  var annotations: [MessageAnnotationWire]?
   init(
     content: MessageContentWire? = nil, reasoning: String? = nil, reasoningContent: String? = nil,
-    reasoningDetails: [ReasoningDetailWire]? = nil, toolCalls: [ToolCallWire]? = nil
+    reasoningDetails: [ReasoningDetailWire]? = nil, toolCalls: [ToolCallWire]? = nil,
+    annotations: [MessageAnnotationWire]? = nil
   ) {
     self.content = content
     self.reasoning = reasoning
     self.reasoningContent = reasoningContent
     self.reasoningDetails = reasoningDetails
     self.toolCalls = toolCalls
+    self.annotations = annotations
   }
   enum CodingKeys: String, CodingKey {
-    case content, reasoning
+    case content, reasoning, annotations
     case reasoningContent = "reasoning_content"
     case reasoningDetails = "reasoning_details"
     case toolCalls = "tool_calls"
@@ -380,6 +437,7 @@ struct ChatCompletionResponse: Decodable {
   var provider: String?
   var serviceTier: String?
   var choices: [ChatCompletionChoiceWire]
+  var citations: [String]?
   var usage: UsageWire?
   var xGroq: XGroqWire?
   var error: ProviderErrorWire?
@@ -390,12 +448,13 @@ struct ChatCompletionResponse: Decodable {
     provider = try c.decodeIfPresent(String.self, forKey: .provider)
     serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
     choices = try c.decodeIfPresent([ChatCompletionChoiceWire].self, forKey: .choices) ?? []
+    citations = try? c.decodeIfPresent([String].self, forKey: .citations)
     xGroq = try c.decodeIfPresent(XGroqWire.self, forKey: .xGroq)
     usage = try c.decodeIfPresent(UsageWire.self, forKey: .usage) ?? xGroq?.usage
     error = try c.decodeIfPresent(ProviderErrorWire.self, forKey: .error)
   }
   private enum CodingKeys: String, CodingKey {
-    case id, model, provider, choices, usage, error
+    case id, model, provider, choices, citations, usage, error
     case serviceTier = "service_tier"
     case xGroq = "x_groq"
   }

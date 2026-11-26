@@ -198,6 +198,7 @@ public struct ProviderResponse: Sendable, Equatable {
   public var metadata: [String: String]
   public var toolCalls: [ChatToolCall]
   public var toolContinuation: ProviderToolContinuation?
+  public var citations: [ChatCitation]
   public init(
     id: String? = nil,
     text: String,
@@ -209,7 +210,8 @@ public struct ProviderResponse: Sendable, Equatable {
     usage: ProviderUsage? = nil,
     metadata: [String: String] = [:],
     toolCalls: [ChatToolCall] = [],
-    toolContinuation: ProviderToolContinuation? = nil
+    toolContinuation: ProviderToolContinuation? = nil,
+    citations: [ChatCitation] = []
   ) {
     self.id = id
     self.text = text
@@ -222,6 +224,7 @@ public struct ProviderResponse: Sendable, Equatable {
     self.metadata = metadata
     self.toolCalls = toolCalls
     self.toolContinuation = toolContinuation
+    self.citations = citations
   }
 }
 

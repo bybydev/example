@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MacStreamingRenderedContentView: View {
@@ -39,9 +40,9 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
       } else if isComplete {
         // Stable code is highlighted once. MacHighlightedCodeText shows plain
         // monospaced source until the asynchronous highlight is ready.
-        MacHighlightedCodeBlock(language: language, content: content)
+        MacHighlightedCodeBlock(language: language, content: content, textSize: textSize)
       } else {
-        MacStreamingCodeSourceView(language: language, content: content)
+        MacStreamingCodeSourceView(language: language, content: content, textSize: textSize)
       }
 
     case .math(let expression, let isComplete):
@@ -57,31 +58,50 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
   }
 }
 
-/// The mutable suffix deliberately avoids every rich renderer. This keeps
-/// Markdown parsing, syntax highlighting, Mermaid layout, and LaTeX conversion
-/// out of the per-token path. A tail may change representation once when it
-/// becomes stable; until then readable source is preferred over rich output.
+/// The mutable suffix avoids heavy full-document MarkdownUI / LaTeX / syntax
+/// highlighters on every token, while applying lightweight progressive inline
+/// Markdown formatting (`**bold**`, `*italic*`, `` `code` ``, `[links](url)`,
+/// headings, lists, and blockquotes) so completed paragraphs don't visibly pop.
 private struct MacStreamingTailBlockView: View {
   let block: MacAnswerContentBlock
   let textSize: CGFloat
   let muted: Bool
 
+  @Environment(\.macAppTheme) private var theme
+
   @ViewBuilder
   var body: some View {
     switch block {
     case .markdown(let source):
-      Text(stabilizedTailText(source))
-        .font(.system(size: textSize))
-        .foregroundStyle(muted ? MacDesignTokens.Colors.textMuted : MacDesignTokens.Colors.textPrimary)
+      let formatted = MacStreamingTailFormatter.formattedAttributedString(
+        source,
+        textSize: textSize,
+        foregroundColor: muted ? theme.textMuted : theme.textPrimary,
+        mutedColor: theme.textMuted,
+        accentColor: theme.accent,
+        codeBackground: theme.codeSurface.opacity(0.85)
+      )
+      Text(formatted)
+        .lineSpacing(textSize * 0.18)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .environment(
+          \.openURL,
+          OpenURLAction { url in
+            guard MacAnswerContentParser.isValidBrowsableURL(url) else {
+              return .systemAction
+            }
+            NSWorkspace.shared.open(url)
+            return .handled
+          }
+        )
 
     case .code(let language, let content, _):
       if MacAnswerContentParser.isMermaidLanguage(language) {
         MacMermaidAnswerView(source: content, isComplete: false)
       } else {
-        MacStreamingCodeSourceView(language: language, content: content)
+        MacStreamingCodeSourceView(language: language, content: content, textSize: textSize)
       }
 
     case .math(let expression, _):
@@ -91,48 +111,19 @@ private struct MacStreamingTailBlockView: View {
       MacStreamingTableSourceView(rawMarkdown: table.rawMarkdown)
     }
   }
-
-  private func stabilizedTailText(_ source: String) -> String {
-    guard !MacAnswerContentParser.isLikelyBalancedInlineMath(source) else { return source }
-
-    var lastUnescapedDollar: String.Index?
-    var escaped = false
-    for index in source.indices {
-      let character = source[index]
-      if escaped {
-        escaped = false
-        continue
-      }
-      if character == "\\" {
-        escaped = true
-      } else if character == "$" {
-        lastUnescapedDollar = index
-      }
-    }
-
-    if let start = lastUnescapedDollar {
-      return String(source[..<start]) + "…"
-    }
-
-    if let range = source.range(of: "\\(", options: .backwards),
-      source.range(of: "\\)", range: range.upperBound..<source.endIndex) == nil
-    {
-      return String(source[..<range.lowerBound]) + "…"
-    }
-
-    return source
-  }
 }
 
 private struct MacStreamingCodeSourceView: View {
   let language: String?
   let content: String
+  var textSize: CGFloat = 15
 
   var body: some View {
     MacHighlightedCodeBlock(
       language: language,
       content: content,
-      isStreaming: true
+      isStreaming: true,
+      textSize: textSize
     )
   }
 }

@@ -156,7 +156,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
       toolContinuation: geminiContinuation(
         signatures: output.toolSignatures,
         hasToolCalls: !output.toolCalls.isEmpty
-      )
+      ),
+      citations: output.citations
     )
   }
 
@@ -193,6 +194,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
           var completed = false
           var toolCalls: [ChatToolCall] = []
           var toolSignatures: [String: String] = [:]
+          var citations: [ChatCitation] = []
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -208,7 +210,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
                 modelVersion: &modelVersion,
                 completed: &completed,
                 toolCalls: &toolCalls,
-                toolSignatures: &toolSignatures
+                toolSignatures: &toolSignatures,
+                citations: &citations
               )
             }
           }
@@ -224,7 +227,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
               modelVersion: &modelVersion,
               completed: &completed,
               toolCalls: &toolCalls,
-              toolSignatures: &toolSignatures
+              toolSignatures: &toolSignatures,
+              citations: &citations
             )
           }
 
@@ -252,7 +256,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
                 toolContinuation: geminiContinuation(
                   signatures: toolSignatures,
                   hasToolCalls: !toolCalls.isEmpty
-                )
+                ),
+                citations: citations
               )
             )
           )
@@ -276,7 +281,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     modelVersion: inout String?,
     completed: inout Bool,
     toolCalls: inout [ChatToolCall],
-    toolSignatures: inout [String: String]
+    toolSignatures: inout [String: String],
+    citations: inout [ChatCitation]
   ) throws {
     guard let payload = event.data.data(using: .utf8) else { throw ProviderError.invalidResponse }
     let decoded: GeminiGenerateResponse
@@ -319,6 +325,11 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         if let signature = part.thoughtSignature, !signature.isEmpty {
           toolSignatures[call.id] = signature
         }
+      }
+    }
+    if let grounding = decoded.candidates.first?.groundingMetadata {
+      for citation in extractCitations(from: grounding) where !citations.contains(citation) {
+        citations.append(citation)
       }
     }
     if let finish = decoded.candidates.first?.finishReason {
@@ -621,7 +632,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     text: String,
     reasoning: String,
     toolCalls: [ChatToolCall],
-    toolSignatures: [String: String]
+    toolSignatures: [String: String],
+    citations: [ChatCitation]
   ) {
     var text = ""
     var reasoning = ""
@@ -639,7 +651,51 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         }
       }
     }
-    return (text, reasoning, toolCalls, signatures)
+    let citations = response.candidates.first?.groundingMetadata
+      .map { extractCitations(from: $0) } ?? []
+    return (text, reasoning, toolCalls, signatures, citations)
+  }
+
+  private func extractCitations(from metadata: GeminiGroundingMetadata) -> [ChatCitation] {
+    let chunks = metadata.groundingChunks ?? []
+    guard !chunks.isEmpty else { return [] }
+
+    var citations: [ChatCitation] = []
+    var supportedChunkIndices = Set<Int>()
+
+    for support in metadata.groundingSupports ?? [] {
+      let startIndex = support.segment?.startIndex
+      let endIndex = support.segment?.endIndex
+      let snippet = support.segment?.text
+      for chunkIndex in support.groundingChunkIndices ?? [] {
+        guard chunkIndex >= 0, chunkIndex < chunks.count,
+          let web = chunks[chunkIndex].web,
+          let uri = web.uri,
+          !uri.isEmpty
+        else { continue }
+        supportedChunkIndices.insert(chunkIndex)
+        let citation = ChatCitation(
+          url: uri,
+          title: web.title,
+          snippet: snippet,
+          startIndex: startIndex,
+          endIndex: endIndex
+        )
+        if !citations.contains(citation) {
+          citations.append(citation)
+        }
+      }
+    }
+
+    for (index, chunk) in chunks.enumerated() where !supportedChunkIndices.contains(index) {
+      guard let web = chunk.web, let uri = web.uri, !uri.isEmpty else { continue }
+      let citation = ChatCitation(url: uri, title: web.title)
+      if !citations.contains(citation) {
+        citations.append(citation)
+      }
+    }
+
+    return citations
   }
 
   private func normalizedToolCall(_ value: GeminiFunctionCall, index: Int) throws -> ChatToolCall {
@@ -770,6 +826,32 @@ private struct GeminiPromptFeedback: Decodable {
 private struct GeminiCandidate: Decodable {
   var content: GeminiContent?
   var finishReason: String?
+  var groundingMetadata: GeminiGroundingMetadata?
+}
+
+private struct GeminiGroundingMetadata: Decodable {
+  var groundingChunks: [GeminiGroundingChunk]?
+  var groundingSupports: [GeminiGroundingSupport]?
+}
+
+private struct GeminiGroundingChunk: Decodable {
+  var web: GeminiGroundingWeb?
+}
+
+private struct GeminiGroundingWeb: Decodable {
+  var uri: String?
+  var title: String?
+}
+
+private struct GeminiGroundingSupport: Decodable {
+  var segment: GeminiGroundingSegment?
+  var groundingChunkIndices: [Int]?
+}
+
+private struct GeminiGroundingSegment: Decodable {
+  var startIndex: Int?
+  var endIndex: Int?
+  var text: String?
 }
 
 private struct GeminiContent: Decodable {

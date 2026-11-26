@@ -152,6 +152,9 @@ final class MacAppModel {
 
   private(set) var newChatRequestID = 0
   private(set) var conversationSearchRequestID = 0
+  private(set) var inChatFindRequestID = 0
+  private(set) var inChatFindNextRequestID = 0
+  private(set) var inChatFindPreviousRequestID = 0
   private(set) var sidebarToggleRequestID = 0
   private(set) var exportMarkdownRequestID = 0
   private(set) var runtimeGeneration = 0
@@ -428,6 +431,21 @@ final class MacAppModel {
   func requestConversationSearch() {
     guard isReady else { return }
     conversationSearchRequestID &+= 1
+  }
+
+  func requestInChatFind() {
+    guard isReady else { return }
+    inChatFindRequestID &+= 1
+  }
+
+  func requestInChatFindNext() {
+    guard isReady else { return }
+    inChatFindNextRequestID &+= 1
+  }
+
+  func requestInChatFindPrevious() {
+    guard isReady else { return }
+    inChatFindPreviousRequestID &+= 1
   }
 
   func requestSidebarToggle() {

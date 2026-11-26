@@ -46,14 +46,23 @@ enum MacSidebarPinStore {
 @MainActor
 @Observable
 final class MacPreferencesModel {
+  static let defaultTranscriptFontSize: Double = 15
+  static let minimumTranscriptFontSize: Double = 12
+  static let maximumTranscriptFontSize: Double = 22
+
   private enum Key {
     static let defaultSystemPrompt = "defaultSystemPrompt"
+    static let transcriptFontSize = "byokchat.transcriptFontSize"
   }
 
   private let defaults: UserDefaults
 
   static func normalizedSystemPrompt(_ value: String) -> String {
     value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  static func clampedTranscriptFontSize(_ value: Double) -> Double {
+    min(max(value.rounded(), minimumTranscriptFontSize), maximumTranscriptFontSize)
   }
 
   var defaultSystemPrompt: String {
@@ -72,6 +81,38 @@ final class MacPreferencesModel {
     !Self.normalizedSystemPrompt(defaultSystemPrompt).isEmpty
   }
 
+  var transcriptFontSize: Double {
+    didSet {
+      let clamped = Self.clampedTranscriptFontSize(transcriptFontSize)
+      if transcriptFontSize != clamped {
+        transcriptFontSize = clamped
+        return
+      }
+      guard oldValue != transcriptFontSize else { return }
+      defaults.set(transcriptFontSize, forKey: Key.transcriptFontSize)
+    }
+  }
+
+  var canIncreaseTranscriptFontSize: Bool {
+    transcriptFontSize < Self.maximumTranscriptFontSize
+  }
+
+  var canDecreaseTranscriptFontSize: Bool {
+    transcriptFontSize > Self.minimumTranscriptFontSize
+  }
+
+  func increaseTranscriptFontSize() {
+    transcriptFontSize = Self.clampedTranscriptFontSize(transcriptFontSize + 1)
+  }
+
+  func decreaseTranscriptFontSize() {
+    transcriptFontSize = Self.clampedTranscriptFontSize(transcriptFontSize - 1)
+  }
+
+  func resetTranscriptFontSize() {
+    transcriptFontSize = Self.defaultTranscriptFontSize
+  }
+
   var shareUsageData: Bool {
     didSet {
       guard oldValue != shareUsageData else { return }
@@ -86,6 +127,10 @@ final class MacPreferencesModel {
     defaultSystemPrompt = Self.normalizedSystemPrompt(
       defaults.string(forKey: Key.defaultSystemPrompt) ?? ""
     )
+    let storedFontSize = defaults.object(forKey: Key.transcriptFontSize) as? Double
+    transcriptFontSize = Self.clampedTranscriptFontSize(
+      storedFontSize ?? Self.defaultTranscriptFontSize
+    )
     shareUsageData = MacAppAnalytics.shareUsageDataPreference(in: defaults)
   }
 
@@ -99,6 +144,7 @@ final class MacPreferencesModel {
 
   func reset() {
     defaultSystemPrompt = ""
+    transcriptFontSize = Self.defaultTranscriptFontSize
     clearPinnedConversations()
   }
 }
