@@ -95,78 +95,6 @@ struct MacProAccessTests {
     )
   }
 
-  @Test("Free backup restore restricts only restored overflow and frees slots dynamically")
-  func restoredOverflowPolicy() {
-    let suite = "MacProAccessTests.restoredOverflow.\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
-    defer { defaults.removePersistentDomain(forName: suite) }
-    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
-
-    let p1 = ProviderAccountID(rawValue: "p1")
-    let p2 = ProviderAccountID(rawValue: "p2")
-    let project1 = ProjectID(rawValue: "project-1")
-    let project2 = ProjectID(rawValue: "project-2")
-    let server1 = MCPServerID(rawValue: "server-1")
-    let server2 = MCPServerID(rawValue: "server-2")
-
-    restrictions.recordFullBackupImport(
-      before: MacProResourceSnapshot(),
-      after: MacProResourceSnapshot(
-        providerAccountIDs: [p1.rawValue, p2.rawValue],
-        projectIDs: [project1.rawValue, project2.rawValue],
-        mcpServerIDs: [server1.rawValue, server2.rawValue]
-      ),
-      strategy: .replaceExisting,
-      entitlement: .free
-    )
-
-    #expect(!restrictions.isProviderRestricted(p1, currentIDs: [p1, p2], entitlement: .free))
-    #expect(restrictions.isProviderRestricted(p2, currentIDs: [p1, p2], entitlement: .free))
-    #expect(!restrictions.isProjectRestricted(project1, currentIDs: [project1, project2], entitlement: .free))
-    #expect(restrictions.isProjectRestricted(project2, currentIDs: [project1, project2], entitlement: .free))
-    #expect(!restrictions.isMCPServerRestricted(server1, currentIDs: [server1, server2], entitlement: .free))
-    #expect(restrictions.isMCPServerRestricted(server2, currentIDs: [server1, server2], entitlement: .free))
-
-    // Deleting the first restored provider frees the one Free slot for the next
-    // restored candidate without deleting or rewriting the backup-restored data.
-    #expect(!restrictions.isProviderRestricted(p2, currentIDs: [p2], entitlement: .free))
-    #expect(!restrictions.isProjectRestricted(project2, currentIDs: [project2], entitlement: .pro))
-  }
-
-  @Test("Old saved-file restrictions are cleared without unlocking other Pro resources")
-  func clearsLegacyLibraryRestrictions() {
-    let suite = "MacProAccessTests.legacyLibrary.\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
-    defer { defaults.removePersistentDomain(forName: suite) }
-    defaults.set(["saved-file"], forKey: "test.library")
-    defaults.set(["provider"], forKey: "test.providers")
-
-    _ = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
-
-    #expect(defaults.object(forKey: "test.library") == nil)
-    #expect(defaults.stringArray(forKey: "test.providers") == ["provider"])
-  }
-
-  @Test("Merge restore never locks resources that existed before import")
-  func mergeRestorePreservesExistingResources() {
-    let suite = "MacProAccessTests.mergeRestore.\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
-    defer { defaults.removePersistentDomain(forName: suite) }
-    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
-
-    let existing = ProviderAccountID(rawValue: "existing")
-    let imported = ProviderAccountID(rawValue: "imported")
-    restrictions.recordFullBackupImport(
-      before: MacProResourceSnapshot(providerAccountIDs: [existing.rawValue]),
-      after: MacProResourceSnapshot(providerAccountIDs: [existing.rawValue, imported.rawValue]),
-      strategy: .keepExisting,
-      entitlement: .free
-    )
-
-    #expect(!restrictions.isProviderRestricted(existing, currentIDs: [existing, imported], entitlement: .free))
-    #expect(restrictions.isProviderRestricted(imported, currentIDs: [existing, imported], entitlement: .free))
-  }
-
   @Test("MAF preserves a Pro preference while Free users see the GitHub fallback")
   func themeEntitlementFallback() {
     let suite = "MacProAccessTests.theme.\(UUID().uuidString)"
@@ -439,7 +367,6 @@ struct MacAIProvidersFeatureTests {
   func providerPresentationStates() {
     #expect(MacProviderPresentationState.ready.rawValue == "Ready")
     #expect(MacProviderPresentationState.disabled.rawValue == "Disabled")
-    #expect(MacProviderPresentationState.proRequired.rawValue == "Pro required")
     #expect(MacProviderPresentationState.credentialRequired.rawValue == "Credential required")
     #expect(MacProviderPresentationState.modelRequired.rawValue == "Model required")
   }

@@ -172,85 +172,6 @@ struct MacMCPModelTests {
     #expect(fixture.model.inheritsProjectTools(conversationID))
   }
 
-  @Test("Restored MCP overflow cannot be activated or configured and unlocks after deletion")
-  func restoredMCPOverflowModelBoundary() async throws {
-    let suiteName = "byok-mac-mcp-restrictions-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
-    defer { defaults.removePersistentDomain(forName: suiteName) }
-    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
-    let fixture = try await MacMCPFixture.make(
-      restrictions: restrictions,
-      entitlementAccessOverride: .free
-    )
-
-    let first = MCPRemoteServer(
-      id: "free-server",
-      name: "Free Server",
-      endpoint: URL(string: "https://free.example.com/mcp")!,
-      isEnabled: false
-    )
-    let second = MCPRemoteServer(
-      id: "overflow-server",
-      name: "Overflow Server",
-      endpoint: URL(string: "https://overflow.example.com/mcp")!,
-      isEnabled: false
-    )
-    try await fixture.workspace.upsertServer(first)
-    try await fixture.workspace.upsertServer(second)
-    restrictions.recordFullBackupImport(
-      before: MacProResourceSnapshot(),
-      after: MacProResourceSnapshot(
-        mcpServerIDs: [first.id.rawValue, second.id.rawValue]
-      ),
-      strategy: .replaceExisting,
-      entitlement: .free
-    )
-    await fixture.model.reloadFromStorage()
-
-    #expect(!fixture.model.isServerRestricted(first.id))
-    #expect(fixture.model.isServerRestricted(second.id))
-
-    let edited = await fixture.model.saveServer(
-      existing: second,
-      name: "Blocked Edit",
-      endpoint: second.endpoint.absoluteString,
-      authenticationKind: .none,
-      authenticationHeader: "",
-      credential: nil,
-      additionalHeaders: [:],
-      isEnabled: false
-    )
-    #expect(!edited)
-    #expect(!(await fixture.model.setEnabled(true, serverID: second.id)))
-    #expect(!(await fixture.model.refresh(second.id)))
-    #expect(
-      !(await fixture.model.setChatServerEnabled(
-        true,
-        serverID: second.id,
-        conversationID: "restricted-chat"
-      ))
-    )
-    #expect(
-      !(await fixture.model.applyChatConfiguration(
-        MCPChatToolConfiguration(enabledServerIDs: [second.id]),
-        conversationID: "restricted-chat"
-      ))
-    )
-    #expect(fixture.model.errorMessage != nil)
-
-    // Teardown remains available while the server is restricted.
-    #expect(
-      await fixture.model.applyChatConfiguration(
-        MCPChatToolConfiguration(),
-        conversationID: "restricted-chat"
-      )
-    )
-    #expect(await fixture.model.deleteServer(first.id))
-
-    #expect(!fixture.model.isServerRestricted(second.id))
-    #expect(await fixture.model.setEnabled(true, serverID: second.id))
-  }
-
   @Test("Deleting an MCP server removes stale project references and notifies project observer")
   func deleteServerRemovesProjectReferences() async throws {
     let fixture = try await MacMCPFixture.make()
@@ -420,16 +341,9 @@ struct MacMCPModelTests {
     #expect(disabledStandalone.configuration == nil)
   }
 
-  @Test("Draft preset application filters unknown servers, strips Ask policies, and enforces Pro limits")
-  func draftPresetApplicationAndProBoundary() async throws {
-    let suiteName = "byok-mac-mcp-draft-preset-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
-    defer { defaults.removePersistentDomain(forName: suiteName) }
-    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
-    let fixture = try await MacMCPFixture.make(
-      restrictions: restrictions,
-      entitlementAccessOverride: .free
-    )
+  @Test("Draft preset application filters unknown servers and strips Ask policies")
+  func draftPresetApplication() async throws {
+    let fixture = try await MacMCPFixture.make()
 
     let allowedServer = MCPRemoteServer(
       id: "allowed-server",
@@ -437,22 +351,7 @@ struct MacMCPModelTests {
       endpoint: URL(string: "https://allowed.example.com/mcp")!,
       isEnabled: true
     )
-    let restrictedServer = MCPRemoteServer(
-      id: "restricted-server",
-      name: "Restricted",
-      endpoint: URL(string: "https://restricted.example.com/mcp")!,
-      isEnabled: true
-    )
     try await fixture.workspace.upsertServer(allowedServer)
-    try await fixture.workspace.upsertServer(restrictedServer)
-    restrictions.recordFullBackupImport(
-      before: MacProResourceSnapshot(),
-      after: MacProResourceSnapshot(
-        mcpServerIDs: [allowedServer.id.rawValue, restrictedServer.id.rawValue]
-      ),
-      strategy: .replaceExisting,
-      entitlement: .free
-    )
     await fixture.model.reloadFromStorage()
 
     let preset = MCPChatToolConfiguration(
@@ -467,18 +366,9 @@ struct MacMCPModelTests {
     #expect(applied.configuration?.enabledServerIDs == [allowedServer.id])
     #expect(applied.configuration?.toolPolicies == ["mcp_allowed_read": .alwaysAllow])
     #expect(fixture.model.statusMessage == "Tool configuration applied")
-
-    let blocked = fixture.model.validatedDraftPresetConfiguration(
-      MCPChatToolConfiguration(enabledServerIDs: [restrictedServer.id]),
-      projectID: nil
-    )
-    #expect(!blocked.succeeded)
-    #expect(fixture.model.errorMessage != nil)
-    #expect(fixture.model.consumeErrorMessage() != nil)
-    #expect(fixture.model.errorMessage == nil)
   }
 
-  @Test("activeToolCount excludes disabled servers, missing credentials, restricted servers, and disabled tools")
+  @Test("activeToolCount excludes disabled servers, missing credentials, and disabled tools")
   func activeToolCountReflectsUsableServersAndTools() async throws {
     let fixture = try await MacMCPFixture.make()
     let readyServer = MCPRemoteServer(
@@ -612,9 +502,7 @@ private struct MacMCPFixture {
   let model: MacMCPModel
 
   static func make(
-    transport: any ProviderHTTPTransport = FailingMCPTransport(),
-    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
-    entitlementAccessOverride: MacProEntitlementAccess? = nil
+    transport: any ProviderHTTPTransport = FailingMCPTransport()
   ) async throws -> MacMCPFixture {
     let persistence = FailingMacMCPWorkspacePersistence()
     let workspace = MCPWorkspaceStore(persistence: persistence)
@@ -639,9 +527,7 @@ private struct MacMCPFixture {
       credentialVault: vault,
       projectWorkspace: projectWorkspace,
       approvals: approvals,
-      elicitations: elicitations,
-      restrictions: restrictions,
-      entitlementAccessOverride: entitlementAccessOverride
+      elicitations: elicitations
     )
     try await model.load()
 

@@ -84,8 +84,6 @@ enum MacProjectDefaultsSummary {
       if let account = providers.account(accountID) {
         if !account.isEnabled {
           accountStatus = ("\(account.label) (Disabled)", true)
-        } else if providers.isProviderRestricted(accountID) {
-          accountStatus = ("\(account.label) (Pro Required)", true)
         } else {
           accountStatus = (account.label, false)
         }
@@ -310,7 +308,6 @@ struct MacProjectsWorkspaceView: View {
                 .padding(.top, 80)
             } else {
               ForEach(visibleProjects) { project in
-                let isRestricted = workspace.isProjectRestricted(project.id)
                 let defaultsStatus = MacProjectDefaultsSummary.evaluate(
                   project: project,
                   providers: providers
@@ -319,11 +316,9 @@ struct MacProjectsWorkspaceView: View {
                   project: project,
                   activitySummary: projectActivitySummary(project),
                   defaultsStatus: defaultsStatus,
-                  isRestricted: isRestricted,
                   openProject: { selectedProjectID = project.id },
                   startNewChat: { _ = startNewChat(project.id, nil) },
                   editProject: { editIdentityProject = project },
-                  requestUpgrade: { MacProAccess.requestUpgrade(.projects) },
                   requestDelete: { deleteProject = project }
                 )
               }
@@ -382,11 +377,9 @@ private struct MacProjectHomeCard: View {
   let project: ChatProject
   let activitySummary: String
   let defaultsStatus: MacProjectDefaultsSummary.Status
-  let isRestricted: Bool
   let openProject: () -> Void
   let startNewChat: () -> Void
   let editProject: () -> Void
-  let requestUpgrade: () -> Void
   let requestDelete: () -> Void
 
   @State private var isHovered = false
@@ -397,7 +390,6 @@ private struct MacProjectHomeCard: View {
       Button(action: openProject) {
         HStack(spacing: 12) {
           MacProjectWorkspaceIcon(project: project, size: 42)
-            .opacity(isRestricted ? 0.65 : 1)
 
           VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
@@ -405,14 +397,6 @@ private struct MacProjectHomeCard: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(MacDesignTokens.Colors.textPrimary)
                 .lineLimit(1)
-              if isRestricted {
-                Label("Pro", systemImage: "crown.fill")
-                  .font(.caption2.weight(.semibold))
-                  .foregroundStyle(.orange)
-                  .padding(.horizontal, 6)
-                  .padding(.vertical, 1.5)
-                  .background(Color.orange.opacity(0.14), in: Capsule())
-              }
               Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(MacDesignTokens.Colors.textMuted)
@@ -446,22 +430,13 @@ private struct MacProjectHomeCard: View {
       }
       .buttonStyle(.plain)
 
-      if isRestricted {
-        Button("Upgrade", systemImage: "crown.fill", action: requestUpgrade)
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-      } else {
-        Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-      }
+      Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
 
       Menu {
         Button("Open Project", systemImage: "arrow.right.circle", action: openProject)
-        if !isRestricted {
-          Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
-          Button("Edit Project…", systemImage: "pencil", action: editProject)
-        } else {
-          Button("Upgrade to Pro…", systemImage: "crown.fill", action: requestUpgrade)
-        }
+        Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+        Button("Edit Project…", systemImage: "pencil", action: editProject)
         Divider()
         Button("Delete Project…", systemImage: "trash", role: .destructive, action: requestDelete)
       } label: {
@@ -492,12 +467,8 @@ private struct MacProjectHomeCard: View {
     .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
     .contextMenu {
       Button("Open Project", action: openProject)
-      if !isRestricted {
-        Button("New Chat", action: startNewChat)
-        Button("Edit Project…", action: editProject)
-      } else {
-        Button("Upgrade to Pro…", action: requestUpgrade)
-      }
+      Button("New Chat", action: startNewChat)
+      Button("Edit Project…", action: editProject)
       Divider()
       Button("Delete Project", role: .destructive, action: requestDelete)
     }
@@ -517,19 +488,10 @@ private struct MacProjectWorkspaceDetailView: View {
 
   @State private var section: MacProjectWorkspaceSection = .overview
 
-  private var isRestricted: Bool {
-    workspace.isProjectRestricted(project.id)
-  }
-
   var body: some View {
     VStack(spacing: 0) {
       detailHeader
       Divider()
-
-      if isRestricted {
-        restrictedBanner
-        Divider()
-      }
 
       MacSegmentedControl(
         options: MacProjectWorkspaceSection.allCases,
@@ -546,7 +508,6 @@ private struct MacProjectWorkspaceDetailView: View {
             project: project,
             workspace: workspace,
             providers: providers,
-            isRestricted: isRestricted,
             startNewChat: startNewChat,
             requestDelete: requestDelete
           )
@@ -556,22 +517,19 @@ private struct MacProjectWorkspaceDetailView: View {
             workspace: workspace,
             chats: chats,
             mcp: mcp,
-            isRestricted: isRestricted,
             openChat: openChat,
             startNewChat: { startNewChat(nil) }
           )
         case .sources:
           MacProjectSourcesWorkspaceView(
             project: project,
-            workspace: workspace,
-            isRestricted: isRestricted
+            workspace: workspace
           )
         case .tools:
           MacProjectToolsWorkspaceView(
             project: project,
             workspace: workspace,
-            mcp: mcp,
-            isRestricted: isRestricted
+            mcp: mcp
           )
         }
       }
@@ -581,34 +539,6 @@ private struct MacProjectWorkspaceDetailView: View {
     .onChange(of: project.id) { _, _ in
       section = .overview
     }
-  }
-
-  private var restrictedBanner: some View {
-    HStack(spacing: 12) {
-      Image(systemName: "crown.fill")
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(.orange)
-        .accessibilityHidden(true)
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text("This restored project requires BYOK Pro")
-          .font(.system(size: 12.5, weight: .semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-        Text("Upgrade to BYOK Pro to edit or start chats in this project, or delete another project to free a slot.")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      }
-
-      Spacer(minLength: 8)
-
-      Button("Upgrade to Pro") {
-        MacProAccess.requestUpgrade(.projects)
-      }
-      .buttonStyle(MacActionButtonStyle(.primary, size: .small))
-    }
-    .padding(.horizontal, 18)
-    .padding(.vertical, 10)
-    .background(Color.orange.opacity(0.08))
   }
 
   private var detailHeader: some View {
@@ -629,14 +559,6 @@ private struct MacProjectWorkspaceDetailView: View {
           Text(project.name)
             .font(.title3.weight(.semibold))
             .lineLimit(1)
-          if isRestricted {
-            Label("Pro", systemImage: "crown.fill")
-              .font(.caption2.weight(.semibold))
-              .foregroundStyle(.orange)
-              .padding(.horizontal, 6)
-              .padding(.vertical, 1.5)
-              .background(Color.orange.opacity(0.14), in: Capsule())
-          }
         }
         Text(projectSummary)
           .font(.caption)
@@ -649,7 +571,6 @@ private struct MacProjectWorkspaceDetailView: View {
         startNewChat(nil)
       }
       .buttonStyle(MacActionButtonStyle(.primary))
-      .disabled(isRestricted)
 
       Menu {
         Button("Overview", systemImage: "rectangle.grid.1x2") { section = .overview }
@@ -693,7 +614,6 @@ private struct MacProjectOverviewView: View {
   let project: ChatProject
   @Bindable var workspace: MacWorkspaceModel
   @Bindable var providers: MacProviderModel
-  let isRestricted: Bool
   let startNewChat: (String?) -> Void
   let requestDelete: () -> Void
 
@@ -729,7 +649,6 @@ private struct MacProjectOverviewView: View {
             Spacer()
             Button("Edit") { editor = .identity }
               .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(isRestricted)
           }
         }
 
@@ -751,7 +670,6 @@ private struct MacProjectOverviewView: View {
               Spacer()
               Button("Edit") { editor = .defaults }
                 .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                .disabled(isRestricted)
             }
             if defaultsStatus.hasIssue {
               Label(
@@ -781,7 +699,6 @@ private struct MacProjectOverviewView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
               Button("Edit") { editor = .instructions }
                 .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                .disabled(isRestricted)
             }
           }
         }
@@ -907,13 +824,12 @@ private struct MacProjectOverviewView: View {
             Spacer()
             Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
               .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(atPromptLimit || isRestricted)
+              .disabled(atPromptLimit)
           }
         } else {
           ForEach(Array(project.projectPromptPresets.enumerated()), id: \.element.id) { index, preset in
             MacProjectPromptRow(
               preset: preset,
-              isRestricted: isRestricted,
               usePrompt: { startNewChat(preset.prompt) },
               editPrompt: { promptToEdit = preset },
               deletePrompt: { promptToDelete = preset }
@@ -932,7 +848,7 @@ private struct MacProjectOverviewView: View {
             Spacer()
             Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
               .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(atPromptLimit || isRestricted)
+              .disabled(atPromptLimit)
           }
           .padding(.top, 10)
         }
@@ -956,7 +872,6 @@ private struct MacProjectOverviewView: View {
 
 private struct MacProjectPromptRow: View {
   let preset: ProjectPromptPreset
-  let isRestricted: Bool
   let usePrompt: () -> Void
   let editPrompt: () -> Void
   let deletePrompt: () -> Void
@@ -966,7 +881,6 @@ private struct MacProjectPromptRow: View {
   var body: some View {
     HStack(alignment: .center, spacing: 10) {
       Button {
-        guard !isRestricted else { return }
         editPrompt()
       } label: {
         VStack(alignment: .leading, spacing: 3) {
@@ -983,27 +897,21 @@ private struct MacProjectPromptRow: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .disabled(isRestricted)
 
       Button("Use", action: usePrompt)
         .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-        .disabled(isRestricted)
 
       Menu {
         Button("Use in New Chat", systemImage: "square.and.pencil", action: usePrompt)
-          .disabled(isRestricted)
         Button("Edit…", systemImage: "pencil", action: editPrompt)
-          .disabled(isRestricted)
         Divider()
         Button("Delete…", systemImage: "trash", role: .destructive, action: deletePrompt)
-          .disabled(isRestricted)
       } label: {
         MacIconMenuLabel(systemImage: "ellipsis")
       }
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
       .fixedSize()
-      .disabled(isRestricted)
     }
     .padding(.horizontal, 6)
     .padding(.vertical, 8)
@@ -1015,12 +923,9 @@ private struct MacProjectPromptRow: View {
     .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
     .contextMenu {
       Button("Use in New Chat", systemImage: "square.and.pencil", action: usePrompt)
-        .disabled(isRestricted)
       Button("Edit…", systemImage: "pencil", action: editPrompt)
-        .disabled(isRestricted)
       Divider()
       Button("Delete…", systemImage: "trash", role: .destructive, action: deletePrompt)
-        .disabled(isRestricted)
     }
   }
 }
@@ -1030,7 +935,6 @@ private struct MacProjectChatsWorkspaceView: View {
   @Bindable var workspace: MacWorkspaceModel
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
-  let isRestricted: Bool
   let openChat: (ConversationID) -> Void
   let startNewChat: () -> Void
 
@@ -1044,7 +948,7 @@ private struct MacProjectChatsWorkspaceView: View {
   }
 
   private var otherProjects: [ChatProject] {
-    workspace.accessibleProjects().filter { $0.id != project.id }
+    workspace.projects.filter { $0.id != project.id }
   }
 
   private var memberConversations: [ChatConversation] {
@@ -1077,11 +981,10 @@ private struct MacProjectChatsWorkspaceView: View {
             showingAddExisting = true
           }
           .buttonStyle(MacActionButtonStyle(.secondary))
-          .disabled(isRestricted || workspace.isBusy)
+          .disabled(workspace.isBusy)
         }
         Button("New Chat", systemImage: "plus") { startNewChat() }
           .buttonStyle(MacActionButtonStyle(.primary))
-          .disabled(isRestricted)
       }
       .padding(.horizontal, 16)
       .frame(height: 52)
@@ -1108,11 +1011,10 @@ private struct MacProjectChatsWorkspaceView: View {
                   showingAddExisting = true
                 }
                 .buttonStyle(MacActionButtonStyle(.secondary))
-                .disabled(isRestricted || workspace.isBusy)
+                .disabled(workspace.isBusy)
               }
               Button("New Chat", systemImage: "plus") { startNewChat() }
                 .buttonStyle(MacActionButtonStyle(.primary))
-                .disabled(isRestricted)
             }
           }
         }
@@ -1663,7 +1565,6 @@ private struct MacProjectSelectableChatRow: View {
 private struct MacProjectSourcesWorkspaceView: View {
   let project: ChatProject
   @Bindable var workspace: MacWorkspaceModel
-  let isRestricted: Bool
 
   private static let minPreviewZoom: CGFloat = 1.0
   private static let maxPreviewZoom: CGFloat = 5.0
@@ -1703,8 +1604,7 @@ private struct MacProjectSourcesWorkspaceView: View {
   }
 
   private var canAddMoreFiles: Bool {
-    !isRestricted
-      && project.projectFiles.count < ProjectWorkspaceStore.maxFileCount
+    project.projectFiles.count < ProjectWorkspaceStore.maxFileCount
       && !isWorking
       && !workspace.isBusy
   }
@@ -1766,7 +1666,6 @@ private struct MacProjectSourcesWorkspaceView: View {
                     subtitle: "\(sourceType(file)) · \(macProjectFileDetail(file))",
                     isInLibrary: workspace.isFileInLibrary(file.id),
                     isLoadingPreview: previewLoadingID == file.id,
-                    isRestricted: isRestricted,
                     workspace: workspace,
                     preview: { preview(file) },
                     export: { export(file) },
@@ -1795,7 +1694,7 @@ private struct MacProjectSourcesWorkspaceView: View {
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
               Spacer()
-              if !isRestricted && project.projectFiles.count < ProjectWorkspaceStore.maxFileCount {
+              if project.projectFiles.count < ProjectWorkspaceStore.maxFileCount {
                 Text("Drop files here to add")
                   .font(.caption)
                   .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.75))
@@ -2292,7 +2191,6 @@ private struct MacProjectSourceRow: View {
   let subtitle: String
   let isInLibrary: Bool
   let isLoadingPreview: Bool
-  let isRestricted: Bool
   @Bindable var workspace: MacWorkspaceModel
   let preview: () -> Void
   let export: () -> Void
@@ -2387,7 +2285,6 @@ private struct MacProjectSourceRow: View {
     .disabled(isInLibrary)
     Divider()
     Button("Remove from Project…", systemImage: "trash", role: .destructive, action: requestRemove)
-      .disabled(isRestricted)
   }
 }
 
@@ -2395,7 +2292,6 @@ private struct MacProjectToolsWorkspaceView: View {
   let project: ChatProject
   @Bindable var workspace: MacWorkspaceModel
   @Bindable var mcp: MacMCPModel
-  let isRestricted: Bool
 
   @State private var configuration: MCPChatToolConfiguration
   @State private var presets: [ProjectToolPreset]
@@ -2408,19 +2304,17 @@ private struct MacProjectToolsWorkspaceView: View {
   init(
     project: ChatProject,
     workspace: MacWorkspaceModel,
-    mcp: MacMCPModel,
-    isRestricted: Bool
+    mcp: MacMCPModel
   ) {
     self.project = project
     self.workspace = workspace
     self.mcp = mcp
-    self.isRestricted = isRestricted
     _configuration = State(initialValue: project.mcpConfiguration ?? MCPChatToolConfiguration())
     _presets = State(initialValue: project.projectToolPresets)
   }
 
   private var controlsDisabled: Bool {
-    isRestricted || isSaving || workspace.isBusy
+    isSaving || workspace.isBusy
   }
 
   var body: some View {
@@ -2626,13 +2520,6 @@ private struct MacProjectToolsWorkspaceView: View {
   }
 
   private func applyPreset(_ preset: ProjectToolPreset) {
-    for serverID in preset.configuration.enabledServerIDs where mcp.isServerRestricted(serverID) {
-      if MacProAccess.isCheckingEntitlement {
-        mcp.errorMessage = MacProAccess.restoredResourceBlockedMessage("MCP server")
-      }
-      MacProAccess.requestUpgrade(.mcpServers)
-      return
-    }
     persist(
       configuration: preset.configuration,
       presets: presets,
@@ -2807,7 +2694,7 @@ private struct MacProjectCreateSheet: View {
   }
 
   private var enabledAccounts: [ProviderAccount] {
-    providers.accounts.filter { $0.isEnabled && !providers.isProviderRestricted($0.id) }
+    providers.accounts.filter(\.isEnabled)
   }
 
   private var availableModels: [AccountModelRecord] {
@@ -3091,7 +2978,7 @@ private struct MacProjectDefaultsEditor: View {
   }
 
   private var enabledAccounts: [ProviderAccount] {
-    providers.accounts.filter { $0.isEnabled && !providers.isProviderRestricted($0.id) }
+    providers.accounts.filter(\.isEnabled)
   }
 
   private var selectedAccount: ProviderAccount? {
@@ -3102,9 +2989,6 @@ private struct MacProjectDefaultsEditor: View {
   private var unavailableAccountLabel: String? {
     guard let accountID, selectedAccount == nil else { return nil }
     if let existing = providers.accounts.first(where: { $0.id == accountID }) {
-      if providers.isProviderRestricted(accountID) {
-        return "\(existing.label) (Pro Required)"
-      }
       return "\(existing.label) (Disabled)"
     }
     return "Unavailable Account"

@@ -276,8 +276,8 @@ struct MacComposerModelPopover: View {
     providers.accounts
       .filter(\.isEnabled)
       .sorted { lhs, rhs in
-        let lhsReady = providers.isReady(lhs) && !providers.isProviderRestricted(lhs.id)
-        let rhsReady = providers.isReady(rhs) && !providers.isProviderRestricted(rhs.id)
+        let lhsReady = providers.isReady(lhs)
+        let rhsReady = providers.isReady(rhs)
         if lhsReady != rhsReady { return lhsReady }
         let lhsDefault = providers.defaultAccountID == lhs.id
         let rhsDefault = providers.defaultAccountID == rhs.id
@@ -291,11 +291,6 @@ struct MacComposerModelPopover: View {
     return cachedAccounts.first { $0.id == accountID }
   }
 
-  private var selectedAccountIsRestricted: Bool {
-    guard let accountID else { return false }
-    return providers.isProviderRestricted(accountID)
-  }
-
   private var selectedAccountNeedsCredential: Bool {
     guard let account = selectedAccount else { return false }
     let definition = providers.provider(for: account.providerID) ?? account.definition
@@ -303,7 +298,7 @@ struct MacComposerModelPopover: View {
   }
 
   private var canSelectFromCurrentAccount: Bool {
-    selectedAccount != nil && !selectedAccountIsRestricted && !selectedAccountNeedsCredential
+    selectedAccount != nil && !selectedAccountNeedsCredential
   }
 
   private var supportsModelDiscovery: Bool {
@@ -404,7 +399,7 @@ struct MacComposerModelPopover: View {
       HStack(spacing: 6) {
         ForEach(cachedAccounts) { account in
           let isSelected = account.id == accountID
-          let ready = providers.isReady(account) && !providers.isProviderRestricted(account.id)
+          let ready = providers.isReady(account)
           MacComposerProviderChip(
             account: account,
             isSelected: isSelected,
@@ -421,7 +416,7 @@ struct MacComposerModelPopover: View {
   }
 
   private func singleProviderHeader(_ account: ProviderAccount) -> some View {
-    let ready = providers.isReady(account) && !providers.isProviderRestricted(account.id)
+    let ready = providers.isReady(account)
     return HStack(spacing: 8) {
       MacProviderMark(account: account, size: 20, isReady: ready)
       Text(account.label)
@@ -504,7 +499,7 @@ struct MacComposerModelPopover: View {
             }
           }
           .buttonStyle(MacIconButtonStyle())
-          .disabled(isRefreshing || selectedAccountNeedsCredential || selectedAccountIsRestricted)
+          .disabled(isRefreshing || selectedAccountNeedsCredential)
           .help("Refresh models from provider")
           .accessibilityLabel("Refresh models")
         }
@@ -539,9 +534,6 @@ struct MacComposerModelPopover: View {
   }
 
   private var accountWarningMessage: String? {
-    if selectedAccountIsRestricted {
-      return "This restored connection requires BYOK Pro."
-    }
     if selectedAccountNeedsCredential {
       return "Add an API key in Providers before selecting a model."
     }
@@ -561,7 +553,7 @@ struct MacComposerModelPopover: View {
         .foregroundStyle(MacDesignTokens.Colors.textPrimary)
         .lineLimit(2)
       Spacer(minLength: 4)
-      if selectedAccountNeedsCredential || selectedAccountIsRestricted {
+      if selectedAccountNeedsCredential {
         Button("Providers…") {
           manageProviders()
         }
@@ -1158,8 +1150,8 @@ struct MacTargetPickerView: View {
     providers.accounts
       .filter(\.isEnabled)
       .sorted { lhs, rhs in
-        let lhsReady = providers.isReady(lhs) && !providers.isProviderRestricted(lhs.id)
-        let rhsReady = providers.isReady(rhs) && !providers.isProviderRestricted(rhs.id)
+        let lhsReady = providers.isReady(lhs)
+        let rhsReady = providers.isReady(rhs)
         if lhsReady != rhsReady { return lhsReady }
         let lhsDefault = providers.defaultAccountID == lhs.id
         let rhsDefault = providers.defaultAccountID == rhs.id
@@ -1171,11 +1163,6 @@ struct MacTargetPickerView: View {
   private var selectedAccount: ProviderAccount? {
     guard let accountID else { return nil }
     return providers.accounts.first { $0.id == accountID && $0.isEnabled }
-  }
-
-  private var selectedAccountIsRestricted: Bool {
-    guard let accountID else { return false }
-    return providers.isProviderRestricted(accountID)
   }
 
   private var selectedAccountNeedsCredential: Bool {
@@ -1249,7 +1236,6 @@ struct MacTargetPickerView: View {
   private var canCommit: Bool {
     guard let account = selectedAccount,
       account.isEnabled,
-      !selectedAccountIsRestricted,
       !selectedAccountNeedsCredential
     else { return false }
     guard modelID != nil, !selectedModelIsUnavailable else { return false }
@@ -1379,7 +1365,7 @@ struct MacTargetPickerView: View {
           }
         )) {
           ForEach(enabledAccounts) { account in
-            let ready = providers.isReady(account) && !providers.isProviderRestricted(account.id)
+            let ready = providers.isReady(account)
             let warningLabel = accountStatusWarning(for: account)
             HStack(spacing: 9) {
               MacProviderMark(account: account, size: 26, isReady: ready)
@@ -1445,7 +1431,7 @@ struct MacTargetPickerView: View {
             }
           }
           .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-          .disabled(refreshAccountID == accountID || selectedAccountNeedsCredential || selectedAccountIsRestricted)
+          .disabled(refreshAccountID == accountID || selectedAccountNeedsCredential)
           .help("Refresh available models from provider")
         }
       }
@@ -1457,16 +1443,10 @@ struct MacTargetPickerView: View {
 
   @ViewBuilder
   private var warningsArea: some View {
-    if selectedAccountIsRestricted || selectedAccountNeedsCredential
+    if selectedAccountNeedsCredential
       || selectedAccountHasNoAvailableModels || selectedModelIsUnavailable
     {
       VStack(alignment: .leading, spacing: 6) {
-        if selectedAccountIsRestricted {
-          warningBanner(
-            "This restored connection requires BYOK Pro to use.",
-            systemImage: "crown.fill"
-          )
-        }
         if selectedAccountNeedsCredential {
           HStack(spacing: 8) {
             warningBanner(
@@ -1815,7 +1795,6 @@ struct MacTargetPickerView: View {
   }
 
   private func accountStatusWarning(for account: ProviderAccount) -> String? {
-    if providers.isProviderRestricted(account.id) { return "Pro required" }
     let definition = providers.provider(for: account.providerID) ?? account.definition
     if definition.requiresCredential && !providers.hasCredential(account.id) {
       return "Needs API key"
@@ -1863,8 +1842,7 @@ struct MacTargetPickerView: View {
   }
 
   private func refreshCatalog(for requestedAccount: ProviderAccountID, force: Bool) async {
-    guard let account = providers.accounts.first(where: { $0.id == requestedAccount && $0.isEnabled }),
-      !providers.isProviderRestricted(requestedAccount)
+    guard let account = providers.accounts.first(where: { $0.id == requestedAccount && $0.isEnabled })
     else { return }
     let definition = providers.provider(for: account.providerID) ?? account.definition
     guard definition.modelsPath != nil else { return }

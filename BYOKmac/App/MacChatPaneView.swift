@@ -247,10 +247,9 @@ struct MacChatPane: View {
         assignProject: { projectID in
           guard let targetConversationID = headerConversationID else { return }
           Task { @MainActor in
-            let wasRestricted = projectID.map { workspace.isProjectRestricted($0) } ?? false
             if await workspace.assignConversation(targetConversationID, to: projectID) {
               await mcp.reloadFromStorage()
-            } else if let error = workspace.consumeErrorMessage(), !wasRestricted {
+            } else if let error = workspace.consumeErrorMessage() {
               chats.errorMessage = error
             }
           }
@@ -476,12 +475,9 @@ private struct MacChatPromptsSheetHost: View {
       .allowsHitTesting(false)
       .accessibilityHidden(true)
       .sheet(isPresented: $modalState.showingPromptsPicker) {
-        let accessibleActiveProject = activeProject.flatMap {
-          workspace.isProjectRestricted($0.id) ? nil : $0
-        }
         MacChatPromptsPickerSheet(
-          activeProject: accessibleActiveProject,
-          allProjects: workspace.accessibleProjects(),
+          activeProject: activeProject,
+          allProjects: workspace.projects,
           openProjects: {
             modalState.showingPromptsPicker = false
             openProjects(activeProject?.id)
@@ -1939,14 +1935,6 @@ private struct MacTranscriptView: View {
       primaryLabel = "Open Projects"
       primaryIcon = "folder.badge.gearshape"
       primaryAction = openProjects
-
-    case .allAccountsRestricted:
-      icon = "lock.shield"
-      title = "Connection requires BYOK Pro"
-      description = "Your restored connections exceed the Free tier limit. Manage your connections or upgrade to BYOK Pro."
-      primaryLabel = "Open Providers"
-      primaryIcon = "sparkles"
-      primaryAction = manageProviders
 
     case .ready:
       icon = "sparkles"

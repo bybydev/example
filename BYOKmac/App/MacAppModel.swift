@@ -221,7 +221,6 @@ final class MacAppModel {
       lastRecoveryBackupURL = try await MacStorageRecovery.moveWorkspaceAside(
         environment: storageEnvironment
       )
-      MacPurchaseStore.restrictions.clear()
       if storageEnvironment.userDefaultsSuiteName == nil {
         preferences.clearPinnedConversations()
       } else {
@@ -275,12 +274,6 @@ final class MacAppModel {
     }
     lastReconciledEntitlement = access
     lastReconciledGeneration = runtimeGeneration
-
-    if access == .pro {
-      // Once the user legitimately unlocks Pro, restored resources become
-      // normal existing resources and remain usable under downgrade semantics.
-      MacPurchaseStore.restrictions.clear()
-    }
 
     chats?.refreshNewChatTargetAfterProviderChanges()
   }
@@ -402,14 +395,6 @@ final class MacAppModel {
   @discardableResult
   func requestNewChat(projectID: ProjectID? = nil, initialDraft: String? = nil) -> Bool {
     guard isReady else { return false }
-
-    if let projectID, workspace?.isProjectRestricted(projectID) == true {
-      if MacProAccess.isCheckingEntitlement {
-        workspace?.errorMessage = MacProAccess.restoredResourceBlockedMessage("project")
-      }
-      MacProAccess.requestUpgrade(.projects)
-      return false
-    }
 
     if let projectID, let project = workspace?.project(projectID), project.accountID != nil {
       guard let target = projectTarget(projectID) else {

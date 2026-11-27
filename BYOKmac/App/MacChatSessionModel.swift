@@ -7,7 +7,6 @@ enum MacChatConfigurationIssue: Equatable, Sendable {
   case providerMissing
   case accountMissing
   case accountDisabled(label: String)
-  case accountRestricted(label: String)
   case missingCredential(label: String)
   case modelMissing(modelID: ModelID)
   case modelUnavailable(modelName: String)
@@ -20,8 +19,6 @@ enum MacChatConfigurationIssue: Equatable, Sendable {
       "The provider account used by this conversation was deleted. Select another account to continue."
     case .accountDisabled(let label):
       "The selected provider account \"\(label)\" is disabled."
-    case .accountRestricted(let label):
-      "\"\(label)\" requires BYOK Pro or switching to an available connection."
     case .missingCredential(let label):
       "The selected account \"\(label)\" is missing its API key."
     case .modelMissing:
@@ -33,7 +30,7 @@ enum MacChatConfigurationIssue: Equatable, Sendable {
 
   var prefersProviderRepair: Bool {
     switch self {
-    case .accountDisabled, .accountRestricted, .missingCredential:
+    case .accountDisabled, .missingCredential:
       true
     case .providerMissing, .accountMissing, .modelMissing, .modelUnavailable:
       false
@@ -48,7 +45,6 @@ enum MacChatSetupReadiness: Equatable, Sendable {
   case missingCredential(accountLabel: String)
   case noModel(accountLabel: String)
   case projectModelUnavailable(projectName: String)
-  case allAccountsRestricted
 }
 
 @MainActor
@@ -135,7 +131,6 @@ final class MacChatSessionModel {
   private let preferences: MacPreferencesModel
   private let projectWorkspace: ProjectWorkspaceStore
   private let mcpWorkspace: MCPWorkspaceStore
-  private let restrictions: MacProResourceRestrictions
   private let streamAccumulator = MacStreamAccumulator()
 
   @ObservationIgnored private var conversationLoadTasks: [ConversationID: Task<ChatConversation, Error>] = [:]
@@ -157,8 +152,7 @@ final class MacChatSessionModel {
     services: BYOKCoreServices,
     providers: MacProviderModel,
     preferences: MacPreferencesModel,
-    initialSummaries: [ChatConversation],
-    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions
+    initialSummaries: [ChatConversation]
   ) {
     store = services.conversationStore
     runtime = services.chatRuntime
@@ -166,17 +160,13 @@ final class MacChatSessionModel {
     mcpWorkspace = services.mcpWorkspace
     self.providers = providers
     self.preferences = preferences
-    self.restrictions = restrictions
     let sortedSummaries = Self.sorted(initialSummaries)
     conversationSummaries = sortedSummaries
     summariesByID = Dictionary(
       sortedSummaries.map { ($0.id, $0) },
       uniquingKeysWith: { first, _ in first }
     )
-    newChatTarget = Self.accessiblePreferredTarget(
-      providers: providers,
-      restrictions: restrictions
-    )
+    newChatTarget = providers.preferredTarget()
   }
 
   var sendsOnReturn: Bool { preferences.sendOnReturn }
@@ -244,9 +234,6 @@ final class MacChatSessionModel {
     guard let account = providers.account(conversation.accountID) else {
       return .accountMissing
     }
-    if isProviderRestricted(account.id) || providers.isProviderRestricted(account.id) {
-      return .accountRestricted(label: account.label)
-    }
     guard account.isEnabled else {
       return .accountDisabled(label: account.label)
     }
@@ -272,9 +259,6 @@ final class MacChatSessionModel {
       guard let account = providers.account(accountID), account.isEnabled else {
         return .projectAccountUnavailable(projectName: project.name)
       }
-      if isProviderRestricted(account.id) || providers.isProviderRestricted(account.id) {
-        return .allAccountsRestricted
-      }
       let requiresCredential =
         providers.provider(for: account.providerID)?.requiresCredential
         ?? account.definition.requiresCredential
@@ -299,14 +283,9 @@ final class MacChatSessionModel {
     let enabled = providers.accounts.filter(\.isEnabled)
     guard !enabled.isEmpty else { return .noConnection }
 
-    let accessible = enabled.filter {
-      !isProviderRestricted($0.id) && !providers.isProviderRestricted($0.id)
-    }
-    guard !accessible.isEmpty else { return .allAccountsRestricted }
-
     let primary = providers.resolvedDefaultAccount.flatMap { resolved in
-      accessible.first { $0.id == resolved.id }
-    } ?? accessible.first!
+      enabled.first { $0.id == resolved.id }
+    } ?? enabled.first!
 
     let requiresCredential =
       providers.provider(for: primary.providerID)?.requiresCredential
@@ -655,11 +634,11 @@ final class MacChatSessionModel {
 
   func target(for conversationID: ConversationID?) -> MacChatTarget? {
     guard let conversationID else {
-      return newChatTarget ?? accessiblePreferredTarget()
+      return newChatTarget ?? providers.preferredTarget()
     }
 
     let conversation = hydratedConversations[conversationID] ?? summary(conversationID)
-    guard let conversation else { return accessiblePreferredTarget() }
+    guard let conversation else { return providers.preferredTarget() }
     let reasoning = providers.capabilities(accountID: conversation.accountID, modelID: conversation.modelID)
       .reasoning.normalize(conversation.options.reasoning)
     return MacChatTarget(
@@ -673,10 +652,6 @@ final class MacChatSessionModel {
     var target = target
     target.reasoning = providers.capabilities(accountID: target.accountID, modelID: target.modelID)
       .reasoning.normalize(target.reasoning)
-    guard !isProviderRestricted(target.accountID) else {
-      blockRestoredResource("provider connection", feature: .providerAccounts)
-      return false
-    }
     guard let account = providers.account(target.accountID), providers.isReady(account) else {
       errorMessage = "Choose a ready provider connection."
       return false
@@ -758,11 +733,6 @@ final class MacChatSessionModel {
     await loadConversation(conversationID)
     guard var conversation = hydratedConversations[conversationID] else { return false }
 
-    guard !isProviderRestricted(conversation.accountID) else {
-      blockRestoredResource("provider connection", feature: .providerAccounts)
-      return false
-    }
-
     do {
       var updatedOptions = options
       if providers.account(conversation.accountID)?.kind != .openRouter {
@@ -807,11 +777,7 @@ final class MacChatSessionModel {
     if hasQueuedNewChat {
       newChatProjectID = queuedNewChatProjectID
       newChatDraft = queuedNewChatDraft ?? ""
-      if let queuedNewChatTarget, !isProviderRestricted(queuedNewChatTarget.accountID) {
-        newChatTarget = queuedNewChatTarget
-      } else {
-        newChatTarget = accessiblePreferredTarget()
-      }
+      newChatTarget = queuedNewChatTarget ?? providers.preferredTarget()
       hasQueuedNewChat = false
       queuedNewChatProjectID = nil
       queuedNewChatDraft = nil
@@ -819,7 +785,7 @@ final class MacChatSessionModel {
     } else {
       newChatProjectID = nil
       newChatDraft = ""
-      newChatTarget = accessiblePreferredTarget()
+      newChatTarget = providers.preferredTarget()
     }
   }
 
@@ -853,31 +819,13 @@ final class MacChatSessionModel {
     if let conversationID {
       await loadConversation(conversationID)
       guard hydratedConversations[conversationID] != nil else { return nil }
-      guard await validateGenerationAccess(conversationID: conversationID) else { return nil }
     } else {
       guard let target = validatedNewChatTarget(),
         let account = providers.account(target.accountID), providers.isReady(account)
       else {
-        errorMessage = MacProAccess.isCheckingEntitlement
-          ? "Checking your BYOK Pro status before choosing an available connection. Try again in a moment."
-          : "Set up a provider connection before starting a chat."
+        errorMessage = "Set up a provider connection before starting a chat."
         newChatDraft = trimmed
         return nil
-      }
-
-      if let projectID = newChatProjectID {
-        guard await validateNewChatProjectAccess(
-          projectID,
-          overridingMCPConfiguration: newChatMCPConfiguration
-        ) else {
-          newChatDraft = trimmed
-          return nil
-        }
-      } else if let draftMCP = newChatMCPConfiguration {
-        guard await validateMCPAccess(configuration: draftMCP) else {
-          newChatDraft = trimmed
-          return nil
-        }
       }
 
       do {
@@ -985,7 +933,6 @@ final class MacChatSessionModel {
     guard let conversation = hydratedConversations[conversationID],
       conversation.messages.contains(where: { $0.id == messageID && $0.role == .user })
     else { return false }
-    guard await validateGenerationAccess(conversationID: conversationID) else { return false }
     startGeneration(conversationID: conversationID, action: .edit(messageID, trimmed))
     return true
   }
@@ -997,7 +944,6 @@ final class MacChatSessionModel {
     guard generationTasks[conversationID] == nil else { return false }
     await loadConversation(conversationID)
     guard hydratedConversations[conversationID] != nil else { return false }
-    guard await validateGenerationAccess(conversationID: conversationID) else { return false }
     startGeneration(
       conversationID: conversationID,
       action: .regenerate(confirmingUncertainCompletion: confirmingUncertainCompletion)
@@ -1391,7 +1337,6 @@ final class MacChatSessionModel {
 
   private func validatedNewChatTarget() -> MacChatTarget? {
     if let current = newChatTarget,
-      !isProviderRestricted(current.accountID),
       let account = providers.account(current.accountID),
       providers.isReady(account),
       providers.models(for: current.accountID).contains(where: {
@@ -1400,128 +1345,9 @@ final class MacChatSessionModel {
     {
       return current
     }
-    let replacement = accessiblePreferredTarget()
+    let replacement = providers.preferredTarget()
     newChatTarget = replacement
     return replacement
-  }
-
-  private func accessiblePreferredTarget() -> MacChatTarget? {
-    Self.accessiblePreferredTarget(providers: providers, restrictions: restrictions)
-  }
-
-  private static func accessiblePreferredTarget(
-    providers: MacProviderModel,
-    restrictions: MacProResourceRestrictions
-  ) -> MacChatTarget? {
-    let entitlement = MacProAccess.entitlementAccess
-    let currentIDs = providers.accounts.map(\.id)
-    let candidates = providers.accounts.filter { account in
-      providers.isReady(account)
-        && !restrictions.isProviderRestricted(
-          account.id,
-          currentIDs: currentIDs,
-          entitlement: entitlement
-        )
-    }
-    let account = providers.resolvedDefaultAccount.flatMap { resolved in
-      candidates.first { $0.id == resolved.id }
-    } ?? candidates.first
-
-    guard let account, let modelID = providers.usableModelID(for: account.id) else { return nil }
-    return MacChatTarget(
-      accountID: account.id,
-      modelID: modelID,
-      reasoning: nil
-    )
-  }
-
-  private func isProviderRestricted(_ id: ProviderAccountID) -> Bool {
-    restrictions.isProviderRestricted(
-      id,
-      currentIDs: providers.accounts.map(\.id),
-      entitlement: MacProAccess.entitlementAccess
-    )
-  }
-
-  private func validateNewChatProjectAccess(
-    _ projectID: ProjectID,
-    overridingMCPConfiguration: MCPChatToolConfiguration? = nil
-  ) async -> Bool {
-    let projectSnapshot = await projectWorkspace.snapshot()
-    let projectIDs = projectSnapshot.projects.map(\.id)
-    if restrictions.isProjectRestricted(
-      projectID,
-      currentIDs: projectIDs,
-      entitlement: MacProAccess.entitlementAccess
-    ) {
-      blockRestoredResource("project", feature: .projects)
-      return false
-    }
-
-    if let overridingMCPConfiguration {
-      return await validateMCPAccess(configuration: overridingMCPConfiguration)
-    }
-
-    guard let project = try? await projectWorkspace.project(id: projectID) else { return true }
-    return await validateMCPAccess(configuration: project.mcpConfiguration)
-  }
-
-  private func validateGenerationAccess(conversationID: ConversationID) async -> Bool {
-    let conversation: ChatConversation
-    if let hydrated = hydratedConversations[conversationID] {
-      conversation = hydrated
-    } else if let loaded = try? await store.conversation(id: conversationID) {
-      conversation = loaded
-    } else {
-      return false
-    }
-
-    if isProviderRestricted(conversation.accountID) {
-      blockRestoredResource("provider connection", feature: .providerAccounts)
-      return false
-    }
-
-    if let projectID = await projectWorkspace.projectID(for: conversationID) {
-      let projectSnapshot = await projectWorkspace.snapshot()
-      if restrictions.isProjectRestricted(
-        projectID,
-        currentIDs: projectSnapshot.projects.map(\.id),
-        entitlement: MacProAccess.entitlementAccess
-      ) {
-        blockRestoredResource("project", feature: .projects)
-        return false
-      }
-    }
-
-    let configuration: MCPChatToolConfiguration?
-    if let explicit = await mcpWorkspace.explicitChatConfiguration(for: conversationID) {
-      configuration = explicit
-    } else {
-      configuration = await projectWorkspace.mcpConfiguration(for: conversationID)
-    }
-    return await validateMCPAccess(configuration: configuration)
-  }
-
-  private func validateMCPAccess(configuration: MCPChatToolConfiguration?) async -> Bool {
-    guard let configuration else { return true }
-    let snapshot = await mcpWorkspace.snapshot()
-    let currentServerIDs = snapshot.servers.map(\.id)
-    for serverID in configuration.enabledServerIDs {
-      if restrictions.isMCPServerRestricted(
-        serverID,
-        currentIDs: currentServerIDs,
-        entitlement: MacProAccess.entitlementAccess
-      ) {
-        blockRestoredResource("MCP server", feature: .mcpServers)
-        return false
-      }
-    }
-    return true
-  }
-
-  private func blockRestoredResource(_ resource: String, feature: MacProFeature) {
-    errorMessage = MacProAccess.restoredResourceBlockedMessage(resource)
-    MacProAccess.requestUpgrade(feature)
   }
 
   private func cancelDraftPersistence(for conversationID: ConversationID) {

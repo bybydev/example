@@ -572,37 +572,6 @@ struct MacChatSessionModelTests {
       session.configurationIssue(for: healthyCloud)
         == .accountDisabled(label: "Primary DeepSeek")
     )
-
-    // Pro-restricted restored account.
-    let suiteName = "byok-mac-config-issue-restrictions-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defer { defaults.removePersistentDomain(forName: suiteName) }
-    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
-    restrictions.recordFullBackupImport(
-      before: MacProResourceSnapshot(),
-      after: MacProResourceSnapshot(
-        providerAccountIDs: [localAccount.id.rawValue, account.id.rawValue]
-      ),
-      strategy: .replaceExisting,
-      entitlement: .free
-    )
-    let restrictedProviders = MacProviderModel(
-      services: context.services,
-      restrictions: restrictions,
-      entitlementAccessOverride: .free
-    )
-    try await restrictedProviders.load()
-    let restrictedSession = MacChatSessionModel(
-      services: context.services,
-      providers: restrictedProviders,
-      preferences: context.preferences,
-      initialSummaries: [],
-      restrictions: restrictions
-    )
-    #expect(
-      restrictedSession.configurationIssue(for: healthyCloud)
-        == .accountRestricted(label: "Primary DeepSeek")
-    )
   }
 
   @Test("Chat settings validation helpers and Markdown filename sanitization match rules")

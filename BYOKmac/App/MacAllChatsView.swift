@@ -581,10 +581,9 @@ struct MacAllChatsView: View {
 
   private func assignProject(_ projectID: ProjectID?, to conversation: ChatConversation) {
     Task { @MainActor in
-      let wasRestricted = projectID.map { workspace.isProjectRestricted($0) } ?? false
       if await workspace.assignConversation(conversation.id, to: projectID) {
         await mcp.reloadFromStorage()
-      } else if let error = workspace.consumeErrorMessage(), !wasRestricted {
+      } else if let error = workspace.consumeErrorMessage() {
         toastCenter?.error(error)
       }
     }

@@ -205,7 +205,6 @@ struct MacPolishTests {
       .providerMissing,
       .accountMissing,
       .accountDisabled(label: "OpenAI"),
-      .accountRestricted(label: "Anthropic"),
       .missingCredential(label: "OpenAI"),
       .modelMissing(modelID: "gpt-4o"),
       .modelUnavailable(modelName: "GPT-4o"),

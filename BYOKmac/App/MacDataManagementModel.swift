@@ -15,29 +15,24 @@ final class MacDataManagementModel {
   private unowned let app: MacAppModel
   private let service: ProjectAwareDataPortabilityService
   private let providerWorkspace: ProviderWorkspaceStore
-  private let projectWorkspace: ProjectWorkspaceStore
   private let conversations: ConversationStore
   private let fileBlobStore: FileAttachmentBlobStore
   private let accountManager: ProviderAccountManager
   private let mcpRuntime: MCPRemoteRuntime
   private let mcpWorkspace: MCPWorkspaceStore
-  private let restrictions: MacProResourceRestrictions
 
   init(
     app: MacAppModel,
-    services: BYOKCoreServices,
-    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions
+    services: BYOKCoreServices
   ) {
     self.app = app
     service = services.dataPortability
     providerWorkspace = services.providerWorkspace
-    projectWorkspace = services.projectWorkspace
     conversations = services.conversationStore
     fileBlobStore = services.fileBlobStore
     accountManager = services.accountManager
     mcpRuntime = services.mcpRuntime
     mcpWorkspace = services.mcpWorkspace
-    self.restrictions = restrictions
   }
 
   func refreshStorageUsage() async {
@@ -103,7 +98,6 @@ final class MacDataManagementModel {
     ) {
       let data = try await Self.readSecurityScopedData(from: url)
       let existingDefaultPrompt = app.preferences.defaultSystemPrompt
-      let resourcesBefore = await resourceSnapshot()
       await app.stopAllGenerations()
 
       let summary: BYOKchatImportSummary
@@ -116,14 +110,6 @@ final class MacDataManagementModel {
         await refreshStorageUsage()
         throw error
       }
-
-      let resourcesAfter = await resourceSnapshot()
-      restrictions.recordFullBackupImport(
-        before: resourcesBefore,
-        after: resourcesAfter,
-        strategy: strategy,
-        entitlement: MacProAccess.entitlementAccess
-      )
 
       switch strategy {
       case .replaceExisting:
@@ -288,7 +274,6 @@ final class MacDataManagementModel {
         environment: app.storageEnvironment,
         telemetryRecorder: app.coreServices?.telemetryRecorder
       )
-      restrictions.clear()
       app.preferences.reset()
       clearPinnedConversations()
       app.recordRecoveryBackup(result.backupURL)
@@ -316,18 +301,6 @@ final class MacDataManagementModel {
     if app.storageEnvironment.userDefaultsSuiteName != nil {
       MacSidebarPinStore.clear(in: app.storageEnvironment.makeUserDefaults())
     }
-  }
-
-  private func resourceSnapshot() async -> MacProResourceSnapshot {
-    let providers = await providerWorkspace.snapshot()
-    let projects = await projectWorkspace.snapshot()
-    let mcp = await mcpWorkspace.snapshot()
-
-    return MacProResourceSnapshot(
-      providerAccountIDs: providers.accounts.map { $0.id.rawValue },
-      projectIDs: projects.projects.map { $0.id.rawValue },
-      mcpServerIDs: mcp.servers.map { $0.id.rawValue }
-    )
   }
 
   private nonisolated static func readSecurityScopedData(from url: URL) async throws -> Data {

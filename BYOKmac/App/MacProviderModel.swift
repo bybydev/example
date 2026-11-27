@@ -44,13 +44,9 @@ final class MacProviderModel {
   private let accountManager: ProviderAccountManager
   private let runtime: ProviderRuntime
   private let modelCatalog: ModelCatalogStore
-  private let restrictions: MacProResourceRestrictions
-  private let entitlementAccessOverride: MacProEntitlementAccess?
 
   init(
     services: BYOKCoreServices,
-    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
-    entitlementAccessOverride: MacProEntitlementAccess? = nil,
     runtime: ProviderRuntime? = nil
   ) {
     registry = services.providerRegistry
@@ -58,8 +54,6 @@ final class MacProviderModel {
     accountManager = services.accountManager
     self.runtime = runtime ?? services.providerRuntime
     modelCatalog = services.modelCatalog
-    self.restrictions = restrictions
-    self.entitlementAccessOverride = entitlementAccessOverride
   }
 
   func load() async throws {
@@ -210,16 +204,8 @@ final class MacProviderModel {
     defaultAccountID.flatMap { id in accounts.first { $0.id == id } }
   }
 
-  func isProviderRestricted(_ accountID: ProviderAccountID) -> Bool {
-    restrictions.isProviderRestricted(
-      accountID,
-      currentIDs: accounts.map(\.id),
-      entitlement: effectiveEntitlementAccess
-    )
-  }
-
   func preferredTarget() -> MacChatTarget? {
-    let candidates = accounts.filter { isReady($0) && !isProviderRestricted($0.id) }
+    let candidates = accounts.filter { isReady($0) }
     guard let account = resolvedDefaultAccount.flatMap({ resolved in
       candidates.first { $0.id == resolved.id }
     }) ?? candidates.first,
@@ -344,8 +330,6 @@ final class MacProviderModel {
     manualModelIDs: [String] = [],
     removedManualModelIDs: Set<ModelID> = []
   ) async -> Bool {
-    guard requireProviderAccess(accountID) else { return false }
-
     isBusy = true
     errorMessage = nil
     defer { isBusy = false }
@@ -506,7 +490,6 @@ final class MacProviderModel {
   }
 
   func setAccountEnabled(_ enabled: Bool, accountID: ProviderAccountID) async -> Bool {
-    if enabled, !requireProviderAccess(accountID) { return false }
     return await performCommittedResult(
       warningPrefix: "Connection state was saved, but the provider list could not refresh:"
     ) {
@@ -517,7 +500,6 @@ final class MacProviderModel {
   }
 
   func setDefaultAccount(_ accountID: ProviderAccountID) async -> Bool {
-    guard requireProviderAccess(accountID) else { return false }
     return await performCommittedResult(
       warningPrefix: "Default connection was saved, but the provider list could not refresh:"
     ) {
@@ -529,7 +511,6 @@ final class MacProviderModel {
   }
 
   func setDefaultModel(_ modelID: ModelID, accountID: ProviderAccountID) async -> Bool {
-    guard requireProviderAccess(accountID) else { return false }
     return await performCommittedResult(
       warningPrefix: "Default model was saved, but the provider list could not refresh:"
     ) {
@@ -553,7 +534,6 @@ final class MacProviderModel {
     guard let account = accounts.first(where: { $0.id == accountID }) else {
       throw ProviderError.accountNotFound(accountID)
     }
-    guard !isProviderRestricted(accountID) else { return .throttled }
     guard account.definition.modelsPath != nil else { return .unsupported }
 
     if let existing = catalogRefreshTasks[accountID] {
@@ -590,11 +570,11 @@ final class MacProviderModel {
     }
   }
 
-  /// Refreshes all ready, unrestricted accounts whose discovery cache is stale (>24h).
+  /// Refreshes all ready accounts whose discovery cache is stale (>24h).
   /// Errors are absorbed per account and subject to the 15m retry backoff.
   func refreshReadyAccountsIfNeeded(now: Date = .now) async {
     let accountIDs = accounts
-      .filter { isReady($0) && !isProviderRestricted($0.id) && $0.definition.modelsPath != nil }
+      .filter { isReady($0) && $0.definition.modelsPath != nil }
       .map(\.id)
     guard !accountIDs.isEmpty else { return }
 
@@ -619,7 +599,6 @@ final class MacProviderModel {
   /// Explicit user-triggered model discovery. Always unthrottled and deduplicated
   /// against any in-flight refresh for the same account.
   func refreshModels(accountID: ProviderAccountID) async -> Bool {
-    guard requireProviderAccess(accountID) else { return false }
     if let existing = catalogRefreshTasks[accountID] {
       let succeeded = await performResult {
         try await existing.value
@@ -686,11 +665,6 @@ final class MacProviderModel {
   /// Persists an exact manually entered model ID from the target picker on Done,
   /// without modifying the connection's default model.
   func ensureSelectableModel(_ modelID: ModelID, for accountID: ProviderAccountID) async throws {
-    guard requireProviderAccess(accountID) else {
-      throw ProviderError.invalidRequest(
-        MacProAccess.restoredResourceBlockedMessage("provider connection")
-      )
-    }
     let trimmed = modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       throw ProviderError.invalidModel
@@ -718,11 +692,6 @@ final class MacProviderModel {
   /// Removes user-added manual models from an account without touching chat history.
   func removeManualModels(_ ids: Set<ModelID>, for accountID: ProviderAccountID) async throws {
     guard !ids.isEmpty else { return }
-    guard requireProviderAccess(accountID) else {
-      throw ProviderError.invalidRequest(
-        MacProAccess.restoredResourceBlockedMessage("provider connection")
-      )
-    }
     try await workspace.removeManualModels(ids, for: accountID)
     try await reloadSnapshot()
   }
@@ -730,7 +699,6 @@ final class MacProviderModel {
   /// Removes a single manually added model and surfaces errors via `errorMessage`.
   @discardableResult
   func removeManualModel(_ modelID: ModelID, accountID: ProviderAccountID) async -> Bool {
-    guard requireProviderAccess(accountID) else { return false }
     return await performCommittedResult(
       warningPrefix: "The custom model was removed, but the provider list could not refresh:"
     ) {
@@ -739,7 +707,6 @@ final class MacProviderModel {
   }
 
   func addManualModel(_ value: String, accountID: ProviderAccountID) async -> Bool {
-    guard requireProviderAccess(accountID) else { return false }
     return await performCommittedResult(
       warningPrefix: "The model was added, but the provider list could not refresh:"
     ) {
@@ -770,7 +737,6 @@ final class MacProviderModel {
   }
 
   func testConnection(accountID: ProviderAccountID, modelID: ModelID?) async -> Bool {
-    guard requireProviderAccess(accountID) else { return false }
     let succeeded = await performResult {
       let selectedModelID: ModelID
       if let modelID {
@@ -795,7 +761,6 @@ final class MacProviderModel {
   }
 
   func revealCredential(accountID: ProviderAccountID) async -> String? {
-    guard requireProviderAccess(accountID) else { return nil }
     return (try? await accountManager.resolvedAccount(id: accountID))?.apiKey
   }
 
@@ -841,22 +806,6 @@ final class MacProviderModel {
     return "\(base) \(index)"
   }
 
-  private var effectiveEntitlementAccess: MacProEntitlementAccess {
-    entitlementAccessOverride ?? MacProAccess.entitlementAccess
-  }
-
-  @discardableResult
-  private func requireProviderAccess(_ accountID: ProviderAccountID) -> Bool {
-    guard !isProviderRestricted(accountID) else {
-      errorMessage = MacProAccess.restoredResourceBlockedMessage("provider connection")
-      if effectiveEntitlementAccess == .free {
-        MacProGateCenter.shared.request(.providerAccounts)
-      }
-      return false
-    }
-    return true
-  }
-
   private func resolveDraftAccountForPreview(
     _ account: ResolvedProviderAccount,
     storedCredentialAccountID: ProviderAccountID?
@@ -877,11 +826,6 @@ final class MacProviderModel {
       if resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
         let storedCredentialAccountID
       {
-        guard requireProviderAccess(storedCredentialAccountID) else {
-          throw ProviderError.invalidRequest(
-            MacProAccess.restoredResourceBlockedMessage("provider connection")
-          )
-        }
         resolved.apiKey = try await accountManager.resolvedAccount(id: storedCredentialAccountID).apiKey
       }
       if definition.requiresCredential {
@@ -983,16 +927,8 @@ final class MacProviderModel {
     modelCatalogStatus = catalogStatus
     modelCatalogRevision = catalogStatus.revision
 
-    let loadedIDs = loadedAccounts.map(\.id)
-    let entitlement = effectiveEntitlementAccess
-
     func ready(_ account: ProviderAccount) -> Bool {
       guard account.isEnabled else { return false }
-      guard !restrictions.isProviderRestricted(
-        account.id,
-        currentIDs: loadedIDs,
-        entitlement: entitlement
-      ) else { return false }
       if account.definition.requiresCredential {
         guard credentials.contains(account.id) else { return false }
       }

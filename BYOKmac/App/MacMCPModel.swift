@@ -9,7 +9,6 @@ final class MacMCPModel {
   private(set) var snapshotsByServer: [MCPServerID: MCPServerSnapshot] = [:]
   private var toolsByServer: [MCPServerID: [MCPToolBinding]] = [:]
   private var toolDisplayNamesByExposedName: [String: String] = [:]
-  private var serverIDByExposedToolName: [String: MCPServerID] = [:]
   private(set) var credentialServerIDs: Set<MCPServerID> = []
   private(set) var chatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
   private(set) var inheritedChatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
@@ -31,25 +30,17 @@ final class MacMCPModel {
   private let projectWorkspace: ProjectWorkspaceStore
   private let approvals: MCPToolApprovalCenter
   private let elicitations: MCPElicitationCenter
-  private let restrictions: MacProResourceRestrictions
-  private let entitlementAccessOverride: MacProEntitlementAccess?
   private var approvalObservationTask: Task<Void, Never>?
   private var elicitationObservationTask: Task<Void, Never>?
 
-  convenience init(
-    services: BYOKCoreServices,
-    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
-    entitlementAccessOverride: MacProEntitlementAccess? = nil
-  ) {
+  convenience init(services: BYOKCoreServices) {
     self.init(
       runtime: services.mcpRuntime,
       workspace: services.mcpWorkspace,
       credentialVault: services.mcpCredentialVault,
       projectWorkspace: services.projectWorkspace,
       approvals: services.approvalCenter,
-      elicitations: services.elicitationCenter,
-      restrictions: restrictions,
-      entitlementAccessOverride: entitlementAccessOverride
+      elicitations: services.elicitationCenter
     )
   }
 
@@ -59,9 +50,7 @@ final class MacMCPModel {
     credentialVault: any MCPCredentialVault,
     projectWorkspace: ProjectWorkspaceStore,
     approvals: MCPToolApprovalCenter,
-    elicitations: MCPElicitationCenter,
-    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
-    entitlementAccessOverride: MacProEntitlementAccess? = nil
+    elicitations: MCPElicitationCenter
   ) {
     self.runtime = runtime
     self.workspace = workspace
@@ -69,8 +58,6 @@ final class MacMCPModel {
     self.projectWorkspace = projectWorkspace
     self.approvals = approvals
     self.elicitations = elicitations
-    self.restrictions = restrictions
-    self.entitlementAccessOverride = entitlementAccessOverride
   }
 
   func load(skipRuntimeLoad: Bool = false) async throws {
@@ -104,16 +91,8 @@ final class MacMCPModel {
     credentialServerIDs.contains(serverID)
   }
 
-  func isServerRestricted(_ serverID: MCPServerID) -> Bool {
-    restrictions.isMCPServerRestricted(
-      serverID,
-      currentIDs: servers.map(\.id),
-      entitlement: effectiveEntitlementAccess
-    )
-  }
-
   func isServerUsable(_ server: MCPRemoteServer) -> Bool {
-    guard server.isEnabled, !isServerRestricted(server.id) else { return false }
+    guard server.isEnabled else { return false }
     return server.authentication.kind == .none || hasCredential(server.id)
   }
 
@@ -178,9 +157,6 @@ final class MacMCPModel {
     currentDraft: MCPChatToolConfiguration?,
     projectID: ProjectID?
   ) async -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
-    if enabled, !requireServerAccess(serverID) {
-      return (false, currentDraft)
-    }
     var updated = currentDraft
     let succeeded = await performResult(nil) {
       if enabled {
@@ -206,12 +182,6 @@ final class MacMCPModel {
     currentDraft: MCPChatToolConfiguration?,
     projectID: ProjectID?
   ) -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
-    if policy != .disabled,
-      let serverID = serverID(forExposedToolName: exposedToolName),
-      !requireServerAccess(serverID)
-    {
-      return (false, currentDraft)
-    }
     let normalizedName = exposedToolName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalizedName.isEmpty, normalizedName.count <= MCPToolNamespace.maximumExposedNameLength else {
       errorMessage = MCPError.invalidToolDefinition("Invalid MCP tool permission name.").localizedDescription
@@ -233,9 +203,6 @@ final class MacMCPModel {
     currentDraft: MCPChatToolConfiguration?,
     projectID: ProjectID?
   ) -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
-    if policy != .disabled, !requireServerAccess(serverID) {
-      return (false, currentDraft)
-    }
     let bindings = tools(for: serverID)
     guard !bindings.isEmpty else { return (true, currentDraft) }
     errorMessage = nil
@@ -254,9 +221,6 @@ final class MacMCPModel {
     _ configuration: MCPChatToolConfiguration,
     projectID: ProjectID?
   ) -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
-    guard requireConfigurationAccess(configuration) else {
-      return (false, nil)
-    }
     errorMessage = nil
     statusMessage = "Tool configuration applied"
     return (true, normalizedDraftConfiguration(configuration, projectID: projectID))
@@ -315,9 +279,6 @@ final class MacMCPModel {
     additionalHeaders: [String: String],
     isEnabled: Bool
   ) async -> Bool {
-    if let existing, !requireServerAccess(existing.id) {
-      return false
-    }
     if existing == nil,
       !MacProAccess.requireMCPServerCapacity(currentCount: servers.count)
     {
@@ -427,8 +388,6 @@ final class MacMCPModel {
   }
 
   func setEnabled(_ enabled: Bool, serverID: MCPServerID) async -> Bool {
-    if enabled, !requireServerAccess(serverID) { return false }
-
     beginBusy()
     errorMessage = nil
     statusMessage = nil
@@ -457,7 +416,6 @@ final class MacMCPModel {
   }
 
   func refresh(_ serverID: MCPServerID) async -> Bool {
-    guard requireServerAccess(serverID) else { return false }
     return await performResult("MCP tools refreshed") {
       refreshingServerIDs.insert(serverID)
       defer { refreshingServerIDs.remove(serverID) }
@@ -471,7 +429,6 @@ final class MacMCPModel {
     serverID: MCPServerID,
     conversationID: ConversationID
   ) async -> Bool {
-    if enabled, !requireServerAccess(serverID) { return false }
     return await performResult(nil) {
       if enabled {
         guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
@@ -495,12 +452,6 @@ final class MacMCPModel {
     exposedToolName: String,
     conversationID: ConversationID
   ) async -> Bool {
-    if policy != .disabled,
-      let serverID = serverID(forExposedToolName: exposedToolName),
-      !requireServerAccess(serverID)
-    {
-      return false
-    }
     return await performResult(nil) {
       try await persistChatToolPolicy(
         policy,
@@ -516,7 +467,6 @@ final class MacMCPModel {
     serverID: MCPServerID,
     conversationID: ConversationID
   ) async -> Bool {
-    if policy != .disabled, !requireServerAccess(serverID) { return false }
     let bindings = tools(for: serverID)
     guard !bindings.isEmpty else { return true }
     return await performResult("Updated permissions for \(bindings.count) \(bindings.count == 1 ? "tool" : "tools")") {
@@ -542,7 +492,6 @@ final class MacMCPModel {
     _ configuration: MCPChatToolConfiguration,
     conversationID: ConversationID
   ) async -> Bool {
-    guard requireConfigurationAccess(configuration) else { return false }
     return await performResult("Tool configuration applied") {
       let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
       try await workspace.replaceChatConfiguration(
@@ -565,10 +514,6 @@ final class MacMCPModel {
     if decision == .alwaysAllow,
       let request = pendingApprovals.first(where: { $0.id == requestID })
     {
-      guard requireServerAccess(request.serverID) else {
-        await approvals.resolve(requestID, decision: .deny)
-        return
-      }
       do {
         try await persistChatToolPolicy(
           .alwaysAllow,
@@ -589,33 +534,6 @@ final class MacMCPModel {
 
   func resolveElicitation(_ requestID: String, decision: MCPElicitationDecision) async {
     await elicitations.resolve(requestID, decision: decision)
-  }
-
-  private var effectiveEntitlementAccess: MacProEntitlementAccess {
-    entitlementAccessOverride ?? MacProAccess.entitlementAccess
-  }
-
-  @discardableResult
-  private func requireServerAccess(_ serverID: MCPServerID) -> Bool {
-    guard !isServerRestricted(serverID) else {
-      errorMessage = MacProAccess.restoredResourceBlockedMessage("MCP server")
-      if effectiveEntitlementAccess == .free {
-        MacProGateCenter.shared.request(.mcpServers)
-      }
-      return false
-    }
-    return true
-  }
-
-  private func requireConfigurationAccess(_ configuration: MCPChatToolConfiguration) -> Bool {
-    for serverID in configuration.enabledServerIDs where isServerRestricted(serverID) {
-      return requireServerAccess(serverID)
-    }
-    return true
-  }
-
-  private func serverID(forExposedToolName exposedToolName: String) -> MCPServerID? {
-    serverIDByExposedToolName[exposedToolName]
   }
 
   private func commitServerConfiguration(
@@ -708,7 +626,6 @@ final class MacMCPModel {
 
     var builtToolsByServer: [MCPServerID: [MCPToolBinding]] = [:]
     var builtDisplayNames: [String: String] = [:]
-    var builtServerIDsByTool: [String: MCPServerID] = [:]
     builtToolsByServer.reserveCapacity(snapshotMap.count)
 
     for (serverID, snapshot) in snapshotMap {
@@ -733,15 +650,11 @@ final class MacMCPModel {
           let toolName = binding.remoteTool.title ?? binding.remoteTool.remoteName
           builtDisplayNames[binding.exposedName] = "\(server.name) · \(toolName)"
         }
-        if builtServerIDsByTool[binding.exposedName] == nil {
-          builtServerIDsByTool[binding.exposedName] = server.id
-        }
       }
     }
 
     toolsByServer = builtToolsByServer
     toolDisplayNamesByExposedName = builtDisplayNames
-    serverIDByExposedToolName = builtServerIDsByTool
 
     chatConfigurations = Dictionary(
       uniqueKeysWithValues: (workspaceSnapshot.chatConfigurations ?? [:]).map {
