@@ -217,6 +217,8 @@ private struct MacGeneralSettingsView: View {
   @State private var promptDraft: String
   @State private var lastSyncedPrompt: String
   @State private var confirmClearPrompt = false
+  @State private var showSavedBadge = false
+  @State private var savedBadgeTask: Task<Void, Never>?
   @FocusState private var isPromptFocused: Bool
 
   init(preferences: MacPreferencesModel, chats: MacChatSessionModel?) {
@@ -231,63 +233,92 @@ private struct MacGeneralSettingsView: View {
     MacPreferencesModel.normalizedSystemPrompt(promptDraft)
   }
 
+  private var promptLengthSummary: String {
+    let charCount = trimmedPrompt.count
+    let charLabel = charCount == 1 ? "1 char" : "\(charCount) chars"
+    if charCount >= 40 {
+      let approxTokens = max(1, Int((Double(charCount) / 4.0).rounded()))
+      return "\(charLabel) · ~\(approxTokens) tokens"
+    }
+    return charLabel
+  }
+
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
         MacSettingsCard {
-          HStack {
-            Text("Keyboard")
-              .foregroundStyle(theme.textPrimary)
-            Spacer()
-            Text("Return sends · Shift-Return new line")
-              .font(.caption)
-              .foregroundStyle(theme.textSecondary)
-          }
-        }
-
-        MacSettingsCard {
-          VStack(alignment: .leading, spacing: 8) {
-            HStack {
+          VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
               Text("Default system prompt")
                 .foregroundStyle(theme.textPrimary)
-              Spacer()
-              Button("Clear", role: .destructive) {
-                confirmClearPrompt = true
+
+              Spacer(minLength: 8)
+
+              if showSavedBadge {
+                HStack(spacing: 3) {
+                  Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                  Text("Saved")
+                }
+                .font(.caption)
+                .foregroundStyle(theme.textMuted)
+                .transition(.opacity)
               }
-              .buttonStyle(MacSettingsButtonStyle(isDestructive: true))
-              .disabled(trimmedPrompt.isEmpty)
+
+              if !trimmedPrompt.isEmpty {
+                Text(promptLengthSummary)
+                  .font(.caption)
+                  .monospacedDigit()
+                  .foregroundStyle(theme.textMuted)
+
+                Button("Clear") {
+                  if trimmedPrompt.count > 40 {
+                    confirmClearPrompt = true
+                  } else {
+                    isPromptFocused = false
+                    promptDraft = ""
+                    commitPromptIfNeeded()
+                  }
+                }
+                .buttonStyle(MacSettingsButtonStyle())
+              }
             }
+            .animation(.easeOut(duration: 0.16), value: showSavedBadge)
 
             ZStack(alignment: .topLeading) {
               TextEditor(text: $promptDraft)
-                .font(.system(size: 12.5))
+                .font(.system(size: 13))
+                .lineSpacing(3)
                 .foregroundStyle(theme.textPrimary)
                 .scrollContentBackground(.hidden)
                 .focused($isPromptFocused)
-                .frame(height: 92)
-                .padding(6)
+                .frame(height: 140)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 8)
                 .accessibilityLabel("Default System Prompt")
 
               if promptDraft.isEmpty {
                 Text("e.g. Be concise, direct, and explain trade-offs clearly.")
-                  .font(.system(size: 12.5))
+                  .font(.system(size: 13))
+                  .lineSpacing(3)
                   .foregroundStyle(theme.textMuted)
                   .padding(.top, 8)
-                  .padding(.leading, 11)
+                  .padding(.leading, 10)
                   .allowsHitTesting(false)
                   .accessibilityHidden(true)
               }
             }
             .background(
               theme.canvas,
-              in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+              in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
             .overlay {
-              RoundedRectangle(cornerRadius: 6, style: .continuous)
+              RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(
-                  isPromptFocused ? theme.accent.opacity(0.55) : theme.border,
-                  lineWidth: 1
+                  isPromptFocused ? theme.accent.opacity(0.65) : theme.border,
+                  lineWidth: isPromptFocused ? 1.5 : 1
                 )
+                .animation(.easeOut(duration: 0.14), value: isPromptFocused)
             }
 
             Text("Copied into new conversations unless a project defines its own instructions. Existing conversations with messages are unchanged.")
@@ -354,20 +385,31 @@ private struct MacGeneralSettingsView: View {
       promptDraft = normalized
     }
     .onDisappear {
-      commitPromptIfNeeded()
+      savedBadgeTask?.cancel()
+      commitPromptIfNeeded(showConfirmation: false)
     }
   }
 
-  private func commitPromptIfNeeded() {
+  private func commitPromptIfNeeded(showConfirmation: Bool = true) {
     let normalized = trimmedPrompt
     let previous = MacPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt)
     lastSyncedPrompt = normalized
+    let didChange = preferences.defaultSystemPrompt != normalized || previous != normalized
     if preferences.defaultSystemPrompt != normalized {
       preferences.defaultSystemPrompt = normalized
     }
     if previous != normalized {
       Task {
         await chats?.syncDefaultSystemPrompt(from: previous, to: normalized)
+      }
+    }
+    if didChange && showConfirmation {
+      savedBadgeTask?.cancel()
+      showSavedBadge = true
+      savedBadgeTask = Task {
+        try? await Task.sleep(for: .seconds(1.8))
+        guard !Task.isCancelled else { return }
+        showSavedBadge = false
       }
     }
   }

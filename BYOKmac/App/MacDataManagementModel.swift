@@ -54,6 +54,7 @@ final class MacDataManagementModel {
   func clearThumbnailCache() async {
     await perform("Cached thumbnails cleared.", errorCode: "clear_thumbnail_cache_failed") {
       _ = await fileBlobStore.clearDerivedCache()
+      MacAttachmentThumbnailCache.shared.clear()
       await refreshStorageUsage()
     }
   }
@@ -201,9 +202,8 @@ final class MacDataManagementModel {
   }
 
   func deleteAllConversations() async {
-    await perform("All conversations deleted", errorCode: "delete_conversations_failed") {
+    await perform("All conversations deleted.", errorCode: "delete_conversations_failed") {
       await app.stopAllGenerations()
-      let conversationIDs = await conversations.conversationSummaries().map(\.id)
 
       // Commit the primary destructive operation first. Chat-specific MCP and
       // project references are secondary metadata and must never make a failed
@@ -211,21 +211,18 @@ final class MacDataManagementModel {
       try await conversations.deleteAllConversations()
       clearPinnedConversations()
 
-      var cleanupWarnings: [String] = []
-      for id in conversationIDs {
-        do {
-          try await mcpWorkspace.removeChatConfiguration(conversationID: id)
-        } catch {
-          cleanupWarnings.append("MCP cleanup for \(id.rawValue): \(error.localizedDescription)")
-        }
+      var cleanupError: String?
+      do {
+        try await mcpWorkspace.removeAllChatConfigurations()
+      } catch {
+        cleanupError = error.localizedDescription
       }
 
       try await app.reloadAfterDataMutation()
       await refreshStorageUsage()
-      if !cleanupWarnings.isEmpty {
+      if let cleanupError {
         errorMessage =
-          "All conversations were deleted, but some stale tool configuration could not be removed:\n\n"
-          + cleanupWarnings.joined(separator: "\n")
+          "All conversations were deleted, but stale tool configurations could not be removed:\n\n\(cleanupError)"
       }
     }
   }
@@ -263,6 +260,7 @@ final class MacDataManagementModel {
   }
 
   func resetApplicationDataKeepingBackup() async {
+    guard !isBusy else { return }
     isBusy = true
     errorMessage = nil
     statusMessage = nil
@@ -316,6 +314,7 @@ final class MacDataManagementModel {
     errorCode: String?,
     operation: @MainActor () async throws -> Void
   ) async {
+    guard !isBusy else { return }
     isBusy = true
     errorMessage = nil
     statusMessage = nil
@@ -335,6 +334,7 @@ final class MacDataManagementModel {
     errorCode: String,
     _ operation: @MainActor () async throws -> Value
   ) async -> Value? {
+    guard !isBusy else { return nil }
     isBusy = true
     errorMessage = nil
     statusMessage = nil

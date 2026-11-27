@@ -1092,6 +1092,7 @@ enum MacSelectableMarkdownBuilder {
         let indentStep = round(style.textSize * 1.2)
         let defaultMarkerColumn = round(style.textSize * 1.35)
         let unorderedMarkerColumn = round(style.textSize * 0.95)
+        let orderedTrailingGap = round(style.textSize * 0.55)
         let listGroup = NSMutableAttributedString()
         let rawGroupSource = parsedItems.map(\.rawLine).joined(separator: "\n")
 
@@ -1103,22 +1104,29 @@ enum MacSelectableMarkdownBuilder {
           let baseIndent = CGFloat(clampedIndent) * indentStep
           let markerStart = baseIndent + round(style.textSize * 0.25)
           let markerColumn: CGFloat
+          let firstLineIndent: CGFloat
           switch item.kind {
           case .unordered:
             markerColumn = unorderedMarkerColumn
-          case .ordered:
+            firstLineIndent = markerStart
+          case .ordered(let marker):
             if let maxOrderedWidth = maxOrderedWidthByIndent[indentLevel] {
-              markerColumn = max(defaultMarkerColumn, maxOrderedWidth + round(style.textSize * 0.45))
+              let markerWidth = ceil((marker as NSString).size(withAttributes: [.font: orderedMarkerFont]).width)
+              let alignedWidth = max(defaultMarkerColumn - orderedTrailingGap, maxOrderedWidth)
+              markerColumn = alignedWidth + orderedTrailingGap
+              firstLineIndent = max(markerStart, markerStart + alignedWidth - markerWidth)
             } else {
               markerColumn = defaultMarkerColumn
+              firstLineIndent = markerStart
             }
           case .task:
             markerColumn = defaultMarkerColumn
+            firstLineIndent = markerStart
           }
           let textStart = markerStart + markerColumn
 
           let para = NSMutableParagraphStyle()
-          para.firstLineHeadIndent = markerStart
+          para.firstLineHeadIndent = firstLineIndent
           para.headIndent = textStart
           para.tabStops = [NSTextTab(textAlignment: .left, location: textStart)]
           para.lineSpacing = listLineSpacing
@@ -1319,7 +1327,7 @@ enum MacSelectableMarkdownBuilder {
     paragraphStyle: NSParagraphStyle
   ) -> NSAttributedString {
     let baseFont = NSFont.systemFont(ofSize: textSize, weight: .regular)
-    let symbolSize = max(11, textSize * 0.88)
+    let symbolSize = max(12, round(textSize * 0.92))
     let symbolName = isCompleted ? "checkmark.circle.fill" : "circle"
     let config = NSImage.SymbolConfiguration(pointSize: symbolSize, weight: .semibold)
     if let symbol = NSImage(
@@ -1343,44 +1351,48 @@ enum MacSelectableMarkdownBuilder {
         colorSpaceName: .deviceRGB,
         bytesPerRow: 0,
         bitsPerPixel: 0
-      ), let graphicsContext = NSGraphicsContext(bitmapImageRep: rep) {
+      ) {
+        // Set logical point size BEFORE creating NSGraphicsContext so AppKit
+        // configures the 2x Retina CTM rather than drawing into the 1x bottom-left quarter.
         rep.size = symbol.size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = graphicsContext
-        let drawRect = NSRect(origin: .zero, size: symbol.size)
-        symbol.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1)
-        markerColor.setFill()
-        drawRect.fill(using: .sourceAtop)
-        NSGraphicsContext.restoreGraphicsState()
+        if let graphicsContext = NSGraphicsContext(bitmapImageRep: rep) {
+          NSGraphicsContext.saveGraphicsState()
+          NSGraphicsContext.current = graphicsContext
+          let drawRect = NSRect(origin: .zero, size: symbol.size)
+          symbol.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1)
+          markerColor.setFill()
+          drawRect.fill(using: .sourceAtop)
+          NSGraphicsContext.restoreGraphicsState()
 
-        let tinted = NSImage(size: symbol.size)
-        tinted.addRepresentation(rep)
-        tinted.isTemplate = false
+          let tinted = NSImage(size: symbol.size)
+          tinted.addRepresentation(rep)
+          tinted.isTemplate = false
 
-        let attachment = NSTextAttachment()
-        attachment.image = tinted
-        let yOffset = round((baseFont.capHeight - symbol.size.height) / 2)
-        attachment.bounds = CGRect(origin: CGPoint(x: 0, y: yOffset), size: symbol.size)
+          let attachment = NSTextAttachment()
+          attachment.image = tinted
+          let yOffset = round((baseFont.capHeight - symbol.size.height) / 2)
+          attachment.bounds = CGRect(origin: CGPoint(x: 0, y: yOffset), size: symbol.size)
 
-        let result = NSMutableAttributedString(attachment: attachment)
-        result.addAttributes(
-          [
-            .font: baseFont,
-            .paragraphStyle: paragraphStyle,
-          ],
-          range: NSRange(location: 0, length: result.length)
-        )
-        result.append(
-          NSAttributedString(
-            string: "\t",
-            attributes: [
+          let result = NSMutableAttributedString(attachment: attachment)
+          result.addAttributes(
+            [
               .font: baseFont,
-              .foregroundColor: markerColor,
               .paragraphStyle: paragraphStyle,
-            ]
+            ],
+            range: NSRange(location: 0, length: result.length)
           )
-        )
-        return result
+          result.append(
+            NSAttributedString(
+              string: "\t",
+              attributes: [
+                .font: baseFont,
+                .foregroundColor: markerColor,
+                .paragraphStyle: paragraphStyle,
+              ]
+            )
+          )
+          return result
+        }
       }
     }
 
@@ -1820,7 +1832,7 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
       textColor: NSColor(theme.textPrimary),
       mutedColor: NSColor(theme.textMuted),
       accentColor: NSColor(theme.accent),
-      codeBackgroundColor: NSColor(theme.codeSurface.opacity(0.85)),
+      codeBackgroundColor: NSColor(theme.textPrimary.opacity(colorScheme == .dark ? 0.095 : 0.065)),
       codeBlockBackgroundColor: NSColor(theme.codeSurface),
       separatorColor: NSColor(theme.separator.opacity(0.70)),
       findQuery: findQuery,
@@ -1909,6 +1921,7 @@ final class MacPassthroughSelectableTextContainer: NSView {
     textView.blockquoteBackgroundColor = style.textColor.withAlphaComponent(style.isDark ? 0.05 : 0.035)
     textView.blockquoteAccentColor = style.accentColor.withAlphaComponent(0.72)
     textView.inlineCodeBackgroundColor = style.codeBackgroundColor
+    textView.inlineCodeBorderColor = style.textColor.withAlphaComponent(style.isDark ? 0.14 : 0.10)
     textView.thematicBreakColor = style.separatorColor
     textView.linkTextAttributes = [
       .foregroundColor: style.accentColor,
@@ -1949,6 +1962,7 @@ final class MacSelectableTextView: NSTextView {
   var blockquoteBackgroundColor: NSColor = NSColor.labelColor.withAlphaComponent(0.035)
   var blockquoteAccentColor: NSColor = NSColor.controlAccentColor.withAlphaComponent(0.72)
   var inlineCodeBackgroundColor: NSColor = NSColor.quaternaryLabelColor
+  var inlineCodeBorderColor: NSColor = NSColor.separatorColor
   var thematicBreakColor: NSColor = NSColor.separatorColor
 
   override var textContainerOrigin: NSPoint {
@@ -2042,6 +2056,8 @@ final class MacSelectableTextView: NSTextView {
     }
 
     // 3. Rounded inline code pills
+    let pillFillColor = inlineCodeBackgroundColor
+    let pillBorderColor = inlineCodeBorderColor
     storage.enumerateAttribute(
       MacSelectableMarkdownBuilder.inlineCodeAttributeKey,
       in: visibleCharRange,
@@ -2050,19 +2066,34 @@ final class MacSelectableTextView: NSTextView {
       guard (value as? Bool) == true else { return }
       let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
       guard glyphRange.length > 0 else { return }
-      inlineCodeBackgroundColor.setFill()
+      let runFont = storage.attribute(.font, at: effectiveRange.location, effectiveRange: nil) as? NSFont
+      let targetPillHeight = runFont.map { ceil($0.ascender - $0.descender + 2.5) }
       layoutManager.enumerateEnclosingRects(
         forGlyphRange: glyphRange,
         withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
         in: textContainer
       ) { enclosingRect, _ in
-        var pillRect = enclosingRect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -2.0, dy: -0.5)
+        var pillRect = enclosingRect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -3.0, dy: -0.5)
+        if let targetPillHeight, pillRect.height > targetPillHeight + 1.5 {
+          let excess = pillRect.height - targetPillHeight
+          pillRect.origin.y += floor(excess / 2)
+          pillRect.size.height = targetPillHeight
+        }
         let minX = max(0, pillRect.minX)
         let maxX = min(viewWidth, pillRect.maxX)
         pillRect.origin.x = minX
         pillRect.size.width = max(0, maxX - minX)
         guard pillRect.width > 0, pillRect.height > 0 else { return }
-        NSBezierPath(roundedRect: pillRect, xRadius: 4, yRadius: 4).fill()
+        let path = NSBezierPath(roundedRect: pillRect, xRadius: 4.5, yRadius: 4.5)
+        pillFillColor.setFill()
+        path.fill()
+        let borderRect = pillRect.insetBy(dx: 0.25, dy: 0.25)
+        if borderRect.width > 0, borderRect.height > 0 {
+          let borderPath = NSBezierPath(roundedRect: borderRect, xRadius: 4.25, yRadius: 4.25)
+          borderPath.lineWidth = 0.5
+          pillBorderColor.setStroke()
+          borderPath.stroke()
+        }
       }
     }
   }

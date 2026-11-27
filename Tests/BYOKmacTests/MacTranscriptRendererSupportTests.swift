@@ -626,5 +626,20 @@ struct MacTranscriptRendererSupportTests {
     let bulletPara = attributed.attribute(.paragraphStyle, at: bulletRange.location, effectiveRange: nil) as? NSParagraphStyle
     let bulletColumn = (bulletPara?.headIndent ?? 0) - (bulletPara?.firstLineHeadIndent ?? 0)
     #expect(bulletColumn == round(style.textSize * 0.95))
+
+    // Multi-digit ordered lists right-align single-digit numbers to share the same text column.
+    let orderedMarkdown = (1...10).map { "\($0). Step \($0)" }.joined(separator: "\n")
+    let orderedAttr = MacSelectableMarkdownBuilder.attributedString(
+      for: orderedMarkdown,
+      includeStructuredBlocks: false,
+      style: style
+    )
+    let orderedText = orderedAttr.string as NSString
+    let firstRange = orderedText.range(of: "1.")
+    let tenthRange = orderedText.range(of: "10.")
+    let firstPara = orderedAttr.attribute(.paragraphStyle, at: firstRange.location, effectiveRange: nil) as? NSParagraphStyle
+    let tenthPara = orderedAttr.attribute(.paragraphStyle, at: tenthRange.location, effectiveRange: nil) as? NSParagraphStyle
+    #expect((firstPara?.headIndent ?? 0) == (tenthPara?.headIndent ?? -1))
+    #expect((firstPara?.firstLineHeadIndent ?? 0) > (tenthPara?.firstLineHeadIndent ?? 999))
   }
 }

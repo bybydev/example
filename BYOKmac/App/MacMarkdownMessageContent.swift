@@ -399,7 +399,7 @@ struct MacMarkdownMessageContent: View {
         FontFamilyVariant(.monospaced)
         FontSize(.em(0.9))
         ForegroundColor(foreground)
-        BackgroundColor(codeSurface.opacity(0.85))
+        BackgroundColor(textPrimary.opacity(isDark ? 0.095 : 0.065))
       }
       .strong {
         FontWeight(.semibold)
@@ -3308,7 +3308,7 @@ struct MacFootnotesAnswerView: View {
       fontSize: bodyFontSize,
       foregroundColor: theme.textMuted,
       accentColor: accentColor,
-      codeBackground: theme.codeSurface.opacity(0.85)
+      codeBackground: theme.textPrimary.opacity(colorScheme == .dark ? 0.095 : 0.065)
     )
     let display = findQuery.isEmpty
       ? base

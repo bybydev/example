@@ -430,7 +430,7 @@ private struct MacAddAttachmentTile: View {
 }
 
 @MainActor
-private final class MacAttachmentThumbnailCache {
+final class MacAttachmentThumbnailCache {
   static let shared = MacAttachmentThumbnailCache()
 
   private let storage: NSCache<NSString, NSImage> = {
@@ -446,6 +446,10 @@ private final class MacAttachmentThumbnailCache {
 
   func insert(_ image: NSImage, forKey key: String, byteCost: Int) {
     storage.setObject(image, forKey: key as NSString, cost: max(1, byteCost))
+  }
+
+  func clear() {
+    storage.removeAllObjects()
   }
 }
 

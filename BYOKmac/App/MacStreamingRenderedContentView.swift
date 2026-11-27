@@ -82,6 +82,7 @@ private struct MacStreamingTailBlockView: View {
   let textSize: CGFloat
   let muted: Bool
 
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.macAppTheme) private var theme
 
   @ViewBuilder
@@ -178,7 +179,7 @@ private struct MacStreamingTailBlockView: View {
       foregroundColor: muted ? theme.textMuted : theme.textPrimary,
       mutedColor: theme.textMuted,
       accentColor: theme.accent,
-      codeBackground: theme.codeSurface.opacity(0.85),
+      codeBackground: theme.textPrimary.opacity(colorScheme == .dark ? 0.095 : 0.065),
       muted: muted
     )
     return Text(formatted)
