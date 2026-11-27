@@ -1210,7 +1210,7 @@ private enum MacDeveloperSeedFixtures {
 
           ##### H5 · GFM Task Checklist
 
-          - [x] Unified body leading (`0.26em`) and list leading (`0.24em`)
+          - [x] Unified body leading (`0.32em`) and list leading (`0.28em`)
           - [x] Tab-stopped hanging indents for nested lists and multi-digit ordinals
           - [x] Custom rounded inline-code pills and blockquote cards
           - [ ] Verify light and dark themes across all 10+ palette presets

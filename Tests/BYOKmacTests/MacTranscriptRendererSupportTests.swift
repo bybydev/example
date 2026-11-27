@@ -566,4 +566,65 @@ struct MacTranscriptRendererSupportTests {
     #expect(copied.contains("[^1]: Descript: https://www.descript.com/"))
     #expect(copied.contains("[^note]: CapCut: https://www.capcut.com/"))
   }
+
+  @Test("List bullets normalize 4-space nesting cleanly and render bolder/larger at primary-tinted contrast")
+  @MainActor
+  func listBulletHierarchyAndVisualWeight() {
+    #expect(MacSelectableMarkdownBuilder.normalizedListIndentLevels(for: [0, 4, 4, 8, 0]) == [0, 1, 1, 2, 0])
+    #expect(MacSelectableMarkdownBuilder.normalizedListIndentLevels(for: [0, 2, 4, 2, 0]) == [0, 1, 2, 1, 0])
+
+    let markdown = """
+    - Top level
+        - Four-space child
+            - Eight-space leaf
+    """
+
+    // Streaming tail normalizes 4-space nesting identically to selectable Markdown.
+    let tailFormatted = MacStreamingTailFormatter.formattedAttributedString(
+      markdown,
+      textSize: 15,
+      foregroundColor: .primary,
+      mutedColor: .secondary,
+      accentColor: .accentColor,
+      codeBackground: .gray.opacity(0.1)
+    )
+    let tailPlain = String(tailFormatted.characters)
+    #expect(tailPlain.contains("• Top level"))
+    #expect(tailPlain.contains("◦ Four-space child"))
+    #expect(tailPlain.contains("▪ Eight-space leaf"))
+
+    // Selectable Markdown renders level-0 bullet larger than body text and normalizes 4-space nesting.
+    let style = MacSelectableMarkdownBuilder.Style(
+      textSize: 15,
+      muted: false,
+      isDark: true,
+      themeID: .githubDarkDimmed,
+      textColor: .white,
+      mutedColor: .gray,
+      accentColor: .controlAccentColor,
+      codeBackgroundColor: .quaternaryLabelColor,
+      codeBlockBackgroundColor: .textBackgroundColor,
+      separatorColor: .separatorColor,
+      findQuery: "",
+      activeFindOccurrence: nil
+    )
+    let attributed = MacSelectableMarkdownBuilder.attributedString(
+      for: markdown,
+      includeStructuredBlocks: false,
+      style: style
+    )
+    let text = attributed.string
+    #expect(text.contains("•\tTop level"))
+    #expect(text.contains("◦\tFour-space child"))
+    #expect(text.contains("▪\tEight-space leaf"))
+
+    let bulletRange = (text as NSString).range(of: "•")
+    #expect(bulletRange.location != NSNotFound)
+    let bulletFont = attributed.attribute(.font, at: bulletRange.location, effectiveRange: nil) as? NSFont
+    #expect((bulletFont?.pointSize ?? 0) > style.textSize)
+
+    let bulletPara = attributed.attribute(.paragraphStyle, at: bulletRange.location, effectiveRange: nil) as? NSParagraphStyle
+    let bulletColumn = (bulletPara?.headIndent ?? 0) - (bulletPara?.firstLineHeadIndent ?? 0)
+    #expect(bulletColumn == round(style.textSize * 0.95))
+  }
 }

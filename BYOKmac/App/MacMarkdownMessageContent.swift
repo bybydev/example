@@ -64,7 +64,7 @@ struct MacMarkdownMessageContent: View {
         Text(text)
           .font(.system(size: textSize))
           .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
-          .lineSpacing(textSize * 0.26)
+          .lineSpacing(textSize * 0.32)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -100,7 +100,7 @@ struct MacMarkdownMessageContent: View {
 
   @ViewBuilder
   private func renderedBlocks(_ blocks: [MacAnswerContentBlock]) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 16) {
       ForEach(Array(blocks.enumerated()), id: \.offset) { offset, block in
         blockView(block, isTrailingBlock: offset == blocks.count - 1)
       }
@@ -125,7 +125,7 @@ struct MacMarkdownMessageContent: View {
       if segments.count == 1, let only = segments.first {
         markdownSegmentView(only)
       } else {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
           ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
             markdownSegmentView(segment)
           }
@@ -235,7 +235,7 @@ struct MacMarkdownMessageContent: View {
         .errorMode(.original)
         .imageRenderingMode(.template)
         .imageAccessibility(.sre)
-        .lineSpacing(textSize * 0.26)
+        .lineSpacing(textSize * 0.32)
         .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
         .tint(appTheme.accent)
         .textSelection(.enabled)
@@ -476,7 +476,7 @@ struct MacMarkdownMessageContent: View {
       .paragraph { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .relativeLineSpacing(.em(0.26))
+          .relativeLineSpacing(.em(0.32))
           .markdownMargin(top: .zero, bottom: .em(0.72))
       }
       .blockquote { configuration in
@@ -486,7 +486,7 @@ struct MacMarkdownMessageContent: View {
             .frame(width: 3)
           configuration.label
             .markdownTextStyle { ForegroundColor(textMuted) }
-            .relativeLineSpacing(.em(0.26))
+            .relativeLineSpacing(.em(0.32))
             .relativePadding(.horizontal, length: .em(0.85))
             .relativePadding(.vertical, length: .em(0.48))
         }
@@ -499,8 +499,32 @@ struct MacMarkdownMessageContent: View {
       .listItem { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .relativeLineSpacing(.em(0.24))
+          .relativeLineSpacing(.em(0.28))
           .markdownMargin(top: .em(0.16), bottom: .em(0.16))
+      }
+      .bulletedListMarker { configuration in
+        let level = max(0, configuration.listLevel - 1)
+        let bullet = MacSelectableMarkdownBuilder.unorderedBulletMarker(forIndentLevel: level)
+        let bulletSize = MacSelectableMarkdownBuilder.bulletFontSize(for: textSize, indentLevel: level)
+        let bulletWeight: Font.Weight = switch level {
+        case 0: .bold
+        case 1: .semibold
+        default: .medium
+        }
+        let baseColor = muted ? textMuted : textPrimary
+        let opacity: Double = level == 0 ? (muted ? 0.90 : 0.80) : (muted ? 0.75 : 0.68)
+        let baseline = MacSelectableMarkdownBuilder.bulletBaselineOffset(for: textSize, indentLevel: level)
+        Text(bullet)
+          .font(.system(size: bulletSize, weight: bulletWeight))
+          .baselineOffset(baseline)
+          .foregroundStyle(baseColor.opacity(opacity))
+          .relativeFrame(minWidth: .em(1.4), alignment: .trailing)
+      }
+      .numberedListMarker { configuration in
+        Text("\(configuration.itemNumber).")
+          .font(.system(size: textSize, weight: .medium).monospacedDigit())
+          .foregroundStyle((muted ? textMuted : textPrimary).opacity(muted ? 0.90 : 0.75))
+          .relativeFrame(minWidth: .em(1.5), alignment: .trailing)
       }
       .taskListMarker { configuration in
         Image(systemName: configuration.isCompleted ? "checkmark.circle.fill" : "circle")
@@ -545,7 +569,7 @@ struct MacMarkdownMessageContent: View {
       }
       .thematicBreak {
         Rectangle()
-          .fill(separator.opacity(0.85))
+          .fill(separator.opacity(0.70))
           .frame(height: 1)
           .markdownMargin(top: .em(0.95), bottom: .em(0.95))
       }
@@ -3299,7 +3323,7 @@ struct MacFootnotesAnswerView: View {
     return Text(display)
       .font(.system(size: bodyFontSize))
       .foregroundStyle(theme.textMuted)
-      .lineSpacing(bodyFontSize * 0.24)
+      .lineSpacing(bodyFontSize * 0.28)
       .textSelection(.enabled)
       .fixedSize(horizontal: false, vertical: true)
       .frame(maxWidth: .infinity, alignment: .leading)

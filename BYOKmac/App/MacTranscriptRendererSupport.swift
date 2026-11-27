@@ -243,17 +243,18 @@ enum MacStreamingTailFormatter {
     muted: Bool = false
   ) -> AttributedString {
     let stabilized = stabilizedSource(source)
-    let lines = stabilized.split(separator: "\n", omittingEmptySubsequences: false)
+    let lines = stabilized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let listLevels = normalizedStreamingListLevels(for: lines)
     var output = AttributedString()
 
-    for (index, rawLine) in lines.enumerated() {
+    for (index, line) in lines.enumerated() {
       if index > 0 {
         output.append(AttributedString("\n"))
       }
-      let line = String(rawLine)
       output.append(
         formattedLine(
           line,
+          normalizedListLevel: listLevels[index],
           textSize: textSize,
           foregroundColor: foregroundColor,
           mutedColor: mutedColor,
@@ -267,8 +268,47 @@ enum MacStreamingTailFormatter {
     return output
   }
 
+  private static func normalizedStreamingListLevels(for lines: [String]) -> [Int?] {
+    var result: [Int?] = Array(repeating: nil, count: lines.count)
+    var index = 0
+    while index < lines.count {
+      guard let rawIndent = rawListLineIndent(for: lines[index]) else {
+        index += 1
+        continue
+      }
+      var groupStart = index
+      var rawIndents: [Int] = [rawIndent]
+      index += 1
+      while index < lines.count, let nextIndent = rawListLineIndent(for: lines[index]) {
+        rawIndents.append(nextIndent)
+        index += 1
+      }
+      let normalized = MacSelectableMarkdownBuilder.normalizedListIndentLevels(for: rawIndents)
+      for level in normalized {
+        result[groupStart] = level
+        groupStart += 1
+      }
+    }
+    return result
+  }
+
+  private static func rawListLineIndent(for line: String) -> Int? {
+    let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
+    guard trimmed.hasPrefix("- [x] ")
+      || trimmed.hasPrefix("- [X] ")
+      || trimmed.hasPrefix("- [ ] ")
+      || trimmed.hasPrefix("- ")
+      || trimmed.hasPrefix("* ")
+      || trimmed.hasPrefix("+ ")
+    else { return nil }
+    return line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { total, ch in
+      total + (ch == "\t" ? 4 : 1)
+    }
+  }
+
   private static func formattedLine(
     _ line: String,
+    normalizedListLevel: Int?,
     textSize: CGFloat,
     foregroundColor: Color,
     mutedColor: Color,
@@ -331,10 +371,7 @@ enum MacStreamingTailFormatter {
     }
 
     // Task list / unordered list prefix
-    let leadingSpaces = line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { total, ch in
-      total + (ch == "\t" ? 2 : 1)
-    }
-    let indentLevel = leadingSpaces / 2
+    let indentLevel = normalizedListLevel ?? 0
     let indent = String(repeating: "  ", count: min(indentLevel, 6))
     if trimmedLeading.hasPrefix("- [x] ") || trimmedLeading.hasPrefix("- [X] ") {
       var prefix = AttributedString("\(indent)☑ ")
@@ -378,9 +415,31 @@ enum MacStreamingTailFormatter {
     }
     if trimmedLeading.hasPrefix("- ") || trimmedLeading.hasPrefix("* ") || trimmedLeading.hasPrefix("+ ") {
       let bullet = MacSelectableMarkdownBuilder.unorderedBulletMarker(forIndentLevel: indentLevel)
-      var prefix = AttributedString("\(indent)\(bullet) ")
-      prefix.font = .system(size: textSize, weight: .medium)
-      prefix.foregroundColor = mutedColor
+      let bulletSize = MacSelectableMarkdownBuilder.bulletFontSize(for: textSize, indentLevel: indentLevel)
+      let bulletWeight: Font.Weight = switch indentLevel {
+      case 0: .bold
+      case 1: .semibold
+      default: .medium
+      }
+      let bulletBaseColor = muted ? mutedColor : foregroundColor
+      let bulletOpacity: Double = indentLevel == 0 ? (muted ? 0.90 : 0.80) : (muted ? 0.75 : 0.68)
+
+      var prefix = AttributedString(indent)
+      prefix.font = .system(size: textSize, weight: .regular)
+      var bulletPart = AttributedString(bullet)
+      bulletPart.swiftUI.font = .system(size: bulletSize, weight: bulletWeight)
+      bulletPart.swiftUI.foregroundColor = bulletBaseColor.opacity(bulletOpacity)
+      let baselineOffset = MacSelectableMarkdownBuilder.bulletBaselineOffset(
+        for: textSize,
+        indentLevel: indentLevel
+      )
+      if baselineOffset != 0 {
+        bulletPart.swiftUI.baselineOffset = baselineOffset
+      }
+      prefix.append(bulletPart)
+      var spacePart = AttributedString(" ")
+      spacePart.font = .system(size: textSize, weight: .regular)
+      prefix.append(spacePart)
       prefix.append(
         parseInlineMarkdown(
           String(trimmedLeading.dropFirst(2)),
@@ -704,6 +763,41 @@ enum MacSelectableMarkdownBuilder {
     }
   }
 
+  static func bulletFontSize(for textSize: CGFloat, indentLevel: Int) -> CGFloat {
+    switch indentLevel {
+    case 0: round(textSize * 1.18)
+    case 1: round(textSize * 1.10)
+    default: round(textSize * 1.05)
+    }
+  }
+
+  static func bulletBaselineOffset(for textSize: CGFloat, indentLevel: Int) -> CGFloat {
+    switch indentLevel {
+    case 0: -round(textSize * 0.04)
+    default: 0
+    }
+  }
+
+  /// Maps raw leading-space counts within a list group to logical nesting
+  /// depths (`0, 1, 2, ...`) so both 2-space and 4-space LLM indentation step
+  /// cleanly from `•` → `◦` → `▪`.
+  static func normalizedListIndentLevels(for rawIndents: [Int]) -> [Int] {
+    var stack: [Int] = []
+    var levels: [Int] = []
+    levels.reserveCapacity(rawIndents.count)
+
+    for raw in rawIndents {
+      while let top = stack.last, raw < top {
+        stack.removeLast()
+      }
+      if stack.isEmpty || raw > stack.last! {
+        stack.append(raw)
+      }
+      levels.append(max(0, stack.count - 1))
+    }
+    return levels
+  }
+
   static func blockquoteVerticalPadding(for textSize: CGFloat) -> CGFloat {
     ceil(textSize * 0.48)
   }
@@ -845,11 +939,11 @@ enum MacSelectableMarkdownBuilder {
     var index = 0
     var blockquoteCounter = 0
 
-    let bodyLineSpacing = style.textSize * 0.26
-    let listLineSpacing = style.textSize * 0.24
-    let paragraphGap = style.textSize * 0.55
-    let listItemGap = style.textSize * 0.28
-    let listTrailingGap = style.textSize * 0.58
+    let bodyLineSpacing = style.textSize * 0.32
+    let listLineSpacing = style.textSize * 0.28
+    let paragraphGap = style.textSize * 0.70
+    let listItemGap = style.textSize * 0.30
+    let listTrailingGap = style.textSize * 0.72
     let blockquoteVerticalPad = blockquoteVerticalPadding(for: style.textSize)
 
     while index < lines.count {
@@ -981,33 +1075,44 @@ enum MacSelectableMarkdownBuilder {
           index += 1
         }
 
+        let normalizedLevels = normalizedListIndentLevels(for: parsedItems.map(\.item.rawIndent))
         let orderedMarkerFont = NSFont.monospacedDigitSystemFont(ofSize: style.textSize, weight: .medium)
         var maxOrderedWidthByIndent: [Int: CGFloat] = [:]
-        for entry in parsedItems {
+        for (itemOffset, entry) in parsedItems.enumerated() {
+          let indentLevel = normalizedLevels[itemOffset]
           if case .ordered(let marker) = entry.item.kind {
             let width = ceil((marker as NSString).size(withAttributes: [.font: orderedMarkerFont]).width)
-            maxOrderedWidthByIndent[entry.item.indentLevel] = max(
-              maxOrderedWidthByIndent[entry.item.indentLevel] ?? 0,
+            maxOrderedWidthByIndent[indentLevel] = max(
+              maxOrderedWidthByIndent[indentLevel] ?? 0,
               width
             )
           }
         }
 
-        let indentStep = round(style.textSize * 1.25)
+        let indentStep = round(style.textSize * 1.2)
         let defaultMarkerColumn = round(style.textSize * 1.35)
+        let unorderedMarkerColumn = round(style.textSize * 0.95)
         let listGroup = NSMutableAttributedString()
         let rawGroupSource = parsedItems.map(\.rawLine).joined(separator: "\n")
 
         for (itemOffset, entry) in parsedItems.enumerated() {
           let item = entry.item
+          let indentLevel = normalizedLevels[itemOffset]
           let isLastItem = itemOffset == parsedItems.count - 1
-          let clampedIndent = min(item.indentLevel, 6)
+          let clampedIndent = min(indentLevel, 6)
           let baseIndent = CGFloat(clampedIndent) * indentStep
           let markerStart = baseIndent + round(style.textSize * 0.25)
           let markerColumn: CGFloat
-          if case .ordered = item.kind, let maxOrderedWidth = maxOrderedWidthByIndent[item.indentLevel] {
-            markerColumn = max(defaultMarkerColumn, maxOrderedWidth + round(style.textSize * 0.45))
-          } else {
+          switch item.kind {
+          case .unordered:
+            markerColumn = unorderedMarkerColumn
+          case .ordered:
+            if let maxOrderedWidth = maxOrderedWidthByIndent[indentLevel] {
+              markerColumn = max(defaultMarkerColumn, maxOrderedWidth + round(style.textSize * 0.45))
+            } else {
+              markerColumn = defaultMarkerColumn
+            }
+          case .task:
             markerColumn = defaultMarkerColumn
           }
           let textStart = markerStart + markerColumn
@@ -1029,21 +1134,46 @@ enum MacSelectableMarkdownBuilder {
               markerColor: color,
               paragraphStyle: para
             )
-          case .unordered(let marker):
-            prefix = NSAttributedString(
-              string: marker + "\t",
-              attributes: [
-                .font: NSFont.systemFont(ofSize: style.textSize, weight: .medium),
-                .foregroundColor: style.mutedColor,
-                .paragraphStyle: para,
-              ]
+          case .unordered:
+            let marker = unorderedBulletMarker(forIndentLevel: indentLevel)
+            let bulletSize = bulletFontSize(for: style.textSize, indentLevel: indentLevel)
+            let bulletWeight: NSFont.Weight = switch indentLevel {
+            case 0: .bold
+            case 1: .semibold
+            default: .medium
+            }
+            let baseMarkerColor = style.muted ? style.mutedColor : style.textColor
+            let markerAlpha: CGFloat = indentLevel == 0
+              ? (style.muted ? 0.90 : 0.80)
+              : (style.muted ? 0.75 : 0.68)
+            var bulletAttrs: [NSAttributedString.Key: Any] = [
+              .font: NSFont.systemFont(ofSize: bulletSize, weight: bulletWeight),
+              .foregroundColor: baseMarkerColor.withAlphaComponent(markerAlpha),
+              .paragraphStyle: para,
+            ]
+            let baseline = bulletBaselineOffset(for: style.textSize, indentLevel: indentLevel)
+            if baseline != 0 {
+              bulletAttrs[.baselineOffset] = baseline
+            }
+            let mutablePrefix = NSMutableAttributedString(string: marker, attributes: bulletAttrs)
+            mutablePrefix.append(
+              NSAttributedString(
+                string: "\t",
+                attributes: [
+                  .font: NSFont.systemFont(ofSize: style.textSize, weight: .regular),
+                  .paragraphStyle: para,
+                ]
+              )
             )
+            prefix = mutablePrefix
           case .ordered(let marker):
+            let baseMarkerColor = style.muted ? style.mutedColor : style.textColor
+            let markerAlpha: CGFloat = style.muted ? 0.90 : 0.75
             prefix = NSAttributedString(
               string: marker + "\t",
               attributes: [
                 .font: orderedMarkerFont,
-                .foregroundColor: style.mutedColor,
+                .foregroundColor: baseMarkerColor.withAlphaComponent(markerAlpha),
                 .paragraphStyle: para,
               ]
             )
@@ -1371,7 +1501,7 @@ enum MacSelectableMarkdownBuilder {
       para.firstLineHeadIndent = 0
       para.headIndent = textStart
       para.tabStops = [NSTextTab(textAlignment: .left, location: textStart)]
-      para.lineSpacing = noteFontSize * 0.24
+      para.lineSpacing = noteFontSize * 0.28
       para.paragraphSpacing = isLast ? 0 : noteFontSize * 0.35
 
       let marker = NSAttributedString(
@@ -1540,41 +1670,40 @@ enum MacSelectableMarkdownBuilder {
 
   private struct ParsedListItem {
     enum Kind {
-      case unordered(marker: String)
+      case unordered
       case ordered(marker: String)
       case task(isCompleted: Bool)
     }
 
-    let indentLevel: Int
+    let rawIndent: Int
     let kind: Kind
     let body: String
   }
 
   private static func parseListItem(_ line: String) -> ParsedListItem? {
     let leadingSpaces = line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { total, ch in
-      total + (ch == "\t" ? 2 : 1)
+      total + (ch == "\t" ? 4 : 1)
     }
-    let indentLevel = leadingSpaces / 2
     let trimmed = line.trimmingCharacters(in: .whitespaces)
 
     if trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") {
       return ParsedListItem(
-        indentLevel: indentLevel,
+        rawIndent: leadingSpaces,
         kind: .task(isCompleted: true),
         body: String(trimmed.dropFirst(6))
       )
     }
     if trimmed.hasPrefix("- [ ] ") {
       return ParsedListItem(
-        indentLevel: indentLevel,
+        rawIndent: leadingSpaces,
         kind: .task(isCompleted: false),
         body: String(trimmed.dropFirst(6))
       )
     }
     if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
       return ParsedListItem(
-        indentLevel: indentLevel,
-        kind: .unordered(marker: unorderedBulletMarker(forIndentLevel: indentLevel)),
+        rawIndent: leadingSpaces,
+        kind: .unordered,
         body: String(trimmed.dropFirst(2))
       )
     }
@@ -1582,7 +1711,7 @@ enum MacSelectableMarkdownBuilder {
       let marker = String(trimmed[..<matchEnd]).trimmingCharacters(in: .whitespaces)
       let body = String(trimmed[matchEnd...])
       return ParsedListItem(
-        indentLevel: indentLevel,
+        rawIndent: leadingSpaces,
         kind: .ordered(marker: marker),
         body: body
       )
@@ -1691,9 +1820,9 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
       textColor: NSColor(theme.textPrimary),
       mutedColor: NSColor(theme.textMuted),
       accentColor: NSColor(theme.accent),
-      codeBackgroundColor: NSColor(theme.codeSurface).withAlphaComponent(0.85),
+      codeBackgroundColor: NSColor(theme.codeSurface.opacity(0.85)),
       codeBlockBackgroundColor: NSColor(theme.codeSurface),
-      separatorColor: NSColor(theme.separator),
+      separatorColor: NSColor(theme.separator.opacity(0.70)),
       findQuery: findQuery,
       activeFindOccurrence: activeFindOccurrence
     )
@@ -1780,7 +1909,7 @@ final class MacPassthroughSelectableTextContainer: NSView {
     textView.blockquoteBackgroundColor = style.textColor.withAlphaComponent(style.isDark ? 0.05 : 0.035)
     textView.blockquoteAccentColor = style.accentColor.withAlphaComponent(0.72)
     textView.inlineCodeBackgroundColor = style.codeBackgroundColor
-    textView.thematicBreakColor = style.separatorColor.withAlphaComponent(0.85)
+    textView.thematicBreakColor = style.separatorColor
     textView.linkTextAttributes = [
       .foregroundColor: style.accentColor,
       .cursor: NSCursor.pointingHand,

@@ -7,7 +7,7 @@ struct MacStreamingRenderedContentView: View {
   var muted = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 16) {
       ForEach(snapshot.stableBlocks) { rendered in
         MacStableRenderedAnswerBlockView(rendered: rendered, textSize: textSize, muted: muted)
           .equatable()
@@ -99,7 +99,7 @@ private struct MacStreamingTailBlockView: View {
               streamingMarkdownTextView(text)
             case .thematicBreak:
               Rectangle()
-                .fill(theme.separator.opacity(0.85))
+                .fill(theme.separator.opacity(0.70))
                 .frame(height: 1)
                 .padding(.vertical, textSize * 0.45)
             }
@@ -182,7 +182,7 @@ private struct MacStreamingTailBlockView: View {
       muted: muted
     )
     return Text(formatted)
-      .lineSpacing(textSize * 0.26)
+      .lineSpacing(textSize * 0.32)
       .textSelection(.enabled)
       .fixedSize(horizontal: false, vertical: true)
       .frame(maxWidth: .infinity, alignment: .leading)
