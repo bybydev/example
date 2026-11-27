@@ -103,7 +103,7 @@ final class MacPreparedAnswer: @unchecked Sendable {
           markdown[body] = MarkdownContent(body)
         }
 
-      case .code, .math:
+      case .code, .math, .footnotes:
         break
       }
     }

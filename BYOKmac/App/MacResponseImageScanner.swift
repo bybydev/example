@@ -49,6 +49,8 @@ enum MacResponseImageScanner {
         rawMarkdown = body
       case .details(_, let body, _):
         rawMarkdown = body
+      case .footnotes(let footnotes):
+        rawMarkdown = footnotes.map(\.body).joined(separator: "\n")
       case .code, .math:
         continue
       }
@@ -98,6 +100,8 @@ enum MacResponseImageScanner {
         rawMarkdown = body
       case .details(_, let body, _):
         rawMarkdown = body
+      case .footnotes(let footnotes):
+        rawMarkdown = footnotes.map(\.body).joined(separator: "\n")
       case .code, .math:
         continue
       }

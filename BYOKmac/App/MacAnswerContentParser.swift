@@ -332,6 +332,12 @@ enum MacCalloutKind: String, Equatable, Hashable, Sendable {
   }
 }
 
+struct MacParsedFootnote: Equatable, Hashable, Sendable {
+  let label: String
+  let body: String
+  let rawMarkdown: String
+}
+
 enum MacAnswerContentBlock: Equatable, Sendable {
   case markdown(String)
   case code(language: String?, content: String, isComplete: Bool)
@@ -339,9 +345,13 @@ enum MacAnswerContentBlock: Equatable, Sendable {
   case table(MacParsedMarkdownTable)
   case callout(kind: MacCalloutKind, body: String)
   case details(summary: String, body: String, isComplete: Bool)
+  case footnotes([MacParsedFootnote])
 }
 
 enum MacAnswerContentParser {
+  static let inlineFootnoteReferenceRegex = try? NSRegularExpression(
+    pattern: #"\[\^([A-Za-z0-9_.\-]{1,48})\](?!:)"#
+  )
   private static let inlineMathRegex = try? NSRegularExpression(
     pattern: #"(?<![\\$\d])\$(?![$\s])(?:\\.|[^$\n])+(?<!\s)(?<!\\)\$(?![$\d])|\\\((?:\\.|[^\\\n])+\\\)"#
   )
@@ -373,10 +383,11 @@ enum MacAnswerContentParser {
     case table
     case indented
     case html
+    case footnote
 
     var canContinueAcrossBlankLine: Bool {
       switch self {
-      case .list, .blockquote, .indented, .html: true
+      case .list, .blockquote, .indented, .html, .footnote: true
       case .ordinary, .table: false
       }
     }
@@ -503,6 +514,13 @@ enum MacAnswerContentParser {
         continue
       }
 
+      if let parsedFootnotes = parseFootnotes(in: lines, startingAt: index) {
+        flushMarkdown()
+        blocks.append(.footnotes(parsedFootnotes.footnotes))
+        index = parsedFootnotes.nextIndex
+        continue
+      }
+
       markdownLines.append(line)
       index += 1
     }
@@ -531,6 +549,8 @@ enum MacAnswerContentParser {
         markdown = body
       case .details(_, let body, _):
         markdown = body
+      case .footnotes(let footnotes):
+        markdown = footnotes.map(\.body).joined(separator: "\n")
       case .code, .math:
         continue
       }
@@ -654,13 +674,17 @@ enum MacAnswerContentParser {
 
       let nextKind = markdownContinuationKind(for: line.text)
       if let currentKind = markdownKind, blankSeenInContinuation {
-        if currentKind != nextKind {
+        let continuesFootnote =
+          currentKind == .footnote && stripFootnoteContinuationIndent(line.text) != nil
+        if currentKind != nextKind && !continuesFootnote {
           stableEndUTF8 = max(stableEndUTF8, line.startUTF8)
           markdownKind = nextKind
         }
         blankSeenInContinuation = false
       } else if markdownKind == nil {
         markdownKind = nextKind
+      } else if markdownKind == .ordinary, nextKind == .footnote {
+        markdownKind = .footnote
       }
     }
 
@@ -1265,6 +1289,7 @@ enum MacAnswerContentParser {
   private static func markdownContinuationKind(for line: String) -> MarkdownContinuationKind {
     let trimmed = line.trimmingCharacters(in: .whitespaces)
     if trimmed.hasPrefix(">") { return .blockquote }
+    if parseFootnoteHeader(line: line) != nil { return .footnote }
     if line.hasPrefix("    ") || line.hasPrefix("\t") { return .indented }
     if trimmed.hasPrefix("|") { return .table }
     if trimmed.hasPrefix("<") { return .html }
@@ -1275,6 +1300,119 @@ enum MacAnswerContentParser {
       return .list
     }
     return .ordinary
+  }
+
+  private struct ParsedFootnotesSlice {
+    let footnotes: [MacParsedFootnote]
+    let nextIndex: Int
+  }
+
+  private static func parseFootnoteHeader(line: String) -> (label: String, firstLineBody: String)? {
+    guard !hasIndentedCodePrefix(line) else { return nil }
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("[^") else { return nil }
+    let afterOpen = trimmed.dropFirst(2)
+    guard let closeRange = afterOpen.range(of: "]:") else { return nil }
+    let label = String(afterOpen[..<closeRange.lowerBound])
+    guard !label.isEmpty, label.count <= 48,
+      label.unicodeScalars.allSatisfy({ scalar in
+        CharacterSet.alphanumerics.contains(scalar)
+          || scalar == "_"
+          || scalar == "-"
+          || scalar == "."
+      })
+    else { return nil }
+
+    let afterColon = afterOpen[closeRange.upperBound...]
+    guard afterColon.isEmpty || afterColon.first == " " || afterColon.first == "\t" else {
+      return nil
+    }
+    return (label: label, firstLineBody: String(afterColon).trimmingCharacters(in: .whitespaces))
+  }
+
+  private static func stripFootnoteContinuationIndent(_ line: String) -> String? {
+    if line.hasPrefix("\t") {
+      return String(line.dropFirst())
+    }
+    let leadingSpaces = line.prefix { $0 == " " }.count
+    guard leadingSpaces >= 2 else { return nil }
+    return String(line.dropFirst(min(leadingSpaces, 4)))
+  }
+
+  private static func parseFootnotes(in lines: [String], startingAt startIndex: Int) -> ParsedFootnotesSlice? {
+    guard parseFootnoteHeader(line: lines[startIndex]) != nil else { return nil }
+
+    var footnotes: [MacParsedFootnote] = []
+    var cursor = startIndex
+
+    while cursor < lines.count, let header = parseFootnoteHeader(line: lines[cursor]) {
+      let itemStart = cursor
+      var rawLines: [String] = [lines[cursor]]
+      var bodyLines: [String] = []
+      if !header.firstLineBody.isEmpty {
+        bodyLines.append(header.firstLineBody)
+      }
+      cursor += 1
+
+      while cursor < lines.count {
+        let candidate = lines[cursor]
+        if let continuation = stripFootnoteContinuationIndent(candidate) {
+          rawLines.append(candidate)
+          bodyLines.append(continuation)
+          cursor += 1
+          continue
+        }
+        if candidate.trimmingCharacters(in: .whitespaces).isEmpty {
+          var nextNonBlank = cursor + 1
+          while nextNonBlank < lines.count,
+            lines[nextNonBlank].trimmingCharacters(in: .whitespaces).isEmpty
+          {
+            nextNonBlank += 1
+          }
+          if nextNonBlank < lines.count,
+            stripFootnoteContinuationIndent(lines[nextNonBlank]) != nil
+          {
+            rawLines.append(candidate)
+            bodyLines.append("")
+            cursor += 1
+            continue
+          }
+        }
+        break
+      }
+
+      let body = trimBlankLines(bodyLines.joined(separator: "\n"))
+      guard !body.isEmpty else {
+        if footnotes.isEmpty {
+          return nil
+        }
+        cursor = itemStart
+        break
+      }
+
+      footnotes.append(
+        MacParsedFootnote(
+          label: header.label,
+          body: body,
+          rawMarkdown: rawLines.joined(separator: "\n")
+        )
+      )
+
+      var lookahead = cursor
+      while lookahead < lines.count,
+        lines[lookahead].trimmingCharacters(in: .whitespaces).isEmpty
+      {
+        lookahead += 1
+      }
+      if lookahead < lines.count, parseFootnoteHeader(line: lines[lookahead]) != nil {
+        cursor = lookahead
+        continue
+      }
+      break
+    }
+
+    guard !footnotes.isEmpty else { return nil }
+    return ParsedFootnotesSlice(footnotes: footnotes, nextIndex: cursor)
   }
 
   private struct ParsedCalloutSlice {

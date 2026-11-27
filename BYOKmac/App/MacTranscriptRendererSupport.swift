@@ -294,11 +294,14 @@ enum MacStreamingTailFormatter {
         return parseInlineMarkdown(
           headingText,
           baseFont: .system(size: textSize * scale, weight: weight),
+          baseFontSize: textSize * scale,
           baseWeight: weight,
           codeFontSize: textSize * scale * 0.9,
           foregroundColor: headingForeground,
+          mutedColor: mutedColor,
           accentColor: accentColor,
-          codeBackground: codeBackground
+          codeBackground: codeBackground,
+          muted: muted
         )
       }
     }
@@ -314,11 +317,14 @@ enum MacStreamingTailFormatter {
       let content = parseInlineMarkdown(
         body,
         baseFont: .system(size: textSize),
+        baseFontSize: textSize,
         baseWeight: .regular,
         codeFontSize: textSize * 0.9,
         foregroundColor: mutedColor,
+        mutedColor: mutedColor,
         accentColor: accentColor,
-        codeBackground: codeBackground
+        codeBackground: codeBackground,
+        muted: muted
       )
       prefix.append(content)
       return prefix
@@ -338,11 +344,14 @@ enum MacStreamingTailFormatter {
         parseInlineMarkdown(
           String(trimmedLeading.dropFirst(6)),
           baseFont: .system(size: textSize),
+          baseFontSize: textSize,
           baseWeight: .regular,
           codeFontSize: textSize * 0.9,
           foregroundColor: foregroundColor,
+          mutedColor: mutedColor,
           accentColor: accentColor,
-          codeBackground: codeBackground
+          codeBackground: codeBackground,
+          muted: muted
         )
       )
       return prefix
@@ -355,11 +364,14 @@ enum MacStreamingTailFormatter {
         parseInlineMarkdown(
           String(trimmedLeading.dropFirst(6)),
           baseFont: .system(size: textSize),
+          baseFontSize: textSize,
           baseWeight: .regular,
           codeFontSize: textSize * 0.9,
           foregroundColor: foregroundColor,
+          mutedColor: mutedColor,
           accentColor: accentColor,
-          codeBackground: codeBackground
+          codeBackground: codeBackground,
+          muted: muted
         )
       )
       return prefix
@@ -373,11 +385,14 @@ enum MacStreamingTailFormatter {
         parseInlineMarkdown(
           String(trimmedLeading.dropFirst(2)),
           baseFont: .system(size: textSize),
+          baseFontSize: textSize,
           baseWeight: .regular,
           codeFontSize: textSize * 0.9,
           foregroundColor: foregroundColor,
+          mutedColor: mutedColor,
           accentColor: accentColor,
-          codeBackground: codeBackground
+          codeBackground: codeBackground,
+          muted: muted
         )
       )
       return prefix
@@ -386,22 +401,28 @@ enum MacStreamingTailFormatter {
     return parseInlineMarkdown(
       line,
       baseFont: .system(size: textSize),
+      baseFontSize: textSize,
       baseWeight: .regular,
       codeFontSize: textSize * 0.9,
       foregroundColor: foregroundColor,
+      mutedColor: mutedColor,
       accentColor: accentColor,
-      codeBackground: codeBackground
+      codeBackground: codeBackground,
+      muted: muted
     )
   }
 
   private static func parseInlineMarkdown(
     _ text: String,
     baseFont: Font,
+    baseFontSize: CGFloat,
     baseWeight: Font.Weight,
     codeFontSize: CGFloat,
     foregroundColor: Color,
+    mutedColor: Color,
     accentColor: Color,
-    codeBackground: Color
+    codeBackground: Color,
+    muted: Bool
   ) -> AttributedString {
     guard !text.isEmpty else { return AttributedString() }
 
@@ -413,6 +434,7 @@ enum MacStreamingTailFormatter {
 
     let strongWeight: Font.Weight = baseWeight == .bold ? .bold : .semibold
     let codeWeight: Font.Weight = baseWeight == .bold ? .semibold : (baseWeight == .semibold ? .medium : .regular)
+    let hasFootnoteRefs = text.contains("[^") && MacAnswerContentParser.inlineFootnoteReferenceRegex != nil
 
     attributed.foregroundColor = foregroundColor
     for run in attributed.runs {
@@ -441,7 +463,67 @@ enum MacStreamingTailFormatter {
       }
     }
 
-    return attributed
+    guard hasFootnoteRefs, let regex = MacAnswerContentParser.inlineFootnoteReferenceRegex else {
+      return attributed
+    }
+
+    let supSize = max(9.5, round(baseFontSize * 0.68))
+    let supBaseline = round(baseFontSize * 0.34)
+    let supColor = muted ? mutedColor : accentColor
+    var output = AttributedString()
+
+    for run in attributed.runs {
+      let isCode = run.inlinePresentationIntent?.contains(.code) == true
+      let segment = String(attributed[run.range].characters)
+      guard !isCode, run.link == nil, segment.contains("[^") else {
+        output.append(AttributedString(attributed[run.range]))
+        continue
+      }
+
+      let fullRange = NSRange(segment.startIndex..<segment.endIndex, in: segment)
+      let matches = regex.matches(in: segment, range: fullRange)
+      guard !matches.isEmpty else {
+        output.append(AttributedString(attributed[run.range]))
+        continue
+      }
+
+      let segmentCount = segment.count
+      var cursorOffset = 0
+      for match in matches {
+        guard match.numberOfRanges >= 2,
+          let matchRange = Range(match.range, in: segment),
+          let labelRange = Range(match.range(at: 1), in: segment)
+        else { continue }
+
+        let matchStartOffset = segment.distance(from: segment.startIndex, to: matchRange.lowerBound)
+        let matchEndOffset = segment.distance(from: segment.startIndex, to: matchRange.upperBound)
+        guard matchStartOffset >= cursorOffset,
+          matchEndOffset > matchStartOffset,
+          matchEndOffset <= segmentCount
+        else { continue }
+
+        if matchStartOffset > cursorOffset {
+          let lower = attributed.characters.index(run.range.lowerBound, offsetBy: cursorOffset)
+          let upper = attributed.characters.index(run.range.lowerBound, offsetBy: matchStartOffset)
+          output.append(AttributedString(attributed[lower..<upper]))
+        }
+
+        let label = String(segment[labelRange])
+        var badge = AttributedString("\u{2009}\(label)")
+        badge.swiftUI.font = .system(size: supSize, weight: .semibold).monospacedDigit()
+        badge.swiftUI.baselineOffset = supBaseline
+        badge.swiftUI.foregroundColor = supColor
+        output.append(badge)
+        cursorOffset = matchEndOffset
+      }
+
+      if cursorOffset < segmentCount {
+        let lower = attributed.characters.index(run.range.lowerBound, offsetBy: cursorOffset)
+        output.append(AttributedString(attributed[lower..<run.range.upperBound]))
+      }
+    }
+
+    return output
   }
 }
 
@@ -685,6 +767,8 @@ enum MacSelectableMarkdownBuilder {
             range: NSRange(location: 0, length: mutable.length)
           )
           result.append(mutable)
+        case .footnotes(let footnotes):
+          result.append(renderFootnotesBlock(footnotes, style: style))
         }
       }
     } else {
@@ -1268,6 +1352,70 @@ enum MacSelectableMarkdownBuilder {
   }
 
   @MainActor
+  private static func renderFootnotesBlock(
+    _ footnotes: [MacParsedFootnote],
+    style: Style
+  ) -> NSAttributedString {
+    let noteFontSize = max(11.5, style.textSize - 2)
+    let markerFont = NSFont.monospacedDigitSystemFont(ofSize: noteFontSize, weight: .semibold)
+    let maxMarkerWidth = footnotes.reduce(CGFloat(0)) { current, note in
+      let w = ceil(("\(note.label)." as NSString).size(withAttributes: [.font: markerFont]).width)
+      return max(current, w)
+    }
+    let textStart = max(round(noteFontSize * 1.6), maxMarkerWidth + round(noteFontSize * 0.5))
+
+    let output = NSMutableAttributedString()
+    for (offset, footnote) in footnotes.enumerated() {
+      let isLast = offset == footnotes.count - 1
+      let para = NSMutableParagraphStyle()
+      para.firstLineHeadIndent = 0
+      para.headIndent = textStart
+      para.tabStops = [NSTextTab(textAlignment: .left, location: textStart)]
+      para.lineSpacing = noteFontSize * 0.24
+      para.paragraphSpacing = isLast ? 0 : noteFontSize * 0.35
+
+      let marker = NSAttributedString(
+        string: "\(footnote.label).\t",
+        attributes: [
+          .font: markerFont,
+          .foregroundColor: style.muted ? style.mutedColor : style.accentColor,
+          .paragraphStyle: para,
+        ]
+      )
+      output.append(marker)
+      output.append(
+        renderInlineMarkdown(
+          footnote.body,
+          fontSize: noteFontSize,
+          fontWeight: .regular,
+          foregroundColor: style.mutedColor,
+          style: style,
+          paragraphStyle: para,
+          rawSource: footnote.rawMarkdown
+        )
+      )
+      if !isLast {
+        output.append(
+          NSAttributedString(
+            string: "\n",
+            attributes: [
+              .font: NSFont.systemFont(ofSize: noteFontSize, weight: .regular),
+              .paragraphStyle: para,
+            ]
+          )
+        )
+      }
+    }
+
+    output.addAttribute(
+      markdownSourceAttributeKey,
+      value: footnotes.map(\.rawMarkdown).joined(separator: "\n\n"),
+      range: NSRange(location: 0, length: output.length)
+    )
+    return output
+  }
+
+  @MainActor
   private static func italicVariant(of font: NSFont) -> NSFont {
     let descriptor = font.fontDescriptor.withSymbolicTraits(.italic)
     if let converted = NSFont(descriptor: descriptor, size: font.pointSize) {
@@ -1300,6 +1448,11 @@ enum MacSelectableMarkdownBuilder {
       ?? AttributedString(text)
 
     let output = NSMutableAttributedString()
+    let supSize = max(9.5, round(fontSize * 0.68))
+    let supFont = NSFont.monospacedDigitSystemFont(ofSize: supSize, weight: .semibold)
+    let supBaseline = round(fontSize * 0.34)
+    let supColor = style.muted ? style.mutedColor : style.accentColor
+
     for run in parsed.runs {
       let segment = String(parsed[run.range].characters)
       var attrs: [NSAttributedString.Key: Any] = [
@@ -1309,8 +1462,9 @@ enum MacSelectableMarkdownBuilder {
         markdownSourceAttributeKey: rawSource,
       ]
 
+      let isCode = run.inlinePresentationIntent?.contains(.code) == true
       if let intent = run.inlinePresentationIntent {
-        if intent.contains(.code) {
+        if isCode {
           attrs[.font] = codeFont
           attrs[inlineCodeAttributeKey] = true
         } else if intent.contains(.stronglyEmphasized) && intent.contains(.emphasized) {
@@ -1328,6 +1482,40 @@ enum MacSelectableMarkdownBuilder {
       if let link = run.link {
         attrs[.link] = link
         attrs[.foregroundColor] = style.accentColor
+      }
+
+      if !isCode, run.link == nil, segment.contains("[^"),
+        let regex = MacAnswerContentParser.inlineFootnoteReferenceRegex
+      {
+        let fullRange = NSRange(segment.startIndex..<segment.endIndex, in: segment)
+        let matches = regex.matches(in: segment, range: fullRange)
+        if !matches.isEmpty {
+          var cursor = segment.startIndex
+          let supAttrs: [NSAttributedString.Key: Any] = [
+            .font: supFont,
+            .foregroundColor: supColor,
+            .baselineOffset: supBaseline,
+            .paragraphStyle: paragraphStyle,
+            markdownSourceAttributeKey: rawSource,
+          ]
+          for match in matches {
+            guard match.numberOfRanges >= 2,
+              let matchRange = Range(match.range, in: segment),
+              let labelRange = Range(match.range(at: 1), in: segment)
+            else { continue }
+
+            if matchRange.lowerBound > cursor {
+              output.append(NSAttributedString(string: String(segment[cursor..<matchRange.lowerBound]), attributes: attrs))
+            }
+            let label = String(segment[labelRange])
+            output.append(NSAttributedString(string: "\u{2009}\(label)", attributes: supAttrs))
+            cursor = matchRange.upperBound
+          }
+          if cursor < segment.endIndex {
+            output.append(NSAttributedString(string: String(segment[cursor..<segment.endIndex]), attributes: attrs))
+          }
+          continue
+        }
       }
 
       output.append(NSAttributedString(string: segment, attributes: attrs))

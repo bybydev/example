@@ -443,4 +443,127 @@ struct MacTranscriptRendererSupportTests {
     )
     #expect(String(plainResult.characters) == plain)
   }
+
+  @Test("Parses GFM footnote blocks, preserves multi-line continuations, ignores code, and extracts sources")
+  func gfmFootnoteParsingAndSourceExtraction() {
+    let text = """
+    Swift 6 enables strict concurrency[^1] with actors[^note].
+
+    ```markdown
+    [^9]: Inside fenced code block
+    ```
+
+        [^8]: Inside 4-space indented code
+
+    **Footnotes / Sources:**
+    [^1]: Swift Language Guide - *Concurrency*: https://docs.swift.org/swift-book/
+
+    [^note]: Actors isolate mutable state.
+      Continued explanation with [Apple Docs](https://developer.apple.com/swift/).
+    """
+
+    let blocks = MacAnswerContentParser.parse(text)
+    let footnoteBlocks = blocks.compactMap { block -> [MacParsedFootnote]? in
+      if case .footnotes(let items) = block { return items }
+      return nil
+    }
+    #expect(footnoteBlocks.count == 1)
+    let footnotes = footnoteBlocks[0]
+    #expect(footnotes.count == 2)
+    #expect(footnotes[0].label == "1")
+    #expect(footnotes[0].body.contains("https://docs.swift.org/swift-book/"))
+    #expect(footnotes[0].rawMarkdown.hasPrefix("[^1]:"))
+    #expect(footnotes[1].label == "note")
+    #expect(footnotes[1].body.contains("Actors isolate mutable state."))
+    #expect(footnotes[1].body.contains("Continued explanation"))
+
+    let sources = MacAnswerContentParser.sources(in: blocks)
+    #expect(sources.count == 2)
+    #expect(sources[0].url.absoluteString == "https://docs.swift.org/swift-book/")
+    #expect(sources[1].url.absoluteString == "https://developer.apple.com/swift/")
+
+    let groupedSplit = MacAnswerContentParser.splitStreamingSource(
+      "Intro paragraph.\n\n[^1]: First note.\n\n    Continued note.\n\n[^2]: Second note."
+    )
+    #expect(groupedSplit.stable == "Intro paragraph.\n\n")
+    #expect(groupedSplit.tail.contains("[^1]: First note."))
+    #expect(groupedSplit.tail.contains("[^2]: Second note."))
+
+    let finalizedSplit = MacAnswerContentParser.splitStreamingSource(
+      "[^1]: First note.\n\nNext paragraph."
+    )
+    #expect(finalizedSplit.stable.contains("[^1]: First note."))
+    #expect(finalizedSplit.tail == "Next paragraph.")
+  }
+
+  @Test("Inline footnote references render as raised superscripts outside code and preserve raw Markdown on copy")
+  @MainActor
+  func inlineFootnoteSuperscriptStylingAndCopyAsMarkdown() {
+    let source = """
+    See Descript[^1] and CapCut[^note], but keep `[^2]` literal.
+
+    [^1]: Descript: https://www.descript.com/
+    [^note]: CapCut: https://www.capcut.com/
+    """
+
+    // Streaming tail path
+    let tailFormatted = MacStreamingTailFormatter.formattedAttributedString(
+      "See Descript[^1] and CapCut[^note], but keep `[^2]` literal.",
+      textSize: 15,
+      foregroundColor: .primary,
+      mutedColor: .secondary,
+      accentColor: .accentColor,
+      codeBackground: .gray.opacity(0.1)
+    )
+    let tailPlain = String(tailFormatted.characters)
+    #expect(!tailPlain.contains("[^1]"))
+    #expect(!tailPlain.contains("[^note]"))
+    #expect(tailPlain.contains("\u{2009}1"))
+    #expect(tailPlain.contains("\u{2009}note"))
+    #expect(tailPlain.contains("[^2]"))
+
+    let supRun = tailFormatted.runs.first { run in
+      String(tailFormatted[run.range].characters) == "\u{2009}1"
+    }
+    #expect((supRun?.baselineOffset ?? 0) > 0)
+
+    // Completed selectable Markdown path (including structured footnote block)
+    let style = MacSelectableMarkdownBuilder.Style(
+      textSize: 15,
+      muted: false,
+      isDark: true,
+      themeID: .githubDarkDimmed,
+      textColor: .labelColor,
+      mutedColor: .secondaryLabelColor,
+      accentColor: .controlAccentColor,
+      codeBackgroundColor: .quaternaryLabelColor,
+      codeBlockBackgroundColor: .textBackgroundColor,
+      separatorColor: .separatorColor,
+      findQuery: "",
+      activeFindOccurrence: nil
+    )
+    let attributed = MacSelectableMarkdownBuilder.attributedString(
+      for: source,
+      includeStructuredBlocks: true,
+      style: style
+    )
+    let nsText = attributed.string as NSString
+    #expect(!attributed.string.contains("[^1]"))
+    #expect(attributed.string.contains("[^2]"))
+    #expect(attributed.string.contains("1.\tDescript:"))
+    #expect(attributed.string.contains("note.\tCapCut:"))
+
+    let supRange = nsText.range(of: "\u{2009}1")
+    #expect(supRange.location != NSNotFound)
+    let baseline = attributed.attribute(.baselineOffset, at: supRange.location, effectiveRange: nil) as? CGFloat
+    #expect((baseline ?? 0) > 0)
+
+    let copied = MacSelectableMarkdownBuilder.markdownSnippet(
+      from: attributed,
+      selectedRange: NSRange(location: 0, length: attributed.length)
+    )
+    #expect(copied.contains("See Descript[^1]"))
+    #expect(copied.contains("[^1]: Descript: https://www.descript.com/"))
+    #expect(copied.contains("[^note]: CapCut: https://www.capcut.com/"))
+  }
 }

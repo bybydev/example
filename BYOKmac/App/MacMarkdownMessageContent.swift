@@ -188,6 +188,15 @@ struct MacMarkdownMessageContent: View {
         findQuery: findQuery,
         activeFindOccurrence: activeFindOccurrence
       )
+
+    case .footnotes(let footnotes):
+      MacFootnotesAnswerView(
+        footnotes: footnotes,
+        textSize: textSize,
+        muted: muted,
+        findQuery: findQuery,
+        activeFindOccurrence: activeFindOccurrence
+      )
     }
   }
 
@@ -1040,7 +1049,8 @@ private enum MacMarkdownTableCellFormatter {
       }
     }
 
-    if text.contains("http://") || text.contains("https://"),
+    let loweredText = text.lowercased()
+    if loweredText.contains("http://") || loweredText.contains("https://"),
       let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     {
       let plain = String(attributed.characters)
@@ -3211,6 +3221,154 @@ struct MacDetailsAnswerView: View {
       RoundedRectangle(cornerRadius: 10, style: .continuous)
         .stroke(theme.separator, lineWidth: 0.85)
     }
+  }
+}
+
+struct MacFootnotesAnswerView: View {
+  let footnotes: [MacParsedFootnote]
+  var textSize: CGFloat = 15
+  var muted: Bool = false
+  var findQuery: String = ""
+  var activeFindOccurrence: Int? = nil
+
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macAppTheme) private var theme
+
+  private var bodyFontSize: CGFloat {
+    max(11.5, textSize - 2)
+  }
+
+  var body: some View {
+    let badgeTint = muted ? theme.textMuted : theme.accent
+    VStack(alignment: .leading, spacing: 8) {
+      Rectangle()
+        .fill(theme.separator.opacity(0.65))
+        .frame(height: 0.5)
+
+      VStack(alignment: .leading, spacing: 6) {
+        ForEach(Array(footnotes.enumerated()), id: \.offset) { _, footnote in
+          HStack(alignment: .top, spacing: 8) {
+            Text(footnote.label)
+              .font(.system(size: max(9.5, bodyFontSize - 2.5), weight: .semibold, design: .rounded))
+              .monospacedDigit()
+              .foregroundStyle(badgeTint)
+              .padding(.horizontal, footnote.label.count > 2 ? 6 : 0)
+              .frame(minWidth: 18, minHeight: 18)
+              .background(badgeTint.opacity(0.13), in: Capsule())
+              .padding(.top, 1)
+
+            footnoteBodyView(footnote.body, accentColor: badgeTint)
+          }
+        }
+      }
+    }
+    .padding(.top, 2)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .environment(
+      \.openURL,
+      OpenURLAction { url in
+        guard MacAnswerContentParser.isValidBrowsableURL(url) else {
+          return .systemAction
+        }
+        NSWorkspace.shared.open(url)
+        return .handled
+      }
+    )
+  }
+
+  private func footnoteBodyView(_ body: String, accentColor: Color) -> some View {
+    let base = MacFootnoteBodyFormatter.attributedString(
+      for: body,
+      fontSize: bodyFontSize,
+      foregroundColor: theme.textMuted,
+      accentColor: accentColor,
+      codeBackground: theme.codeSurface.opacity(0.85)
+    )
+    let display = findQuery.isEmpty
+      ? base
+      : MacTranscriptFindSupport.applyHighlights(
+        to: base,
+        query: findQuery,
+        highlightColor: theme.accent.opacity(colorScheme == .dark ? 0.34 : 0.24),
+        activeColor: theme.accent.opacity(colorScheme == .dark ? 0.62 : 0.48),
+        activeOccurrence: activeFindOccurrence
+      )
+
+    return Text(display)
+      .font(.system(size: bodyFontSize))
+      .foregroundStyle(theme.textMuted)
+      .lineSpacing(bodyFontSize * 0.24)
+      .textSelection(.enabled)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .tint(accentColor)
+  }
+}
+
+private enum MacFootnoteBodyFormatter {
+  static func attributedString(
+    for text: String,
+    fontSize: CGFloat,
+    foregroundColor: Color,
+    accentColor: Color,
+    codeBackground: Color
+  ) -> AttributedString {
+    var options = AttributedString.MarkdownParsingOptions()
+    options.interpretedSyntax = .inlineOnlyPreservingWhitespace
+    var attributed = (try? AttributedString(markdown: text, options: options))
+      ?? AttributedString(text)
+
+    attributed.swiftUI.foregroundColor = foregroundColor
+    for run in attributed.runs {
+      let range = run.range
+      if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+        let isBold = intent.contains(.stronglyEmphasized)
+        attributed[range].swiftUI.font = .system(
+          size: max(10.5, fontSize * 0.9),
+          weight: isBold ? .semibold : .regular,
+          design: .monospaced
+        )
+        attributed[range].swiftUI.backgroundColor = codeBackground
+      }
+      if run.link != nil {
+        attributed[range].swiftUI.foregroundColor = accentColor
+      }
+    }
+
+    let loweredText = text.lowercased()
+    if loweredText.contains("http://") || loweredText.contains("https://"),
+      let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    {
+      let plain = String(attributed.characters)
+      let fullRange = NSRange(plain.startIndex..<plain.endIndex, in: plain)
+      for match in detector.matches(in: plain, range: fullRange) {
+        guard let stringRange = Range(match.range, in: plain) else { continue }
+        let matchedText = String(plain[stringRange])
+        let lowered = matchedText.lowercased()
+        guard lowered.hasPrefix("http://") || lowered.hasPrefix("https://") else { continue }
+
+        let trimmedText = MacUserMessageTextSupport.trimTrailingLinkPunctuation(matchedText)
+        guard let url = URL(string: trimmedText),
+          MacAnswerContentParser.isValidBrowsableURL(url)
+        else { continue }
+
+        let startOffset = plain.distance(from: plain.startIndex, to: stringRange.lowerBound)
+        let endOffset = startOffset + trimmedText.count
+        guard endOffset > startOffset, endOffset <= plain.count else { continue }
+
+        let lower = attributed.characters.index(attributed.startIndex, offsetBy: startOffset)
+        let upper = attributed.characters.index(attributed.startIndex, offsetBy: endOffset)
+        let targetRange = lower..<upper
+        let hasLinkOrCode = attributed[targetRange].runs.contains { run in
+          run.link != nil || (run.inlinePresentationIntent?.contains(.code) ?? false)
+        }
+        guard !hasLinkOrCode else { continue }
+        attributed[targetRange].link = url
+        attributed[targetRange].swiftUI.foregroundColor = accentColor
+      }
+    }
+
+    return attributed
   }
 }
 

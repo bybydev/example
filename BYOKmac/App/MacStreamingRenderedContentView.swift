@@ -66,6 +66,9 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
         textSize: textSize,
         muted: muted
       )
+
+    case .footnotes(let footnotes):
+      MacFootnotesAnswerView(footnotes: footnotes, textSize: textSize, muted: muted)
     }
   }
 }
@@ -129,6 +132,9 @@ private struct MacStreamingTailBlockView: View {
         textSize: textSize,
         muted: muted
       )
+
+    case .footnotes(let footnotes):
+      MacFootnotesAnswerView(footnotes: footnotes, textSize: textSize, muted: muted)
     }
   }
 
