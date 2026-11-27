@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hoangbkit/MacAppFoundation",
       "state" : {
-        "revision" : "6c868029bbf76b9165538d686f37ce86665d4341",
-        "version" : "1.5.0"
+        "revision" : "9641f5f09f3a984dab455e8821a863c31c632db0",
+        "version" : "1.8.0"
       }
     },
     {
@@ -89,6 +89,15 @@
       "state" : {
         "revision" : "d8ca73197f59ce260c71bd6d7f6eb8bbdccf508b",
         "version" : "4.0.1"
+      }
+    },
+    {
+      "identity" : "swift-log",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-log.git",
+      "state" : {
+        "revision" : "c7413d967b97aae67c46452bf7645bdb7b200e8e",
+        "version" : "1.17.2"
       }
     },
     {

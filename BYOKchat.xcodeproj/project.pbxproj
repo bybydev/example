@@ -70,6 +70,7 @@
 		41B15F6862BBF7F22D4E4B1E /* MacShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B1B57EDFEDE219B2CA4BB9 /* MacShellView.swift */; };
 		43A9CEEEAF5EB0B45CB7A027 /* BYOKOnboardingDemos.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC8078A87E58CAB8FB7761C5 /* BYOKOnboardingDemos.swift */; };
 		4533705737095C768579196D /* OpenAIResponsesDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8FD9F7AE332001D1C584F77 /* OpenAIResponsesDiscoveryTests.swift */; };
+		456D2880CD147BF76453465A /* MacArtifactPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F4AF13B4E517BF551412066 /* MacArtifactPreviewView.swift */; };
 		4812608BB5868837FAD7D95F /* ChatView+Content.swift in Sources */ = {isa = PBXBuildFile; fileRef = A539DA1482A5E95030F5AD50 /* ChatView+Content.swift */; };
 		48238E9167950D14530C5A7C /* MacProviderModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBEA2D700B0ACB27507A6C8 /* MacProviderModel.swift */; };
 		4851A8D326CCCCADA7E4560B /* MacStreamingRenderedContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EBB438751B19E42D805560A /* MacStreamingRenderedContentView.swift */; };
@@ -118,6 +119,7 @@
 		7E1B979772338AC4B394FAEF /* AppStorageEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = B295C6161F073ECF393949A2 /* AppStorageEnvironment.swift */; };
 		7F4D02D1EBEC057EFE2DA896 /* MacAllChatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFBBD67A899F5BD5E8D6F7D /* MacAllChatsView.swift */; };
 		810AF23A2413D67340B922DD /* ToolMCPTelemetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F47580446635050B930A803A /* ToolMCPTelemetryTests.swift */; };
+		813064079EB346253B4B7B2C /* MacTranscriptRendererSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E18D36891C151E347A30BBD9 /* MacTranscriptRendererSupportTests.swift */; };
 		8226BB2131557AD21DD40AC1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85D33F404D207D928A02AD35 /* SettingsView.swift */; };
 		8268D094E0B416AB6B1FD9D3 /* MacLiveMessagePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D481909B81FC25F0B26469E8 /* MacLiveMessagePresentation.swift */; };
 		836A6FB37FEA2F9627F07876 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 9F7E331B1B0E5072DAA8BCBC /* MarkdownUI */; };
@@ -142,6 +144,7 @@
 		96E84F26C4B9A3ED6510BD51 /* MacDiagnosticsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B31EEE64F7FB3095762066C4 /* MacDiagnosticsModel.swift */; };
 		9784769D614562EC6EE4B434 /* PricingContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0B1E6C2F141A8C1C01F883 /* PricingContextTests.swift */; };
 		97FC498C1E5C1DAF6209E144 /* ProjectViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25141287CFF1D5EDB8A85BBE /* ProjectViews.swift */; };
+		98772BD8562A4AE41007DC8D /* MacTranscriptRendererSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A9F83EF4825EF047C0B36EB /* MacTranscriptRendererSupport.swift */; };
 		98AA939EED757D10E7E19166 /* MacTranscriptScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC577143AE85C7B39ED0DCDF /* MacTranscriptScrollPolicy.swift */; };
 		9932C2AF10C56BC79A3DAF0E /* XAIResponsesPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D796664718B6749891B407F3 /* XAIResponsesPricingTests.swift */; };
 		998B4354628126A40416EC00 /* MCPDataPortabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77577B693F36728AE6383FE8 /* MCPDataPortabilityTests.swift */; };
@@ -223,6 +226,7 @@
 		F0FFE072D7337C9A3A158526 /* LibraryQuickLook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35583DBFFCA46CA7599FBC14 /* LibraryQuickLook.swift */; };
 		F234162144D1B5148FC5CB83 /* ToolCallingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E60BA3294AC623AC13D5163 /* ToolCallingTests.swift */; };
 		F24AF2D535441A6655A10D70 /* CopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = B386E92FA64B86D87443FE50 /* CopyButton.swift */; };
+		F2A85934F2D25659C6663084 /* MacAnalyticsCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC8E8330A429B918B8A9C6B3 /* MacAnalyticsCharts.swift */; };
 		F33C56AE07EA124C78863249 /* MacStorageEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76B37502188CC0B05F303BD8 /* MacStorageEnvironment.swift */; };
 		F3B3A6DBFAC78AB8E8618185 /* MacTargetLabelFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0D59BDC790C8113084B94F /* MacTargetLabelFormatter.swift */; };
 		F3B9564E142B42989CE10DA0 /* MacAnalyticsGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4BDCD9AFD3A74A4937B1CC0 /* MacAnalyticsGateView.swift */; };
@@ -290,6 +294,7 @@
 		147FDA57BC9BC0599B9F7FA6 /* DeveloperSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperSettingsSection.swift; sourceTree = "<group>"; };
 		1986AD144F62CD6570446E41 /* MacLiveMessagePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLiveMessagePresentationTests.swift; sourceTree = "<group>"; };
 		199FDED70D63E09181FE7EFA /* ChatSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSidebarView.swift; sourceTree = "<group>"; };
+		1A9F83EF4825EF047C0B36EB /* MacTranscriptRendererSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTranscriptRendererSupport.swift; sourceTree = "<group>"; };
 		1B8E336B0A4C18465FE24601 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		1F3DE9FB586AB54C22B71A84 /* MCPWorkspaceTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPWorkspaceTransactionTests.swift; sourceTree = "<group>"; };
 		1FCEA67F611B153F6F645A15 /* MacTargetLabelFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTargetLabelFormatterTests.swift; sourceTree = "<group>"; };
@@ -307,6 +312,7 @@
 		2CC738A6837BA431A41AD841 /* MacProviderViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacProviderViews.swift; sourceTree = "<group>"; };
 		2D189E47FBD91336F8D4DDD3 /* MacChatSessionModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatSessionModelTests.swift; sourceTree = "<group>"; };
 		2E60BA3294AC623AC13D5163 /* ToolCallingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallingTests.swift; sourceTree = "<group>"; };
+		2F4AF13B4E517BF551412066 /* MacArtifactPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacArtifactPreviewView.swift; sourceTree = "<group>"; };
 		2F72C0209C9057E94280B007 /* MacAnswerContentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAnswerContentParser.swift; sourceTree = "<group>"; };
 		306EAAD3FB0CA304C7C78E97 /* BYOKPurchaseStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKPurchaseStore.swift; sourceTree = "<group>"; };
 		32D95AAD029B72A851A6947F /* OpenAICompatibleAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAICompatibleAdapterTests.swift; sourceTree = "<group>"; };
@@ -428,6 +434,7 @@
 		B94C7FC65C3BAF5D2059D3F3 /* BYOKchatScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKchatScreenshotTests.swift; sourceTree = "<group>"; };
 		B968DD970CDB89C9F3C0E702 /* MacChatSessionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatSessionModel.swift; sourceTree = "<group>"; };
 		BABFB2870CEA9EF52A2EAC59 /* TelemetryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryStoreTests.swift; sourceTree = "<group>"; };
+		BC8E8330A429B918B8A9C6B3 /* MacAnalyticsCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAnalyticsCharts.swift; sourceTree = "<group>"; };
 		BDFD4B26E72E48DB125F24EF /* ChatManagementModel+Portability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatManagementModel+Portability.swift"; sourceTree = "<group>"; };
 		BFD278A599509229392F2A4C /* MacUTType+Markdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacUTType+Markdown.swift"; sourceTree = "<group>"; };
 		C4930E59F858A37EC45DB65A /* ConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsView.swift; sourceTree = "<group>"; };
@@ -452,6 +459,7 @@
 		DD56951D1613853A919C23F4 /* MacResponseImageSaveSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacResponseImageSaveSheet.swift; sourceTree = "<group>"; };
 		DE2B9B627BED0BF8178900E0 /* BYOKCoreServicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKCoreServicesTests.swift; sourceTree = "<group>"; };
 		E13BF9908B7CE54A91F65630 /* ComposerTargetLabelFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerTargetLabelFormatterTests.swift; sourceTree = "<group>"; };
+		E18D36891C151E347A30BBD9 /* MacTranscriptRendererSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTranscriptRendererSupportTests.swift; sourceTree = "<group>"; };
 		E285AA83EE75D9720CCC4489 /* ChatContextToolLoopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContextToolLoopTests.swift; sourceTree = "<group>"; };
 		E29B8BBB93B2F484C6D7C95F /* AnswerContentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnswerContentParser.swift; sourceTree = "<group>"; };
 		E3C8D7B65CF2B8F0627A191F /* MacStreamingAnswerRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStreamingAnswerRenderer.swift; sourceTree = "<group>"; };
@@ -728,6 +736,7 @@
 				77E38F028C0D29B115808FEC /* MacStreamAccumulatorTests.swift */,
 				6068195DF1CF1A8D5B24091F /* MacStreamingAnswerRendererTests.swift */,
 				1FCEA67F611B153F6F645A15 /* MacTargetLabelFormatterTests.swift */,
+				E18D36891C151E347A30BBD9 /* MacTranscriptRendererSupportTests.swift */,
 				95D2C269D303BD36378E7BAE /* MacTranscriptScrollPolicyTests.swift */,
 			);
 			path = BYOKmacTests;
@@ -784,6 +793,7 @@
 				02D01D0BB18D65473186683A /* BYOKmacApp.swift */,
 				398F21BAC22DB87624032A23 /* MacAdditionalHeadersSection.swift */,
 				CEFBBD67A899F5BD5E8D6F7D /* MacAllChatsView.swift */,
+				BC8E8330A429B918B8A9C6B3 /* MacAnalyticsCharts.swift */,
 				F4BDCD9AFD3A74A4937B1CC0 /* MacAnalyticsGateView.swift */,
 				9280CD914D46581F0E63F31F /* MacAnalyticsView.swift */,
 				55C46F41ABFCF738196BC205 /* MacAnswerContentParseCache.swift */,
@@ -791,6 +801,7 @@
 				0D32040F9EEF2D469F9E599D /* MacAnswerSourcesSheet.swift */,
 				E6F66F5C50F0E9DCC9B4242A /* MacAppAnalytics.swift */,
 				734A22A22060A2EE5DCF2E55 /* MacAppModel.swift */,
+				2F4AF13B4E517BF551412066 /* MacArtifactPreviewView.swift */,
 				DA9EE58B0D04035A1571EFD7 /* MacAttachmentSupport.swift */,
 				A48CCB73B0F873819F964E6F /* MacChatPaneView.swift */,
 				B968DD970CDB89C9F3C0E702 /* MacChatSessionModel.swift */,
@@ -835,6 +846,7 @@
 				2B0D59BDC790C8113084B94F /* MacTargetLabelFormatter.swift */,
 				B5A4228231A8A4F12E407CF0 /* MacThemeModel.swift */,
 				4810E60BB040D9530DE2D1C5 /* MacToastCenter.swift */,
+				1A9F83EF4825EF047C0B36EB /* MacTranscriptRendererSupport.swift */,
 				CC577143AE85C7B39ED0DCDF /* MacTranscriptScrollPolicy.swift */,
 				52803B47EFC83ADB6D1CD504 /* MacUtilitySheets.swift */,
 				BFD278A599509229392F2A4C /* MacUTType+Markdown.swift */,
@@ -1293,6 +1305,7 @@
 				3E925629146A28628BC2A1A5 /* MacStreamAccumulatorTests.swift in Sources */,
 				2A3D937610BEDE353F15531A /* MacStreamingAnswerRendererTests.swift in Sources */,
 				63117269093DB40714E0E23C /* MacTargetLabelFormatterTests.swift in Sources */,
+				813064079EB346253B4B7B2C /* MacTranscriptRendererSupportTests.swift in Sources */,
 				700EA4A5D8A5EE830975111D /* MacTranscriptScrollPolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1304,6 +1317,7 @@
 				B37FBC29BFF267F4C0232CC8 /* BYOKmacApp.swift in Sources */,
 				31F5C3DCA2DE59F1396728C4 /* MacAdditionalHeadersSection.swift in Sources */,
 				7F4D02D1EBEC057EFE2DA896 /* MacAllChatsView.swift in Sources */,
+				F2A85934F2D25659C6663084 /* MacAnalyticsCharts.swift in Sources */,
 				F3B9564E142B42989CE10DA0 /* MacAnalyticsGateView.swift in Sources */,
 				0CB9CA3122B4074597B8D969 /* MacAnalyticsView.swift in Sources */,
 				26BDE7ADBEA3236A2876136A /* MacAnswerContentParseCache.swift in Sources */,
@@ -1311,6 +1325,7 @@
 				74D0ACFEC1303EF5A5188AB8 /* MacAnswerSourcesSheet.swift in Sources */,
 				618FE4701A58CB0533E7744C /* MacAppAnalytics.swift in Sources */,
 				FF5486240E80E7DD9DA756E7 /* MacAppModel.swift in Sources */,
+				456D2880CD147BF76453465A /* MacArtifactPreviewView.swift in Sources */,
 				D3DD463AE53EFE0647011D3D /* MacAttachmentSupport.swift in Sources */,
 				B850B7FE4FDB15AC88711363 /* MacChatPaneView.swift in Sources */,
 				8FABDEA56C9D62A085D3B33F /* MacChatSessionModel.swift in Sources */,
@@ -1355,6 +1370,7 @@
 				F3B3A6DBFAC78AB8E8618185 /* MacTargetLabelFormatter.swift in Sources */,
 				C576FAC0FF1403079CE0DB08 /* MacThemeModel.swift in Sources */,
 				A41E3CFCAE493AE2AFDCF1A5 /* MacToastCenter.swift in Sources */,
+				98772BD8562A4AE41007DC8D /* MacTranscriptRendererSupport.swift in Sources */,
 				98AA939EED757D10E7E19166 /* MacTranscriptScrollPolicy.swift in Sources */,
 				E4574FB111527253FBC645CA /* MacUTType+Markdown.swift in Sources */,
 				ACAF6C63F8BF39B0BEF6AB39 /* MacUtilitySheets.swift in Sources */,
@@ -1413,7 +1429,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat;
 				PRODUCT_MODULE_NAME = BYOKmac;
 				PRODUCT_NAME = BYOKchat;
@@ -1453,7 +1469,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat;
 				PRODUCT_MODULE_NAME = BYOKmac;
 				PRODUCT_NAME = BYOKchat;
@@ -1874,7 +1890,7 @@
 			repositoryURL = "https://github.com/hoangbkit/MacAppFoundation";
 			requirement = {
 				kind = exactVersion;
-				version = 1.5.0;
+				version = 1.8.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
