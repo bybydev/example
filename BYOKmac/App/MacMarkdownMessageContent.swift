@@ -237,7 +237,9 @@ struct MacMarkdownMessageContent: View {
         .imageAccessibility(.sre)
         .lineSpacing(textSize * 0.26)
         .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
+        .tint(appTheme.accent)
         .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
     } else if !isStreaming, MacSelectableMarkdownBuilder.canRenderNatively(segment.text) {
       MacSelectableMarkdownTextView(

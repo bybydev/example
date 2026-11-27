@@ -359,8 +359,8 @@ enum MacAnswerContentParser {
     pattern: #"(?<!!)\[([^\]]+)\]\(\s*<?((?i:https?)://(?:[^\s()<>]++|\([^\s()<>]*+\))++)>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)"#
   )
   private static let orderedListRegex = try? NSRegularExpression(pattern: #"^\d+[.)]\s"#)
-  private static let inlineMarkdownFormattingRegex = try? NSRegularExpression(
-    pattern: #"(?:`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|!?\[[^\]]+\]\([^)]+\))"#
+  private static let markdownImageSyntaxRegex = try? NSRegularExpression(
+    pattern: #"!\[[^\]]*\]\([^)]+\)"#
   )
 
   private struct FenceOpening {
@@ -698,29 +698,37 @@ enum MacAnswerContentParser {
   static func containsInlineMath(_ text: String) -> Bool {
     guard text.contains("$") || text.contains("\\(") else { return false }
     guard let inlineMathRegex else { return false }
-    let target = text.contains("data:image/") ? stripMarkdownImages(from: text) : text
+    var target = text.contains("data:image/") ? stripMarkdownImages(from: text) : text
+    if target.contains("`") {
+      target = stripInlineCodeSpans(from: target)
+    }
     guard target.contains("$") || target.contains("\\(") else { return false }
     let range = NSRange(target.startIndex..<target.endIndex, in: target)
     return inlineMathRegex.firstMatch(in: target, range: range) != nil
   }
 
-  /// Splits a markdown block by blank-line paragraphs so plain inline-math
-  /// paragraphs render with LaTeXSwiftUI without disabling math when headings or
-  /// lists appear in the same block, and without breaking bold/code/links inside
-  /// rich paragraphs.
+  /// Splits a markdown block by blank-line paragraphs (and block-level line
+  /// boundaries inside paragraphs that contain inline math) so inline-math
+  /// paragraphs render with LaTeXSwiftUI even when preceded by headings,
+  /// lists, or bold labels like `**Inline math:**`.
   static func splitMarkdownForInlineMath(_ markdown: String) -> [MacMarkdownMathSegment] {
     guard containsInlineMath(markdown) else {
       return [MacMarkdownMathSegment(text: markdown, useLaTeX: false)]
     }
 
+    struct SplitChunk {
+      let text: String
+      let separatorBefore: String
+    }
+
     let lines = markdown.components(separatedBy: .newlines)
-    var chunks: [String] = []
+    var paragraphs: [String] = []
     var current: [String] = []
 
     for line in lines {
       if line.trimmingCharacters(in: .whitespaces).isEmpty {
         if !current.isEmpty {
-          chunks.append(current.joined(separator: "\n"))
+          paragraphs.append(current.joined(separator: "\n"))
           current.removeAll(keepingCapacity: true)
         }
       } else {
@@ -728,26 +736,63 @@ enum MacAnswerContentParser {
       }
     }
     if !current.isEmpty {
-      chunks.append(current.joined(separator: "\n"))
+      paragraphs.append(current.joined(separator: "\n"))
+    }
+
+    var chunks: [SplitChunk] = []
+    for paragraph in paragraphs {
+      guard containsInlineMath(paragraph) else {
+        chunks.append(SplitChunk(text: paragraph, separatorBefore: "\n\n"))
+        continue
+      }
+
+      let paragraphLines = paragraph.components(separatedBy: .newlines)
+      var subLines: [String] = []
+      var subIsBlockLevel: Bool?
+      var isFirstSubChunk = true
+
+      func flushSubChunk() {
+        guard !subLines.isEmpty else { return }
+        chunks.append(
+          SplitChunk(
+            text: subLines.joined(separator: "\n"),
+            separatorBefore: isFirstSubChunk ? "\n\n" : "\n"
+          )
+        )
+        subLines.removeAll(keepingCapacity: true)
+        subIsBlockLevel = nil
+        isFirstSubChunk = false
+      }
+
+      for line in paragraphLines {
+        let lineIsBlockLevel = isBlockLevelMarkdownLine(line)
+        if let subIsBlockLevel, subIsBlockLevel != lineIsBlockLevel {
+          flushSubChunk()
+        }
+        subLines.append(line)
+        subIsBlockLevel = lineIsBlockLevel
+      }
+      flushSubChunk()
     }
 
     var segments: [MacMarkdownMathSegment] = []
-    var pendingMarkdown: [String] = []
+    var pendingMarkdown = ""
 
     func flushPendingMarkdown() {
       guard !pendingMarkdown.isEmpty else { return }
-      segments.append(
-        MacMarkdownMathSegment(text: pendingMarkdown.joined(separator: "\n\n"), useLaTeX: false)
-      )
+      segments.append(MacMarkdownMathSegment(text: pendingMarkdown, useLaTeX: false))
       pendingMarkdown.removeAll(keepingCapacity: true)
     }
 
     for chunk in chunks {
-      if shouldRenderChunkAsInlineMath(chunk) {
+      if shouldRenderChunkAsInlineMath(chunk.text) {
         flushPendingMarkdown()
-        segments.append(MacMarkdownMathSegment(text: chunk, useLaTeX: true))
+        segments.append(MacMarkdownMathSegment(text: chunk.text, useLaTeX: true))
       } else {
-        pendingMarkdown.append(chunk)
+        if !pendingMarkdown.isEmpty {
+          pendingMarkdown.append(chunk.separatorBefore)
+        }
+        pendingMarkdown.append(chunk.text)
       }
     }
     flushPendingMarkdown()
@@ -777,13 +822,7 @@ enum MacAnswerContentParser {
 
   static func shouldRenderCellAsInlineMath(_ cell: String) -> Bool {
     guard containsInlineMath(cell), isLikelyBalancedInlineMath(cell) else { return false }
-    if let inlineMarkdownFormattingRegex {
-      let range = NSRange(cell.startIndex..<cell.endIndex, in: cell)
-      if inlineMarkdownFormattingRegex.firstMatch(in: cell, range: range) != nil {
-        return false
-      }
-    }
-    return true
+    return canLaTeXRenderInlineMarkdown(cell)
   }
 
   static func isLikelyBalancedInlineMath(_ text: String) -> Bool {
@@ -913,34 +952,106 @@ enum MacAnswerContentParser {
     return alignments
   }
 
-  private static func shouldRenderChunkAsInlineMath(_ chunk: String) -> Bool {
-    guard containsInlineMath(chunk), isLikelyBalancedInlineMath(chunk) else { return false }
-    for line in chunk.components(separatedBy: .newlines) {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
-      if trimmed.hasPrefix("#")
-        || trimmed.hasPrefix(">")
-        || trimmed.hasPrefix("- ")
-        || trimmed.hasPrefix("* ")
-        || trimmed.hasPrefix("+ ")
-        || trimmed.hasPrefix("|")
-        || parseTableDelimiterRow(line) != nil
-      {
-        return false
+  private static func isBlockLevelMarkdownLine(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty else { return false }
+    if trimmed.hasPrefix("#")
+      || trimmed.hasPrefix(">")
+      || trimmed.hasPrefix("- ")
+      || trimmed.hasPrefix("* ")
+      || trimmed.hasPrefix("+ ")
+      || trimmed.hasPrefix("|")
+      || isThematicBreak(trimmed)
+      || parseTableDelimiterRow(line) != nil
+    {
+      return true
+    }
+    if let orderedListRegex {
+      let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+      if orderedListRegex.firstMatch(in: trimmed, range: range) != nil {
+        return true
       }
-      if let orderedListRegex {
-        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
-        if orderedListRegex.firstMatch(in: trimmed, range: range) != nil {
+    }
+    return false
+  }
+
+  /// LaTeXSwiftUI renders inline Markdown (`**bold**`, `*italic*`, `` `code` ``,
+  /// `~~strike~~`, `[links](url)`) on text segments via `AttributedString(markdown:)`,
+  /// but cannot render Markdown images, cannot distinguish `$`/`\(` inside inline
+  /// code from math delimiters, and cannot style delimiters (`**`, `__`, `~~`)
+  /// that wrap across an equation boundary.
+  private static func canLaTeXRenderInlineMarkdown(_ text: String) -> Bool {
+    if text.contains("![") {
+      let outsideCode = text.contains("`") ? stripInlineCodeSpans(from: text) : text
+      if let markdownImageSyntaxRegex {
+        let range = NSRange(outsideCode.startIndex..<outsideCode.endIndex, in: outsideCode)
+        if markdownImageSyntaxRegex.firstMatch(in: outsideCode, range: range) != nil {
           return false
         }
       }
     }
-    if let inlineMarkdownFormattingRegex {
-      let range = NSRange(chunk.startIndex..<chunk.endIndex, in: chunk)
-      if inlineMarkdownFormattingRegex.firstMatch(in: chunk, range: range) != nil {
+
+    if text.contains("`") {
+      for codeRange in inlineCodeSpanNSRanges(in: text) {
+        if let swiftRange = Range(codeRange, in: text) {
+          let slice = text[swiftRange]
+          if slice.contains("$") || slice.contains("\\(") {
+            return false
+          }
+        }
+      }
+    }
+
+    if let inlineMathRegex,
+      text.contains("**") || text.contains("__") || text.contains("~~")
+    {
+      let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+      let matches = inlineMathRegex.matches(in: text, range: fullRange)
+      var cursor = text.startIndex
+      for match in matches {
+        guard let range = Range(match.range, in: text) else { continue }
+        if hasUnbalancedInlineDelimiters(String(text[cursor..<range.lowerBound])) {
+          return false
+        }
+        cursor = range.upperBound
+      }
+      if cursor < text.endIndex,
+        hasUnbalancedInlineDelimiters(String(text[cursor..<text.endIndex]))
+      {
         return false
       }
     }
+
     return true
+  }
+
+  private static func hasUnbalancedInlineDelimiters(_ piece: String) -> Bool {
+    guard piece.contains("**") || piece.contains("__") || piece.contains("~~") else {
+      return false
+    }
+    let cleaned = piece.contains("`") ? stripInlineCodeSpans(from: piece) : piece
+    for token in ["**", "__", "~~"] {
+      var count = 0
+      var searchStart = cleaned.startIndex
+      while let found = cleaned.range(of: token, range: searchStart..<cleaned.endIndex) {
+        count += 1
+        searchStart = found.upperBound
+      }
+      if !count.isMultiple(of: 2) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private static func shouldRenderChunkAsInlineMath(_ chunk: String) -> Bool {
+    guard containsInlineMath(chunk), isLikelyBalancedInlineMath(chunk) else { return false }
+    for line in chunk.components(separatedBy: .newlines) {
+      if isBlockLevelMarkdownLine(line) {
+        return false
+      }
+    }
+    return canLaTeXRenderInlineMarkdown(chunk)
   }
 
   private static func parseTable(in lines: [String], startingAt index: Int) -> ParsedTableSlice? {

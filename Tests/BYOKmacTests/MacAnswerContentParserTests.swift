@@ -138,6 +138,39 @@ struct MacAnswerContentParserTests {
         useLaTeX: false
       )
     )
+
+    // Inline math inside a paragraph with a bold label or inline formatting stays on LaTeX.
+    let boldLabeled = """
+    **Inline math:**
+    The famous mass-energy equivalence is $E = mc^2$, and the Pythagorean theorem states that $a^2 + b^2 = c^2$.
+    Another inline example: the sum of the first $n$ integers is $\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$.
+    """
+    let boldSegments = MacAnswerContentParser.splitMarkdownForInlineMath(boldLabeled)
+    #expect(boldSegments == [MacMarkdownMathSegment(text: boldLabeled, useLaTeX: true)])
+
+    // A heading directly above an inline-math line without a blank line splits cleanly.
+    let tightHeading = """
+    ### Inline math
+    Einstein showed $E = mc^2$ in **1905**.
+    """
+    let tightSegments = MacAnswerContentParser.splitMarkdownForInlineMath(tightHeading)
+    #expect(tightSegments.count == 2)
+    #expect(tightSegments[0] == MacMarkdownMathSegment(text: "### Inline math", useLaTeX: false))
+    #expect(
+      tightSegments[1] == MacMarkdownMathSegment(
+        text: "Einstein showed $E = mc^2$ in **1905**.",
+        useLaTeX: true
+      )
+    )
+
+    // Inline code containing `$` is ignored as math and keeps LaTeX off when mixed with math.
+    #expect(!MacAnswerContentParser.containsInlineMath("Use `$PATH` or `$HOME` in shell."))
+    let codeWithDollar = MacAnswerContentParser.splitMarkdownForInlineMath("Use `$x$` and $y^2$.")
+    #expect(codeWithDollar == [MacMarkdownMathSegment(text: "Use `$x$` and $y^2$.", useLaTeX: false)])
+
+    // Formatting delimiters wrapping across an equation fall back to Markdown safely.
+    let wrappedBold = MacAnswerContentParser.splitMarkdownForInlineMath("Result: **$E = mc^2$**.")
+    #expect(wrappedBold == [MacMarkdownMathSegment(text: "Result: **$E = mc^2$**.", useLaTeX: false)])
   }
 
   @Test("Recognizes Mermaid language aliases and attribute suffixes")
