@@ -217,6 +217,7 @@ struct MacMarkdownMessageContent: View {
   private func markdownSegmentView(_ segment: MacPreparedAnswer.MarkdownSegment) -> some View {
     if segment.useLaTeX {
       LaTeX(segment.text)
+        .font(NSFont.systemFont(ofSize: textSize))
         .parsingMode(.onlyEquations)
         .blockMode(.blockViews)
         .processEscapes()
@@ -225,7 +226,7 @@ struct MacMarkdownMessageContent: View {
         .errorMode(.original)
         .imageRenderingMode(.template)
         .imageAccessibility(.sre)
-        .font(.system(size: textSize))
+        .lineSpacing(textSize * 0.26)
         .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -959,6 +960,7 @@ private struct MacMarkdownTableCellView: View {
         .tint(palette.accentColor)
     } else if MacAnswerContentParser.shouldRenderCellAsInlineMath(text) {
       LaTeX(text)
+        .font(NSFont.systemFont(ofSize: fontSize, weight: isHeader ? .semibold : .regular))
         .parsingMode(.onlyEquations)
         .blockMode(.blockViews)
         .processEscapes()
@@ -967,7 +969,6 @@ private struct MacMarkdownTableCellView: View {
         .errorMode(.original)
         .imageRenderingMode(.template)
         .imageAccessibility(.sre)
-        .font(.system(size: fontSize, weight: isHeader ? .semibold : .regular))
         .foregroundStyle(palette.primaryForeground)
         .textSelection(.enabled)
     } else if let attributed = MacMarkdownTableCellFormatter.attributedString(
@@ -3013,16 +3014,16 @@ struct MacMathAnswerView: View {
     ZStack(alignment: .topTrailing) {
       MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
         LaTeX("$$\(expression)$$")
+          .font(NSFont.systemFont(ofSize: resolvedFontSize * 1.15))
           .blockMode(.blockViews)
           .renderingStyle(.redactedOriginal)
           .renderingAnimation(.easeOut(duration: 0.18))
           .errorMode(.original)
           .imageRenderingMode(.template)
           .imageAccessibility(.sre)
-          .font(.system(size: resolvedFontSize))
           .foregroundStyle(theme.textPrimary)
           .padding(.horizontal, 16)
-          .padding(.vertical, 14)
+          .padding(.vertical, 16)
           .frame(maxWidth: .infinity, alignment: .center)
       }
 

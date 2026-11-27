@@ -1089,7 +1089,7 @@
 				CA23D1AE8CD765AA9577EF17 /* XCRemoteSwiftPackageReference "AppFoundation" */,
 				72B85AF77B9800C767AB5DB1 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */,
 				1113DEDA7233056EA1A50C7F /* XCRemoteSwiftPackageReference "HighlighterSwift" */,
-				DD3C1E666F04E1347131D722 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */,
+				25E95D2DEBF4E3A70C7A4437 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */,
 				E8BAE302A91D6F687AA3E508 /* XCRemoteSwiftPackageReference "MacAppFoundation" */,
 				2C5EDD21BE4977DEB76AD5DC /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				930BF2B04DF432630492AC65 /* XCLocalSwiftPackageReference "." */,
@@ -1853,6 +1853,14 @@
 				version = 3.0.3;
 			};
 		};
+		25E95D2DEBF4E3A70C7A4437 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/hoangbkit/LaTeXSwiftUI";
+			requirement = {
+				kind = exactVersion;
+				version = 2.0.1;
+			};
+		};
 		2C5EDD21BE4977DEB76AD5DC /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
@@ -1875,14 +1883,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 1.7.0;
-			};
-		};
-		DD3C1E666F04E1347131D722 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/colinc86/LaTeXSwiftUI";
-			requirement = {
-				kind = exactVersion;
-				version = 2.0.0;
 			};
 		};
 		E8BAE302A91D6F687AA3E508 /* XCRemoteSwiftPackageReference "MacAppFoundation" */ = {
@@ -1954,12 +1954,12 @@
 		};
 		D5FD1CA7F6410853FE45BA37 /* LaTeXSwiftUI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = DD3C1E666F04E1347131D722 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */;
+			package = 25E95D2DEBF4E3A70C7A4437 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */;
 			productName = LaTeXSwiftUI;
 		};
 		F78B593A19B9845685D057AE /* LaTeXSwiftUI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = DD3C1E666F04E1347131D722 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */;
+			package = 25E95D2DEBF4E3A70C7A4437 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */;
 			productName = LaTeXSwiftUI;
 		};
 /* End XCSwiftPackageProductDependency section */

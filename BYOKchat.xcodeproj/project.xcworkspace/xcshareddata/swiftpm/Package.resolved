@@ -1,5 +1,5 @@
 {
-  "originHash" : "62b3fd204d859e1773bd26f8d40e01e959389c49a701afcb3e0834a20e568a99",
+  "originHash" : "373e8d8071abc0d6101fc9829a8a195717224b4767c28b68a08c9741b106bef0",
   "pins" : [
     {
       "identity" : "appfoundation",
@@ -40,10 +40,10 @@
     {
       "identity" : "latexswiftui",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/colinc86/LaTeXSwiftUI",
+      "location" : "https://github.com/hoangbkit/LaTeXSwiftUI",
       "state" : {
-        "revision" : "cc677f66b9cc1751e09207621d62d1cda0200675",
-        "version" : "2.0.0"
+        "revision" : "20320a33cb91b091776eb40ddfe67058035ef4bf",
+        "version" : "2.0.1"
       }
     },
     {
@@ -114,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swhitty/SwiftDraw",
       "state" : {
-        "revision" : "82699f4bdf2f075793cfa0d392eb27c59b41a3fe",
-        "version" : "0.29.0"
+        "revision" : "184372f0b9ca3f2b416e51e869ca93cfaed5c8a9",
+        "version" : "0.30.0"
       }
     }
   ],

@@ -23,8 +23,8 @@ packages:
     url: https://github.com/smittytone/HighlighterSwift
     exactVersion: 3.0.3
   LaTeXSwiftUI:
-    url: https://github.com/colinc86/LaTeXSwiftUI
-    exactVersion: 2.0.0
+    url: https://github.com/hoangbkit/LaTeXSwiftUI
+    exactVersion: 2.0.1
   BeautifulMermaid:
     url: https://github.com/lukilabs/beautiful-mermaid-swift
     exactVersion: 1.0.4
