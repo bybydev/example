@@ -85,29 +85,25 @@ private struct MacStreamingTailBlockView: View {
   var body: some View {
     switch block {
     case .markdown(let source):
-      let formatted = MacStreamingTailFormatter.formattedAttributedString(
-        source,
-        textSize: textSize,
-        foregroundColor: muted ? theme.textMuted : theme.textPrimary,
-        mutedColor: theme.textMuted,
-        accentColor: theme.accent,
-        codeBackground: theme.codeSurface.opacity(0.85)
-      )
-      Text(formatted)
-        .lineSpacing(textSize * 0.18)
-        .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .environment(
-          \.openURL,
-          OpenURLAction { url in
-            guard MacAnswerContentParser.isValidBrowsableURL(url) else {
-              return .systemAction
+      let chunks = streamingMarkdownChunks(for: source)
+      if chunks.count == 1, case .text(let only) = chunks[0] {
+        streamingMarkdownTextView(only)
+      } else {
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in
+            switch chunk {
+            case .text(let text):
+              streamingMarkdownTextView(text)
+            case .thematicBreak:
+              Rectangle()
+                .fill(theme.separator.opacity(0.85))
+                .frame(height: 1)
+                .padding(.vertical, textSize * 0.45)
             }
-            NSWorkspace.shared.open(url)
-            return .handled
           }
-        )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
 
     case .code(let language, let content, _):
       if MacAnswerContentParser.isMermaidLanguage(language) {
@@ -134,6 +130,66 @@ private struct MacStreamingTailBlockView: View {
         muted: muted
       )
     }
+  }
+
+  private enum StreamingMarkdownChunk {
+    case text(String)
+    case thematicBreak
+  }
+
+  private func streamingMarkdownChunks(for source: String) -> [StreamingMarkdownChunk] {
+    guard source.contains("---") || source.contains("***") || source.contains("___") else {
+      return [.text(source)]
+    }
+
+    var chunks: [StreamingMarkdownChunk] = []
+    var currentLines: [String] = []
+
+    func flushText() {
+      guard !currentLines.isEmpty else { return }
+      chunks.append(.text(currentLines.joined(separator: "\n")))
+      currentLines.removeAll(keepingCapacity: true)
+    }
+
+    for line in source.components(separatedBy: .newlines) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      if MacSelectableMarkdownBuilder.isThematicBreak(trimmed) {
+        flushText()
+        chunks.append(.thematicBreak)
+      } else {
+        currentLines.append(line)
+      }
+    }
+    flushText()
+
+    return chunks.isEmpty ? [.text(source)] : chunks
+  }
+
+  private func streamingMarkdownTextView(_ text: String) -> some View {
+    let formatted = MacStreamingTailFormatter.formattedAttributedString(
+      text,
+      textSize: textSize,
+      foregroundColor: muted ? theme.textMuted : theme.textPrimary,
+      mutedColor: theme.textMuted,
+      accentColor: theme.accent,
+      codeBackground: theme.codeSurface.opacity(0.85),
+      muted: muted
+    )
+    return Text(formatted)
+      .lineSpacing(textSize * 0.26)
+      .textSelection(.enabled)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .environment(
+        \.openURL,
+        OpenURLAction { url in
+          guard MacAnswerContentParser.isValidBrowsableURL(url) else {
+            return .systemAction
+          }
+          NSWorkspace.shared.open(url)
+          return .handled
+        }
+      )
   }
 }
 

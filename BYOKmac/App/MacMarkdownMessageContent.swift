@@ -25,6 +25,7 @@ struct MacMarkdownMessageContent: View {
   var activeFindOccurrence: Int? = nil
 
   @State private var completedAnswer: MacPreparedAnswer?
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.macAppTheme) private var appTheme
   @Environment(\.macPreparedAnswers) private var preparedAnswers
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
@@ -63,6 +64,7 @@ struct MacMarkdownMessageContent: View {
         Text(text)
           .font(.system(size: textSize))
           .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
+          .lineSpacing(textSize * 0.26)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,12 +246,17 @@ struct MacMarkdownMessageContent: View {
           Self.chatTheme(
             textSize: textSize,
             muted: muted,
-            mutedColor: appTheme.textMuted,
+            isDark: colorScheme == .dark,
+            textPrimary: appTheme.textPrimary,
+            textMuted: appTheme.textMuted,
+            accent: appTheme.accent,
+            codeSurface: appTheme.codeSurface,
+            separator: appTheme.separator,
             columnAlignments: segment.columnAlignments
           )
         )
         .textSelection(.enabled)
-        .tint(.accentColor)
+        .tint(appTheme.accent)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
@@ -307,6 +314,7 @@ struct MacMarkdownMessageContent: View {
   private struct ChatThemeKey: Hashable {
     let textSize: CGFloat
     let muted: Bool
+    let isDark: Bool
     let themeID: MacAppThemeID
     let columnAlignments: [MacTableColumnAlignment]
   }
@@ -318,7 +326,12 @@ struct MacMarkdownMessageContent: View {
   private static func chatTheme(
     textSize: CGFloat,
     muted: Bool = false,
-    mutedColor: Color,
+    isDark: Bool,
+    textPrimary: Color,
+    textMuted: Color,
+    accent: Color,
+    codeSurface: Color,
+    separator: Color,
     columnAlignments: [MacTableColumnAlignment] = []
   ) -> MarkdownUI.Theme {
     let themeID = MacThemeFoundation.store.effectiveThemeID(
@@ -327,6 +340,7 @@ struct MacMarkdownMessageContent: View {
     let key = ChatThemeKey(
       textSize: textSize,
       muted: muted,
+      isDark: isDark,
       themeID: themeID,
       columnAlignments: columnAlignments
     )
@@ -335,10 +349,16 @@ struct MacMarkdownMessageContent: View {
     }
     let theme = buildChatTheme(
       textSize: textSize,
-      foreground: muted ? mutedColor : .primary,
+      muted: muted,
+      isDark: isDark,
+      textPrimary: textPrimary,
+      textMuted: textMuted,
+      accent: accent,
+      codeSurface: codeSurface,
+      separator: separator,
       columnAlignments: columnAlignments
     )
-    if cachedThemes.count >= 16 {
+    if cachedThemes.count >= 24 {
       cachedThemes.removeAll(keepingCapacity: true)
     }
     cachedThemes[key] = theme
@@ -348,10 +368,17 @@ struct MacMarkdownMessageContent: View {
   @MainActor
   private static func buildChatTheme(
     textSize: CGFloat,
-    foreground: Color = .primary,
+    muted: Bool = false,
+    isDark: Bool,
+    textPrimary: Color,
+    textMuted: Color,
+    accent: Color,
+    codeSurface: Color,
+    separator: Color,
     columnAlignments: [MacTableColumnAlignment] = []
   ) -> MarkdownUI.Theme {
-    MarkdownUI.Theme.basic
+    let foreground = muted ? textMuted : textPrimary
+    return MarkdownUI.Theme.basic
       .text {
         ForegroundColor(foreground)
         FontSize(textSize)
@@ -360,113 +387,122 @@ struct MacMarkdownMessageContent: View {
         FontFamilyVariant(.monospaced)
         FontSize(.em(0.9))
         ForegroundColor(foreground)
-        BackgroundColor(Color.primary.opacity(0.06))
+        BackgroundColor(codeSurface.opacity(0.85))
       }
       .strong {
         FontWeight(.semibold)
       }
       .link {
-        ForegroundColor(.accentColor)
+        ForegroundColor(accent)
       }
       .heading1 { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .markdownMargin(top: .em(0.8), bottom: .em(0.4))
+          .relativeLineSpacing(.em(0.18))
+          .markdownMargin(top: .em(0.95), bottom: .em(0.4))
           .markdownTextStyle {
             FontWeight(.bold)
             FontSize(.em(1.5))
+            ForegroundColor(foreground)
           }
       }
       .heading2 { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .markdownMargin(top: .em(0.72), bottom: .em(0.36))
+          .relativeLineSpacing(.em(0.18))
+          .markdownMargin(top: .em(0.85), bottom: .em(0.35))
           .markdownTextStyle {
             FontWeight(.bold)
             FontSize(.em(1.3))
+            ForegroundColor(foreground)
           }
       }
       .heading3 { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .markdownMargin(top: .em(0.6), bottom: .em(0.3))
+          .relativeLineSpacing(.em(0.18))
+          .markdownMargin(top: .em(0.7), bottom: .em(0.3))
           .markdownTextStyle {
             FontWeight(.semibold)
             FontSize(.em(1.14))
+            ForegroundColor(foreground)
           }
       }
       .heading4 { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .markdownMargin(top: .em(0.52), bottom: .em(0.24))
+          .relativeLineSpacing(.em(0.18))
+          .markdownMargin(top: .em(0.6), bottom: .em(0.25))
           .markdownTextStyle {
             FontWeight(.semibold)
             FontSize(.em(1.02))
-            ForegroundColor(.primary)
+            ForegroundColor(foreground)
           }
       }
       .heading5 { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .markdownMargin(top: .em(0.48), bottom: .em(0.2))
+          .relativeLineSpacing(.em(0.18))
+          .markdownMargin(top: .em(0.55), bottom: .em(0.22))
           .markdownTextStyle {
             FontWeight(.semibold)
             FontSize(.em(0.94))
-            ForegroundColor(.secondary)
+            ForegroundColor(textMuted)
           }
       }
       .heading6 { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .markdownMargin(top: .em(0.44), bottom: .em(0.18))
+          .relativeLineSpacing(.em(0.18))
+          .markdownMargin(top: .em(0.5), bottom: .em(0.2))
           .markdownTextStyle {
             FontWeight(.semibold)
             FontSize(.em(0.88))
-            ForegroundColor(.accentColor)
+            ForegroundColor(muted ? textMuted : accent)
           }
       }
       .paragraph { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .relativeLineSpacing(.em(0.18))
+          .relativeLineSpacing(.em(0.26))
           .markdownMargin(top: .zero, bottom: .em(0.72))
       }
       .blockquote { configuration in
         HStack(spacing: 0) {
-          RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(Color.accentColor.opacity(0.68))
-            .relativeFrame(width: .em(0.18))
+          Rectangle()
+            .fill(accent.opacity(0.72))
+            .frame(width: 3)
           configuration.label
-            .markdownTextStyle { ForegroundColor(.secondary) }
+            .markdownTextStyle { ForegroundColor(textMuted) }
+            .relativeLineSpacing(.em(0.26))
             .relativePadding(.horizontal, length: .em(0.85))
-            .relativePadding(.vertical, length: .em(0.55))
+            .relativePadding(.vertical, length: .em(0.48))
         }
         .fixedSize(horizontal: false, vertical: true)
-        .background(
-          Color.primary.opacity(0.035),
-          in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-        )
-        .markdownMargin(top: .em(0.08), bottom: .em(0.78))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(textPrimary.opacity(isDark ? 0.05 : 0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .markdownMargin(top: .em(0.1), bottom: .em(0.72))
       }
       .listItem { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
-          .relativeLineSpacing(.em(0.14))
-          .markdownMargin(top: .em(0.12), bottom: .em(0.12))
+          .relativeLineSpacing(.em(0.24))
+          .markdownMargin(top: .em(0.16), bottom: .em(0.16))
       }
       .taskListMarker { configuration in
         Image(systemName: configuration.isCompleted ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(configuration.isCompleted ? Color.accentColor : Color.secondary)
+          .font(.system(size: max(11, textSize * 0.88), weight: .semibold))
+          .foregroundStyle(configuration.isCompleted ? accent : textMuted)
           .relativeFrame(minWidth: .em(1.4), alignment: .trailing)
       }
       .table { configuration in
         MacHorizontalPassthroughScrollView {
           configuration.label
             .fixedSize(horizontal: false, vertical: true)
-            .markdownTableBorderStyle(.init(color: Color.primary.opacity(0.14)))
+            .markdownTableBorderStyle(.init(color: separator))
             .markdownTableBackgroundStyle(
-              .alternatingRows(Color.primary.opacity(0.025), Color.primary.opacity(0.045))
+              .alternatingRows(textPrimary.opacity(0.025), textPrimary.opacity(0.05))
             )
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -497,9 +533,9 @@ struct MacMarkdownMessageContent: View {
       }
       .thematicBreak {
         Rectangle()
-          .fill(Color.primary.opacity(0.14))
+          .fill(separator.opacity(0.85))
           .frame(height: 1)
-          .markdownMargin(top: .em(1), bottom: .em(1))
+          .markdownMargin(top: .em(0.95), bottom: .em(0.95))
       }
   }
 }

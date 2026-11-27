@@ -174,6 +174,139 @@ struct MacTranscriptRendererSupportTests {
     #expect(copiedMarkdown.contains("```swift"))
   }
 
+  @Test("Streaming tail formatter preserves inline styles inside headings and renders nested bullets")
+  func streamingTailFormattingHeadingsAndNestedBullets() {
+    let source = """
+    # Heading with `code` and **bold**
+    - Top item
+      - Nested item
+        + Deep item
+    """
+    let formatted = MacStreamingTailFormatter.formattedAttributedString(
+      source,
+      textSize: 15,
+      foregroundColor: .primary,
+      mutedColor: .secondary,
+      accentColor: .accentColor,
+      codeBackground: .gray.opacity(0.1)
+    )
+    let plain = String(formatted.characters)
+    #expect(plain.contains("Heading with code and bold"))
+    #expect(plain.contains("• Top item"))
+    #expect(plain.contains("◦ Nested item"))
+    #expect(plain.contains("▪ Deep item"))
+
+    let codeRun = formatted.runs.first { run in
+      String(formatted[run.range].characters) == "code"
+    }
+    #expect(codeRun?.backgroundColor != nil)
+  }
+
+  @Test("Selectable Markdown uses tab-stopped lists, custom blockquote/rule/code attributes, and clean trailing spacing")
+  @MainActor
+  func selectableMarkdownUnifiedTypographyAndSpacing() {
+    let markdown = """
+    Intro paragraph.
+
+    - Outer item
+      - Inner item
+        - Deep item
+
+    After list.
+
+    > Quoted line one
+    > Quoted line two
+
+    ---
+
+    Use `swift test` here.
+    """
+
+    let style = MacSelectableMarkdownBuilder.Style(
+      textSize: 15,
+      muted: false,
+      isDark: true,
+      themeID: .githubDarkDimmed,
+      textColor: .labelColor,
+      mutedColor: .secondaryLabelColor,
+      accentColor: .controlAccentColor,
+      codeBackgroundColor: .quaternaryLabelColor,
+      codeBlockBackgroundColor: .textBackgroundColor,
+      separatorColor: .separatorColor,
+      findQuery: "",
+      activeFindOccurrence: nil
+    )
+
+    let attributed = MacSelectableMarkdownBuilder.attributedString(
+      for: markdown,
+      includeStructuredBlocks: false,
+      style: style
+    )
+    let text = attributed.string
+    let nsText = text as NSString
+
+    // Nested bullets use tab stops and stepped markers without misaligned spaces.
+    #expect(text.contains("•\tOuter item"))
+    #expect(text.contains("◦\tInner item"))
+    #expect(text.contains("▪\tDeep item"))
+
+    // Blockquotes do not inject literal "▎ " glyphs, and carry the custom decoration attribute.
+    #expect(!text.contains("▎"))
+    let quoteRange = nsText.range(of: "Quoted line one")
+    #expect(quoteRange.location != NSNotFound)
+    #expect(
+      attributed.attribute(
+        MacSelectableMarkdownBuilder.blockquoteAttributeKey,
+        at: quoteRange.location,
+        effectiveRange: nil
+      ) != nil
+    )
+
+    // Thematic breaks do not inject stubby Unicode dashes, and carry the custom rule attribute.
+    #expect(!text.contains("────"))
+    var foundRuleAttribute = false
+    attributed.enumerateAttribute(
+      MacSelectableMarkdownBuilder.thematicBreakAttributeKey,
+      in: NSRange(location: 0, length: attributed.length),
+      options: []
+    ) { value, _, _ in
+      if (value as? Bool) == true {
+        foundRuleAttribute = true
+      }
+    }
+    #expect(foundRuleAttribute)
+
+    // Inline code uses custom rounded-pill attribute instead of raw .backgroundColor.
+    let codeRange = nsText.range(of: "swift test")
+    #expect(codeRange.location != NSNotFound)
+    #expect(
+      (attributed.attribute(
+        MacSelectableMarkdownBuilder.inlineCodeAttributeKey,
+        at: codeRange.location,
+        effectiveRange: nil
+      ) as? Bool) == true
+    )
+    #expect(attributed.attribute(.backgroundColor, at: codeRange.location, effectiveRange: nil) == nil)
+
+    // Last list item gets wider trailing gap than sibling items; final block clears trailing paragraphSpacing.
+    let outerRange = nsText.range(of: "Outer item")
+    let deepRange = nsText.range(of: "Deep item")
+    let outerPara = attributed.attribute(.paragraphStyle, at: outerRange.location, effectiveRange: nil) as? NSParagraphStyle
+    let deepPara = attributed.attribute(.paragraphStyle, at: deepRange.location, effectiveRange: nil) as? NSParagraphStyle
+    let finalPara = attributed.attribute(.paragraphStyle, at: attributed.length - 1, effectiveRange: nil) as? NSParagraphStyle
+    #expect((outerPara?.tabStops.first?.location ?? 0) == (outerPara?.headIndent ?? -1))
+    #expect((deepPara?.paragraphSpacing ?? 0) > (outerPara?.paragraphSpacing ?? 999))
+    #expect((finalPara?.paragraphSpacing ?? -1) == 0)
+
+    // Copy as Markdown preserves original quote and thematic break syntax.
+    let copied = MacSelectableMarkdownBuilder.markdownSnippet(
+      from: attributed,
+      selectedRange: NSRange(location: 0, length: attributed.length)
+    )
+    #expect(copied.contains("> Quoted line one"))
+    #expect(copied.contains("---"))
+  }
+
   @Test("ChatMessage citations field decodes backwards-compatibly when omitted")
   func chatMessageCitationsBackwardsCompatibility() throws {
     let original = ChatMessage(

@@ -239,7 +239,8 @@ enum MacStreamingTailFormatter {
     foregroundColor: Color,
     mutedColor: Color,
     accentColor: Color,
-    codeBackground: Color
+    codeBackground: Color,
+    muted: Bool = false
   ) -> AttributedString {
     let stabilized = stabilizedSource(source)
     let lines = stabilized.split(separator: "\n", omittingEmptySubsequences: false)
@@ -257,7 +258,8 @@ enum MacStreamingTailFormatter {
           foregroundColor: foregroundColor,
           mutedColor: mutedColor,
           accentColor: accentColor,
-          codeBackground: codeBackground
+          codeBackground: codeBackground,
+          muted: muted
         )
       )
     }
@@ -271,7 +273,8 @@ enum MacStreamingTailFormatter {
     foregroundColor: Color,
     mutedColor: Color,
     accentColor: Color,
-    codeBackground: Color
+    codeBackground: Color,
+    muted: Bool
   ) -> AttributedString {
     let trimmedLeading = line.drop(while: { $0 == " " || $0 == "\t" })
 
@@ -281,25 +284,22 @@ enum MacStreamingTailFormatter {
       let afterHashes = trimmedLeading.dropFirst(hashes.count)
       if (1...6).contains(hashes.count), afterHashes.first == " " {
         let headingText = String(afterHashes.dropFirst())
-        let scale: CGFloat = switch hashes.count {
-        case 1: 1.45
-        case 2: 1.28
-        case 3: 1.14
-        case 4: 1.02
-        case 5: 0.94
-        default: 0.88
-        }
+        let scale = MacSelectableMarkdownBuilder.headingScale(for: hashes.count)
         let weight: Font.Weight = hashes.count <= 2 ? .bold : .semibold
-        var attr = parseInlineMarkdown(
+        let headingForeground: Color = switch hashes.count {
+        case 5: mutedColor
+        case 6: muted ? mutedColor : accentColor
+        default: foregroundColor
+        }
+        return parseInlineMarkdown(
           headingText,
           baseFont: .system(size: textSize * scale, weight: weight),
+          baseWeight: weight,
           codeFontSize: textSize * scale * 0.9,
-          foregroundColor: hashes.count == 5 ? mutedColor : (hashes.count == 6 ? accentColor : foregroundColor),
+          foregroundColor: headingForeground,
           accentColor: accentColor,
           codeBackground: codeBackground
         )
-        attr.font = .system(size: textSize * scale, weight: weight)
-        return attr
       }
     }
 
@@ -309,10 +309,12 @@ enum MacStreamingTailFormatter {
         ? String(trimmedLeading.dropFirst(2))
         : ""
       var prefix = AttributedString("▎ ")
-      prefix.foregroundColor = accentColor.opacity(0.7)
+      prefix.font = .system(size: textSize, weight: .semibold)
+      prefix.foregroundColor = accentColor.opacity(0.72)
       let content = parseInlineMarkdown(
         body,
         baseFont: .system(size: textSize),
+        baseWeight: .regular,
         codeFontSize: textSize * 0.9,
         foregroundColor: mutedColor,
         accentColor: accentColor,
@@ -323,15 +325,20 @@ enum MacStreamingTailFormatter {
     }
 
     // Task list / unordered list prefix
-    let indentCount = line.distance(from: line.startIndex, to: trimmedLeading.startIndex)
-    let indent = String(repeating: " ", count: indentCount)
+    let leadingSpaces = line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { total, ch in
+      total + (ch == "\t" ? 2 : 1)
+    }
+    let indentLevel = leadingSpaces / 2
+    let indent = String(repeating: "  ", count: min(indentLevel, 6))
     if trimmedLeading.hasPrefix("- [x] ") || trimmedLeading.hasPrefix("- [X] ") {
       var prefix = AttributedString("\(indent)☑ ")
+      prefix.font = .system(size: textSize, weight: .medium)
       prefix.foregroundColor = accentColor
       prefix.append(
         parseInlineMarkdown(
           String(trimmedLeading.dropFirst(6)),
           baseFont: .system(size: textSize),
+          baseWeight: .regular,
           codeFontSize: textSize * 0.9,
           foregroundColor: foregroundColor,
           accentColor: accentColor,
@@ -342,11 +349,13 @@ enum MacStreamingTailFormatter {
     }
     if trimmedLeading.hasPrefix("- [ ] ") {
       var prefix = AttributedString("\(indent)☐ ")
+      prefix.font = .system(size: textSize, weight: .medium)
       prefix.foregroundColor = mutedColor
       prefix.append(
         parseInlineMarkdown(
           String(trimmedLeading.dropFirst(6)),
           baseFont: .system(size: textSize),
+          baseWeight: .regular,
           codeFontSize: textSize * 0.9,
           foregroundColor: foregroundColor,
           accentColor: accentColor,
@@ -355,13 +364,16 @@ enum MacStreamingTailFormatter {
       )
       return prefix
     }
-    if trimmedLeading.hasPrefix("- ") || trimmedLeading.hasPrefix("* ") {
-      var prefix = AttributedString("\(indent)• ")
+    if trimmedLeading.hasPrefix("- ") || trimmedLeading.hasPrefix("* ") || trimmedLeading.hasPrefix("+ ") {
+      let bullet = MacSelectableMarkdownBuilder.unorderedBulletMarker(forIndentLevel: indentLevel)
+      var prefix = AttributedString("\(indent)\(bullet) ")
+      prefix.font = .system(size: textSize, weight: .medium)
       prefix.foregroundColor = mutedColor
       prefix.append(
         parseInlineMarkdown(
           String(trimmedLeading.dropFirst(2)),
           baseFont: .system(size: textSize),
+          baseWeight: .regular,
           codeFontSize: textSize * 0.9,
           foregroundColor: foregroundColor,
           accentColor: accentColor,
@@ -374,6 +386,7 @@ enum MacStreamingTailFormatter {
     return parseInlineMarkdown(
       line,
       baseFont: .system(size: textSize),
+      baseWeight: .regular,
       codeFontSize: textSize * 0.9,
       foregroundColor: foregroundColor,
       accentColor: accentColor,
@@ -384,6 +397,7 @@ enum MacStreamingTailFormatter {
   private static func parseInlineMarkdown(
     _ text: String,
     baseFont: Font,
+    baseWeight: Font.Weight,
     codeFontSize: CGFloat,
     foregroundColor: Color,
     accentColor: Color,
@@ -397,6 +411,9 @@ enum MacStreamingTailFormatter {
     var attributed = (try? AttributedString(markdown: text, options: options))
       ?? AttributedString(text)
 
+    let strongWeight: Font.Weight = baseWeight == .bold ? .bold : .semibold
+    let codeWeight: Font.Weight = baseWeight == .bold ? .semibold : (baseWeight == .semibold ? .medium : .regular)
+
     attributed.foregroundColor = foregroundColor
     for run in attributed.runs {
       let range = run.range
@@ -405,12 +422,12 @@ enum MacStreamingTailFormatter {
       }
       if let intent = run.inlinePresentationIntent {
         if intent.contains(.code) {
-          attributed[range].font = .system(size: codeFontSize, design: .monospaced)
+          attributed[range].font = .system(size: codeFontSize, weight: codeWeight, design: .monospaced)
           attributed[range].backgroundColor = codeBackground
         } else if intent.contains(.stronglyEmphasized) && intent.contains(.emphasized) {
-          attributed[range].font = baseFont.bold().italic()
+          attributed[range].font = baseFont.weight(strongWeight).italic()
         } else if intent.contains(.stronglyEmphasized) {
-          attributed[range].font = baseFont.weight(.semibold)
+          attributed[range].font = baseFont.weight(strongWeight)
         } else if intent.contains(.emphasized) {
           attributed[range].font = baseFont.italic()
         } else {
@@ -567,6 +584,9 @@ enum MacCitationSupport {
 
 enum MacSelectableMarkdownBuilder {
   static let markdownSourceAttributeKey = NSAttributedString.Key("pro.byok.mac.markdownSource")
+  static let blockquoteAttributeKey = NSAttributedString.Key("pro.byok.mac.blockquote")
+  static let thematicBreakAttributeKey = NSAttributedString.Key("pro.byok.mac.thematicBreak")
+  static let inlineCodeAttributeKey = NSAttributedString.Key("pro.byok.mac.inlineCode")
 
   struct Style: Equatable {
     let textSize: CGFloat
@@ -581,6 +601,29 @@ enum MacSelectableMarkdownBuilder {
     let separatorColor: NSColor
     let findQuery: String
     let activeFindOccurrence: Int?
+  }
+
+  static func headingScale(for level: Int) -> CGFloat {
+    switch level {
+    case 1: 1.5
+    case 2: 1.3
+    case 3: 1.14
+    case 4: 1.02
+    case 5: 0.94
+    default: 0.88
+    }
+  }
+
+  static func unorderedBulletMarker(forIndentLevel indentLevel: Int) -> String {
+    switch indentLevel {
+    case 0: "•"
+    case 1: "◦"
+    default: "▪"
+    }
+  }
+
+  static func blockquoteVerticalPadding(for textSize: CGFloat) -> CGFloat {
+    ceil(textSize * 0.48)
   }
 
   /// Returns true when a Markdown segment can be rendered natively inside
@@ -713,25 +756,17 @@ enum MacSelectableMarkdownBuilder {
     _ markdown: String,
     style: Style
   ) -> NSAttributedString {
-    let output = NSMutableAttributedString()
     let lines = markdown.components(separatedBy: .newlines)
+    var renderedBlocks: [NSMutableAttributedString] = []
     var index = 0
-    var needsBlockGap = false
+    var blockquoteCounter = 0
 
-    func appendBlock(_ blockAttr: NSAttributedString, spacingBefore: CGFloat = 0) {
-      if needsBlockGap {
-        let separator = NSMutableAttributedString(string: "\n")
-        let sepStyle = NSMutableParagraphStyle()
-        sepStyle.lineHeightMultiple = spacingBefore > 0 ? 0.55 : 0.45
-        separator.addAttributes(
-          [.font: NSFont.systemFont(ofSize: max(6, style.textSize * 0.45)), .paragraphStyle: sepStyle],
-          range: NSRange(location: 0, length: 1)
-        )
-        output.append(separator)
-      }
-      output.append(blockAttr)
-      needsBlockGap = true
-    }
+    let bodyLineSpacing = style.textSize * 0.26
+    let listLineSpacing = style.textSize * 0.24
+    let paragraphGap = style.textSize * 0.55
+    let listItemGap = style.textSize * 0.28
+    let listTrailingGap = style.textSize * 0.58
+    let blockquoteVerticalPad = blockquoteVerticalPadding(for: style.textSize)
 
     while index < lines.count {
       let line = lines[index]
@@ -741,41 +776,53 @@ enum MacSelectableMarkdownBuilder {
         continue
       }
 
-      // Thematic break
+      let isFirstBlock = renderedBlocks.isEmpty
+
+      // Thematic break (drawn full-width in MacSelectableTextView.drawBackground)
       if isThematicBreak(trimmed) {
+        let para = NSMutableParagraphStyle()
+        para.paragraphSpacingBefore = isFirstBlock ? 0 : style.textSize * 0.25
+        para.paragraphSpacing = style.textSize * 0.72
         let rule = NSMutableAttributedString(
-          string: "────────────────────────",
+          string: "\u{00A0}",
           attributes: [
-            .font: NSFont.systemFont(ofSize: style.textSize * 0.7),
-            .foregroundColor: style.separatorColor,
+            .font: NSFont.systemFont(ofSize: max(6, style.textSize * 0.5)),
+            .foregroundColor: NSColor.clear,
+            .paragraphStyle: para,
+            thematicBreakAttributeKey: true,
             markdownSourceAttributeKey: trimmed,
           ]
         )
-        appendBlock(rule, spacingBefore: 4)
+        renderedBlocks.append(rule)
         index += 1
         continue
       }
 
       // ATX Heading
       if let heading = parseHeading(trimmed) {
-        let scale: CGFloat = switch heading.level {
-        case 1: 1.5
-        case 2: 1.3
-        case 3: 1.14
-        case 4: 1.02
-        case 5: 0.94
-        default: 0.88
-        }
+        let scale = headingScale(for: heading.level)
         let weight: NSFont.Weight = heading.level <= 2 ? .bold : .semibold
         let color: NSColor = switch heading.level {
         case 5: style.mutedColor
-        case 6: style.accentColor
+        case 6: style.muted ? style.mutedColor : style.accentColor
         default: style.muted ? style.mutedColor : style.textColor
         }
+        let spacingBefore: CGFloat = switch heading.level {
+        case 1: style.textSize * 0.85
+        case 2: style.textSize * 0.72
+        case 3: style.textSize * 0.58
+        default: style.textSize * 0.45
+        }
+        let spacingAfter: CGFloat = switch heading.level {
+        case 1: style.textSize * 0.35
+        case 2: style.textSize * 0.30
+        case 3: style.textSize * 0.26
+        default: style.textSize * 0.22
+        }
         let para = NSMutableParagraphStyle()
-        para.lineSpacing = style.textSize * 0.16
-        para.paragraphSpacingBefore = needsBlockGap ? style.textSize * 0.45 : 0
-        para.paragraphSpacing = style.textSize * 0.25
+        para.lineSpacing = style.textSize * 0.18
+        para.paragraphSpacingBefore = isFirstBlock ? 0 : spacingBefore
+        para.paragraphSpacing = spacingAfter
 
         let rendered = renderInlineMarkdown(
           heading.text,
@@ -786,12 +833,12 @@ enum MacSelectableMarkdownBuilder {
           paragraphStyle: para,
           rawSource: trimmed
         )
-        appendBlock(rendered)
+        renderedBlocks.append(rendered)
         index += 1
         continue
       }
 
-      // Blockquote group
+      // Blockquote group (rounded card + full-height accent bar drawn in MacSelectableTextView)
       if trimmed.hasPrefix(">") {
         var quoteLines: [String] = []
         var rawLines: [String] = []
@@ -803,67 +850,121 @@ enum MacSelectableMarkdownBuilder {
           quoteLines.append(stripped.hasPrefix(" ") ? String(stripped.dropFirst()) : String(stripped))
           index += 1
         }
-        let para = NSMutableParagraphStyle()
-        para.firstLineHeadIndent = 12
-        para.headIndent = 12
-        para.lineSpacing = style.textSize * 0.18
-        para.paragraphSpacing = style.textSize * 0.35
+        blockquoteCounter += 1
+        let quoteID = blockquoteCounter
+        let innerPara = NSMutableParagraphStyle()
+        innerPara.firstLineHeadIndent = 16
+        innerPara.headIndent = 16
+        innerPara.tailIndent = -12
+        innerPara.lineSpacing = bodyLineSpacing
+        innerPara.paragraphSpacing = style.textSize * 0.25
 
         let combined = quoteLines.joined(separator: "\n")
-        let rendered = NSMutableAttributedString(
-          string: "▎ ",
-          attributes: [
-            .font: NSFont.systemFont(ofSize: style.textSize, weight: .semibold),
-            .foregroundColor: style.accentColor.withAlphaComponent(0.72),
-            .paragraphStyle: para,
-          ]
+        let rawSource = rawLines.joined(separator: "\n")
+        let rendered = renderInlineMarkdown(
+          combined.isEmpty ? " " : combined,
+          fontSize: style.textSize,
+          fontWeight: .regular,
+          foregroundColor: style.mutedColor,
+          style: style,
+          paragraphStyle: innerPara,
+          rawSource: rawSource
         )
-        rendered.append(
-          renderInlineMarkdown(
-            combined,
-            fontSize: style.textSize,
-            fontWeight: .regular,
-            foregroundColor: style.mutedColor,
-            style: style,
-            paragraphStyle: para,
-            rawSource: rawLines.joined(separator: "\n")
-          )
+        adjustParagraphSpacing(
+          in: rendered,
+          firstSpacingBefore: isFirstBlock ? 0 : style.textSize * 0.45,
+          lastSpacingAfter: paragraphGap + blockquoteVerticalPad
+        )
+        rendered.addAttribute(
+          blockquoteAttributeKey,
+          value: quoteID,
+          range: NSRange(location: 0, length: rendered.length)
         )
         rendered.addAttribute(
           markdownSourceAttributeKey,
-          value: rawLines.joined(separator: "\n"),
+          value: rawSource,
           range: NSRange(location: 0, length: rendered.length)
         )
-        appendBlock(rendered)
+        renderedBlocks.append(rendered)
         continue
       }
 
-      // List item (unordered, task, or ordered)
+      // List item (unordered, task, or ordered) with tab-stopped hanging indents
       if parseListItem(line) != nil {
-        let listGroup = NSMutableAttributedString()
-        var rawGroupLines: [String] = []
-        var itemIndex = 0
+        var parsedItems: [(item: ParsedListItem, rawLine: String)] = []
         while index < lines.count, let item = parseListItem(lines[index]) {
-          if itemIndex > 0 {
-            listGroup.append(NSAttributedString(string: "\n"))
-          }
-          rawGroupLines.append(lines[index])
-          let indent = CGFloat(min(item.indentLevel, 6)) * 16
-          let para = NSMutableParagraphStyle()
-          para.firstLineHeadIndent = indent + 4
-          para.headIndent = indent + 20
-          para.lineSpacing = style.textSize * 0.15
-          para.paragraphSpacing = style.textSize * 0.22
+          parsedItems.append((item: item, rawLine: lines[index]))
+          index += 1
+        }
 
-          let markerColor: NSColor = item.isAccentMarker ? style.accentColor : style.mutedColor
-          let prefix = NSAttributedString(
-            string: item.marker + " ",
-            attributes: [
-              .font: NSFont.systemFont(ofSize: style.textSize, weight: .medium),
-              .foregroundColor: markerColor,
-              .paragraphStyle: para,
-            ]
-          )
+        let orderedMarkerFont = NSFont.monospacedDigitSystemFont(ofSize: style.textSize, weight: .medium)
+        var maxOrderedWidthByIndent: [Int: CGFloat] = [:]
+        for entry in parsedItems {
+          if case .ordered(let marker) = entry.item.kind {
+            let width = ceil((marker as NSString).size(withAttributes: [.font: orderedMarkerFont]).width)
+            maxOrderedWidthByIndent[entry.item.indentLevel] = max(
+              maxOrderedWidthByIndent[entry.item.indentLevel] ?? 0,
+              width
+            )
+          }
+        }
+
+        let indentStep = round(style.textSize * 1.25)
+        let defaultMarkerColumn = round(style.textSize * 1.35)
+        let listGroup = NSMutableAttributedString()
+        let rawGroupSource = parsedItems.map(\.rawLine).joined(separator: "\n")
+
+        for (itemOffset, entry) in parsedItems.enumerated() {
+          let item = entry.item
+          let isLastItem = itemOffset == parsedItems.count - 1
+          let clampedIndent = min(item.indentLevel, 6)
+          let baseIndent = CGFloat(clampedIndent) * indentStep
+          let markerStart = baseIndent + round(style.textSize * 0.25)
+          let markerColumn: CGFloat
+          if case .ordered = item.kind, let maxOrderedWidth = maxOrderedWidthByIndent[item.indentLevel] {
+            markerColumn = max(defaultMarkerColumn, maxOrderedWidth + round(style.textSize * 0.45))
+          } else {
+            markerColumn = defaultMarkerColumn
+          }
+          let textStart = markerStart + markerColumn
+
+          let para = NSMutableParagraphStyle()
+          para.firstLineHeadIndent = markerStart
+          para.headIndent = textStart
+          para.tabStops = [NSTextTab(textAlignment: .left, location: textStart)]
+          para.lineSpacing = listLineSpacing
+          para.paragraphSpacing = isLastItem ? listTrailingGap : listItemGap
+
+          let prefix: NSAttributedString
+          switch item.kind {
+          case .task(let isCompleted):
+            let color = isCompleted ? style.accentColor : style.mutedColor
+            prefix = taskMarkerPrefix(
+              isCompleted: isCompleted,
+              textSize: style.textSize,
+              markerColor: color,
+              paragraphStyle: para
+            )
+          case .unordered(let marker):
+            prefix = NSAttributedString(
+              string: marker + "\t",
+              attributes: [
+                .font: NSFont.systemFont(ofSize: style.textSize, weight: .medium),
+                .foregroundColor: style.mutedColor,
+                .paragraphStyle: para,
+              ]
+            )
+          case .ordered(let marker):
+            prefix = NSAttributedString(
+              string: marker + "\t",
+              attributes: [
+                .font: orderedMarkerFont,
+                .foregroundColor: style.mutedColor,
+                .paragraphStyle: para,
+              ]
+            )
+          }
+
           listGroup.append(prefix)
           listGroup.append(
             renderInlineMarkdown(
@@ -873,18 +974,29 @@ enum MacSelectableMarkdownBuilder {
               foregroundColor: style.muted ? style.mutedColor : style.textColor,
               style: style,
               paragraphStyle: para,
-              rawSource: lines[index]
+              rawSource: entry.rawLine
             )
           )
-          index += 1
-          itemIndex += 1
+
+          if !isLastItem {
+            listGroup.append(
+              NSAttributedString(
+                string: "\n",
+                attributes: [
+                  .font: NSFont.systemFont(ofSize: style.textSize, weight: .regular),
+                  .paragraphStyle: para,
+                ]
+              )
+            )
+          }
         }
+
         listGroup.addAttribute(
           markdownSourceAttributeKey,
-          value: rawGroupLines.joined(separator: "\n"),
+          value: rawGroupSource,
           range: NSRange(location: 0, length: listGroup.length)
         )
-        appendBlock(listGroup)
+        renderedBlocks.append(listGroup)
         continue
       }
 
@@ -906,8 +1018,8 @@ enum MacSelectableMarkdownBuilder {
       }
       let joined = paraLines.joined(separator: "\n")
       let para = NSMutableParagraphStyle()
-      para.lineSpacing = style.textSize * 0.2
-      para.paragraphSpacing = style.textSize * 0.35
+      para.lineSpacing = bodyLineSpacing
+      para.paragraphSpacing = paragraphGap
 
       let rendered = renderInlineMarkdown(
         joined,
@@ -918,10 +1030,154 @@ enum MacSelectableMarkdownBuilder {
         paragraphStyle: para,
         rawSource: joined
       )
-      appendBlock(rendered)
+      renderedBlocks.append(rendered)
+    }
+
+    let output = NSMutableAttributedString()
+    for (blockIndex, block) in renderedBlocks.enumerated() {
+      let isLastBlock = blockIndex == renderedBlocks.count - 1
+      if isLastBlock {
+        adjustParagraphSpacing(in: block, lastSpacingAfter: 0)
+      }
+      output.append(block)
+      if !isLastBlock {
+        var newlineAttrs: [NSAttributedString.Key: Any] = [
+          .font: NSFont.systemFont(ofSize: style.textSize, weight: .regular)
+        ]
+        if block.length > 0 {
+          let lastIdx = block.length - 1
+          if let font = block.attribute(.font, at: lastIdx, effectiveRange: nil) {
+            newlineAttrs[.font] = font
+          }
+          if let para = block.attribute(.paragraphStyle, at: lastIdx, effectiveRange: nil) {
+            newlineAttrs[.paragraphStyle] = para
+          }
+        }
+        output.append(NSAttributedString(string: "\n", attributes: newlineAttrs))
+      }
     }
 
     return output
+  }
+
+  private static func adjustParagraphSpacing(
+    in attributed: NSMutableAttributedString,
+    firstSpacingBefore: CGFloat? = nil,
+    lastSpacingAfter: CGFloat? = nil
+  ) {
+    let nsString = attributed.string as NSString
+    guard nsString.length > 0 else { return }
+
+    if let firstSpacingBefore {
+      let firstRange = nsString.paragraphRange(for: NSRange(location: 0, length: 0))
+      var updates: [(NSRange, NSParagraphStyle)] = []
+      attributed.enumerateAttribute(.paragraphStyle, in: firstRange, options: []) { value, range, _ in
+        let mutable = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+          ?? NSMutableParagraphStyle()
+        mutable.paragraphSpacingBefore = firstSpacingBefore
+        updates.append((range, mutable))
+      }
+      for (range, para) in updates {
+        attributed.addAttribute(.paragraphStyle, value: para, range: range)
+      }
+    }
+
+    if let lastSpacingAfter {
+      let lastRange = nsString.paragraphRange(for: NSRange(location: nsString.length - 1, length: 0))
+      var updates: [(NSRange, NSParagraphStyle)] = []
+      attributed.enumerateAttribute(.paragraphStyle, in: lastRange, options: []) { value, range, _ in
+        let mutable = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+          ?? NSMutableParagraphStyle()
+        mutable.paragraphSpacing = lastSpacingAfter
+        updates.append((range, mutable))
+      }
+      for (range, para) in updates {
+        attributed.addAttribute(.paragraphStyle, value: para, range: range)
+      }
+    }
+  }
+
+  @MainActor
+  private static func taskMarkerPrefix(
+    isCompleted: Bool,
+    textSize: CGFloat,
+    markerColor: NSColor,
+    paragraphStyle: NSParagraphStyle
+  ) -> NSAttributedString {
+    let baseFont = NSFont.systemFont(ofSize: textSize, weight: .regular)
+    let symbolSize = max(11, textSize * 0.88)
+    let symbolName = isCompleted ? "checkmark.circle.fill" : "circle"
+    let config = NSImage.SymbolConfiguration(pointSize: symbolSize, weight: .semibold)
+    if let symbol = NSImage(
+      systemSymbolName: symbolName,
+      accessibilityDescription: isCompleted ? "Completed" : "Incomplete"
+    )?.withSymbolConfiguration(config),
+      symbol.size.width > 0,
+      symbol.size.height > 0
+    {
+      let scale: CGFloat = 2
+      let pixelWidth = max(1, Int(ceil(symbol.size.width * scale)))
+      let pixelHeight = max(1, Int(ceil(symbol.size.height * scale)))
+      if let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: pixelWidth,
+        pixelsHigh: pixelHeight,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ), let graphicsContext = NSGraphicsContext(bitmapImageRep: rep) {
+        rep.size = symbol.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        let drawRect = NSRect(origin: .zero, size: symbol.size)
+        symbol.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1)
+        markerColor.setFill()
+        drawRect.fill(using: .sourceAtop)
+        NSGraphicsContext.restoreGraphicsState()
+
+        let tinted = NSImage(size: symbol.size)
+        tinted.addRepresentation(rep)
+        tinted.isTemplate = false
+
+        let attachment = NSTextAttachment()
+        attachment.image = tinted
+        let yOffset = round((baseFont.capHeight - symbol.size.height) / 2)
+        attachment.bounds = CGRect(origin: CGPoint(x: 0, y: yOffset), size: symbol.size)
+
+        let result = NSMutableAttributedString(attachment: attachment)
+        result.addAttributes(
+          [
+            .font: baseFont,
+            .paragraphStyle: paragraphStyle,
+          ],
+          range: NSRange(location: 0, length: result.length)
+        )
+        result.append(
+          NSAttributedString(
+            string: "\t",
+            attributes: [
+              .font: baseFont,
+              .foregroundColor: markerColor,
+              .paragraphStyle: paragraphStyle,
+            ]
+          )
+        )
+        return result
+      }
+    }
+
+    return NSAttributedString(
+      string: (isCompleted ? "☑" : "☐") + "\t",
+      attributes: [
+        .font: NSFont.systemFont(ofSize: textSize, weight: .medium),
+        .foregroundColor: markerColor,
+        .paragraphStyle: paragraphStyle,
+      ]
+    )
   }
 
   private static func renderCodeBlock(
@@ -930,12 +1186,11 @@ enum MacSelectableMarkdownBuilder {
     rawMarkdown: String,
     style: Style
   ) -> NSAttributedString {
-    let codeFont = NSFont(name: "Menlo-Regular", size: max(11, style.textSize - 2))
-      ?? NSFont.monospacedSystemFont(ofSize: max(11, style.textSize - 2), weight: .regular)
+    let codeFont = NSFont.monospacedSystemFont(ofSize: max(11, style.textSize - 2), weight: .regular)
     let para = NSMutableParagraphStyle()
     para.firstLineHeadIndent = 10
     para.headIndent = 10
-    para.lineSpacing = 2.5
+    para.lineSpacing = 3
     para.paragraphSpacing = 6
 
     let output = NSMutableAttributedString()
@@ -1013,6 +1268,15 @@ enum MacSelectableMarkdownBuilder {
   }
 
   @MainActor
+  private static func italicVariant(of font: NSFont) -> NSFont {
+    let descriptor = font.fontDescriptor.withSymbolicTraits(.italic)
+    if let converted = NSFont(descriptor: descriptor, size: font.pointSize) {
+      return converted
+    }
+    return NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+  }
+
+  @MainActor
   private static func renderInlineMarkdown(
     _ text: String,
     fontSize: CGFloat,
@@ -1024,10 +1288,10 @@ enum MacSelectableMarkdownBuilder {
   ) -> NSMutableAttributedString {
     let baseFont = NSFont.systemFont(ofSize: fontSize, weight: fontWeight)
     let boldFont = NSFont.systemFont(ofSize: fontSize, weight: fontWeight == .bold ? .bold : .semibold)
-    let italicFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-    let boldItalicFont = NSFontManager.shared.convert(boldFont, toHaveTrait: .italicFontMask)
-    let codeFont = NSFont(name: "Menlo-Regular", size: fontSize * 0.9)
-      ?? NSFont.monospacedSystemFont(ofSize: fontSize * 0.9, weight: .regular)
+    let italicFont = italicVariant(of: baseFont)
+    let boldItalicFont = italicVariant(of: boldFont)
+    let codeWeight: NSFont.Weight = fontWeight == .bold ? .semibold : (fontWeight == .semibold ? .medium : .regular)
+    let codeFont = NSFont.monospacedSystemFont(ofSize: fontSize * 0.9, weight: codeWeight)
 
     let options = AttributedString.MarkdownParsingOptions(
       interpretedSyntax: .inlineOnlyPreservingWhitespace
@@ -1048,7 +1312,7 @@ enum MacSelectableMarkdownBuilder {
       if let intent = run.inlinePresentationIntent {
         if intent.contains(.code) {
           attrs[.font] = codeFont
-          attrs[.backgroundColor] = style.codeBackgroundColor
+          attrs[inlineCodeAttributeKey] = true
         } else if intent.contains(.stronglyEmphasized) && intent.contains(.emphasized) {
           attrs[.font] = boldItalicFont
         } else if intent.contains(.stronglyEmphasized) {
@@ -1087,10 +1351,15 @@ enum MacSelectableMarkdownBuilder {
   }
 
   private struct ParsedListItem {
+    enum Kind {
+      case unordered(marker: String)
+      case ordered(marker: String)
+      case task(isCompleted: Bool)
+    }
+
     let indentLevel: Int
-    let marker: String
+    let kind: Kind
     let body: String
-    let isAccentMarker: Bool
   }
 
   private static func parseListItem(_ line: String) -> ParsedListItem? {
@@ -1103,25 +1372,22 @@ enum MacSelectableMarkdownBuilder {
     if trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") {
       return ParsedListItem(
         indentLevel: indentLevel,
-        marker: "☑",
-        body: String(trimmed.dropFirst(6)),
-        isAccentMarker: true
+        kind: .task(isCompleted: true),
+        body: String(trimmed.dropFirst(6))
       )
     }
     if trimmed.hasPrefix("- [ ] ") {
       return ParsedListItem(
         indentLevel: indentLevel,
-        marker: "☐",
-        body: String(trimmed.dropFirst(6)),
-        isAccentMarker: false
+        kind: .task(isCompleted: false),
+        body: String(trimmed.dropFirst(6))
       )
     }
     if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
       return ParsedListItem(
         indentLevel: indentLevel,
-        marker: "•",
-        body: String(trimmed.dropFirst(2)),
-        isAccentMarker: false
+        kind: .unordered(marker: unorderedBulletMarker(forIndentLevel: indentLevel)),
+        body: String(trimmed.dropFirst(2))
       )
     }
     if let matchEnd = orderedMarkerEndIndex(in: trimmed) {
@@ -1129,9 +1395,8 @@ enum MacSelectableMarkdownBuilder {
       let body = String(trimmed[matchEnd...])
       return ParsedListItem(
         indentLevel: indentLevel,
-        marker: marker,
-        body: body,
-        isAccentMarker: false
+        kind: .ordered(marker: marker),
+        body: body
       )
     }
     return nil
@@ -1152,7 +1417,7 @@ enum MacSelectableMarkdownBuilder {
     return trimmed.index(after: afterPunct)
   }
 
-  private static func isThematicBreak(_ trimmed: String) -> Bool {
+  static func isThematicBreak(_ trimmed: String) -> Bool {
     guard !trimmed.contains("|") else { return false }
     let stripped = trimmed.filter { !$0.isWhitespace }
     guard stripped.count >= 3, let first = stripped.first, first == "-" || first == "*" || first == "_" else {
@@ -1250,7 +1515,7 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
       includeStructuredBlocks: includeStructuredBlocks,
       style: style
     )
-    container.setAttributedString(attributed, linkColor: style.accentColor)
+    container.setAttributedString(attributed, style: style)
   }
 
   @MainActor
@@ -1276,6 +1541,8 @@ final class MacPassthroughSelectableTextContainer: NSView {
   let textView: MacSelectableTextView
   fileprivate var lastRenderKey: AnyHashable?
   private var attributedStorage = NSAttributedString()
+  private var topInset: CGFloat = 0
+  private var bottomInset: CGFloat = 0
 
   override var isFlipped: Bool { true }
 
@@ -1310,13 +1577,28 @@ final class MacPassthroughSelectableTextContainer: NSView {
     fatalError("init(coder:) has not been implemented")
   }
 
-  func setAttributedString(_ value: NSAttributedString, linkColor: NSColor) {
+  func setAttributedString(_ value: NSAttributedString, style: MacSelectableMarkdownBuilder.Style) {
     attributedStorage = value
+    let verticalPad = MacSelectableMarkdownBuilder.blockquoteVerticalPadding(for: style.textSize)
+    let startsWithBlockquote = value.length > 0
+      && value.attribute(MacSelectableMarkdownBuilder.blockquoteAttributeKey, at: 0, effectiveRange: nil) != nil
+    let endsWithBlockquote = value.length > 0
+      && value.attribute(MacSelectableMarkdownBuilder.blockquoteAttributeKey, at: value.length - 1, effectiveRange: nil) != nil
+    topInset = startsWithBlockquote ? verticalPad : 0
+    bottomInset = endsWithBlockquote ? verticalPad : 0
+
+    textView.topContentInset = topInset
+    textView.blockquoteVerticalPadding = verticalPad
+    textView.blockquoteBackgroundColor = style.textColor.withAlphaComponent(style.isDark ? 0.05 : 0.035)
+    textView.blockquoteAccentColor = style.accentColor.withAlphaComponent(0.72)
+    textView.inlineCodeBackgroundColor = style.codeBackgroundColor
+    textView.thematicBreakColor = style.separatorColor.withAlphaComponent(0.85)
     textView.linkTextAttributes = [
-      .foregroundColor: linkColor,
+      .foregroundColor: style.accentColor,
       .cursor: NSCursor.pointingHand,
     ]
     textView.textStorage?.setAttributedString(value)
+    textView.needsDisplay = true
     needsLayout = true
   }
 
@@ -1331,7 +1613,7 @@ final class MacPassthroughSelectableTextContainer: NSView {
     container.lineFragmentPadding = 0
     manager.addTextContainer(container)
     manager.ensureLayout(for: container)
-    return ceil(manager.usedRect(for: container).height)
+    return ceil(manager.usedRect(for: container).height) + topInset + bottomInset
   }
 
   override func layout() {
@@ -1339,11 +1621,134 @@ final class MacPassthroughSelectableTextContainer: NSView {
     let width = max(bounds.width, 1)
     textView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
     textView.frame = bounds
+    textView.needsDisplay = true
   }
 }
 
 @MainActor
 final class MacSelectableTextView: NSTextView {
+  var topContentInset: CGFloat = 0
+  var blockquoteVerticalPadding: CGFloat = 8
+  var blockquoteBackgroundColor: NSColor = NSColor.labelColor.withAlphaComponent(0.035)
+  var blockquoteAccentColor: NSColor = NSColor.controlAccentColor.withAlphaComponent(0.72)
+  var inlineCodeBackgroundColor: NSColor = NSColor.quaternaryLabelColor
+  var thematicBreakColor: NSColor = NSColor.separatorColor
+
+  override var textContainerOrigin: NSPoint {
+    NSPoint(x: 0, y: topContentInset)
+  }
+
+  override func drawBackground(in rect: NSRect) {
+    drawCustomDecorations(in: rect)
+    super.drawBackground(in: rect)
+  }
+
+  private func drawCustomDecorations(in rect: NSRect) {
+    guard let layoutManager = self.layoutManager,
+      let textContainer = self.textContainer,
+      let storage = self.textStorage,
+      storage.length > 0
+    else { return }
+
+    let origin = textContainerOrigin
+    let containerRect = rect
+      .offsetBy(dx: -origin.x, dy: -origin.y)
+      .insetBy(dx: 0, dy: -blockquoteVerticalPadding)
+    let visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: containerRect, in: textContainer)
+    guard visibleGlyphRange.length > 0 else { return }
+    let visibleCharRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
+    let fullDocRange = NSRange(location: 0, length: storage.length)
+
+    // 1. Blockquote rounded cards + full-height accent bar
+    var drawnBlockquoteIDs = Set<Int>()
+    storage.enumerateAttribute(
+      MacSelectableMarkdownBuilder.blockquoteAttributeKey,
+      in: visibleCharRange,
+      options: []
+    ) { value, effectiveRange, _ in
+      guard let quoteID = value as? Int, drawnBlockquoteIDs.insert(quoteID).inserted else { return }
+      var fullBlockRange = NSRange(location: 0, length: 0)
+      _ = storage.attribute(
+        MacSelectableMarkdownBuilder.blockquoteAttributeKey,
+        at: effectiveRange.location,
+        longestEffectiveRange: &fullBlockRange,
+        in: fullDocRange
+      )
+      let glyphRange = layoutManager.glyphRange(forCharacterRange: fullBlockRange, actualCharacterRange: nil)
+      guard glyphRange.length > 0 else { return }
+
+      var unionRect = NSRect.null
+      layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, _, _ in
+        unionRect = unionRect.isNull ? usedRect : unionRect.union(usedRect)
+      }
+      guard !unionRect.isNull else { return }
+
+      let cardRect = NSRect(
+        x: origin.x,
+        y: unionRect.minY + origin.y - blockquoteVerticalPadding,
+        width: max(bounds.width, 1),
+        height: unionRect.height + blockquoteVerticalPadding * 2
+      )
+
+      NSGraphicsContext.saveGraphicsState()
+      let cardPath = NSBezierPath(roundedRect: cardRect, xRadius: 9, yRadius: 9)
+      cardPath.addClip()
+      blockquoteBackgroundColor.setFill()
+      cardPath.fill()
+
+      let accentBarRect = NSRect(
+        x: cardRect.minX,
+        y: cardRect.minY,
+        width: 3,
+        height: cardRect.height
+      )
+      blockquoteAccentColor.setFill()
+      accentBarRect.fill()
+      NSGraphicsContext.restoreGraphicsState()
+    }
+
+    // 2. Full-width thematic breaks
+    storage.enumerateAttribute(
+      MacSelectableMarkdownBuilder.thematicBreakAttributeKey,
+      in: visibleCharRange,
+      options: []
+    ) { value, effectiveRange, _ in
+      guard (value as? Bool) == true else { return }
+      let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
+      guard glyphRange.length > 0 else { return }
+      let usedRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+      let ruleY = floor(usedRect.midY + origin.y)
+      let ruleRect = NSRect(x: origin.x, y: ruleY, width: max(bounds.width, 1), height: 1)
+      thematicBreakColor.setFill()
+      ruleRect.fill()
+    }
+
+    // 3. Rounded inline code pills
+    storage.enumerateAttribute(
+      MacSelectableMarkdownBuilder.inlineCodeAttributeKey,
+      in: visibleCharRange,
+      options: []
+    ) { value, effectiveRange, _ in
+      guard (value as? Bool) == true else { return }
+      let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
+      guard glyphRange.length > 0 else { return }
+      inlineCodeBackgroundColor.setFill()
+      layoutManager.enumerateEnclosingRects(
+        forGlyphRange: glyphRange,
+        withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+        in: textContainer
+      ) { enclosingRect, _ in
+        var pillRect = enclosingRect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -2.0, dy: -0.5)
+        let minX = max(0, pillRect.minX)
+        let maxX = min(bounds.width, pillRect.maxX)
+        pillRect.origin.x = minX
+        pillRect.size.width = max(0, maxX - minX)
+        guard pillRect.width > 0, pillRect.height > 0 else { return }
+        NSBezierPath(roundedRect: pillRect, xRadius: 4, yRadius: 4).fill()
+      }
+    }
+  }
+
   override func scrollWheel(with event: NSEvent) {
     // Forward all wheel/trackpad scrolling so the enclosing SwiftUI List scrolls smoothly.
     nextResponder?.scrollWheel(with: event)

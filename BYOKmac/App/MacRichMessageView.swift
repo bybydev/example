@@ -231,6 +231,8 @@ struct MacRichMessageView: View {
           } else {
             Text(message.content)
               .font(.system(size: transcriptFontSize))
+              .foregroundStyle(theme.textPrimary)
+              .lineSpacing(transcriptFontSize * 0.26)
               .textSelection(.enabled)
               .fixedSize(horizontal: false, vertical: true)
           }
@@ -670,6 +672,7 @@ private struct MacReasoningDisclosure: View {
           } else {
             Text(text)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineSpacing(textSize * 0.26)
               .textSelection(.enabled)
               .fixedSize(horizontal: false, vertical: true)
           }
