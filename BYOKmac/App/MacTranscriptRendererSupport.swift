@@ -1651,6 +1651,7 @@ final class MacSelectableTextView: NSTextView {
     else { return }
 
     let origin = textContainerOrigin
+    let viewWidth = bounds.width
     let containerRect = rect
       .offsetBy(dx: -origin.x, dy: -origin.y)
       .insetBy(dx: 0, dy: -blockquoteVerticalPadding)
@@ -1686,7 +1687,7 @@ final class MacSelectableTextView: NSTextView {
       let cardRect = NSRect(
         x: origin.x,
         y: unionRect.minY + origin.y - blockquoteVerticalPadding,
-        width: max(bounds.width, 1),
+        width: max(viewWidth, 1),
         height: unionRect.height + blockquoteVerticalPadding * 2
       )
 
@@ -1718,7 +1719,7 @@ final class MacSelectableTextView: NSTextView {
       guard glyphRange.length > 0 else { return }
       let usedRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
       let ruleY = floor(usedRect.midY + origin.y)
-      let ruleRect = NSRect(x: origin.x, y: ruleY, width: max(bounds.width, 1), height: 1)
+      let ruleRect = NSRect(x: origin.x, y: ruleY, width: max(viewWidth, 1), height: 1)
       thematicBreakColor.setFill()
       ruleRect.fill()
     }
@@ -1740,7 +1741,7 @@ final class MacSelectableTextView: NSTextView {
       ) { enclosingRect, _ in
         var pillRect = enclosingRect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -2.0, dy: -0.5)
         let minX = max(0, pillRect.minX)
-        let maxX = min(bounds.width, pillRect.maxX)
+        let maxX = min(viewWidth, pillRect.maxX)
         pillRect.origin.x = minX
         pillRect.size.width = max(0, maxX - minX)
         guard pillRect.width > 0, pillRect.height > 0 else { return }
