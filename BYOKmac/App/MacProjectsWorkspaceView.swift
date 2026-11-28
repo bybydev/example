@@ -5,13 +5,21 @@ import MacAppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum MacProjectWorkspaceSection: String, CaseIterable, Identifiable {
-  case overview = "Overview"
-  case chats = "Chats"
-  case sources = "Sources"
-  case tools = "Tools"
+nonisolated enum MacProjectWorkspaceRoute: Equatable, Sendable {
+  case list
+  case create
+  case detail(ProjectID)
+  case chats(ProjectID)
+  case sources(ProjectID)
+  case prompts(ProjectID)
+  case tools(ProjectID)
 
-  var id: String { rawValue }
+  var activeProjectID: ProjectID? {
+    switch self {
+    case .list, .create: nil
+    case .detail(let id), .chats(let id), .sources(let id), .prompts(let id), .tools(let id): id
+    }
+  }
 }
 
 enum MacProjectChatDateGrouper {
@@ -131,10 +139,9 @@ struct MacProjectsWorkspaceView: View {
   let startNewChat: (ProjectID, String?) -> Bool
 
   @Environment(PurchaseManager.self) private var purchaseManager
-  @State private var selectedProjectID: ProjectID?
+  @Environment(\.macToastCenter) private var toastCenter
+  @State private var route: MacProjectWorkspaceRoute
   @State private var searchText = ""
-  @State private var showingNewProject = false
-  @State private var editIdentityProject: ChatProject?
   @State private var deleteProject: ChatProject?
 
   init(
@@ -153,11 +160,7 @@ struct MacProjectsWorkspaceView: View {
     self.initialProjectID = initialProjectID
     self.openChat = openChat
     self.startNewChat = startNewChat
-    _selectedProjectID = State(initialValue: initialProjectID)
-  }
-
-  private var selectedProject: ChatProject? {
-    workspace.project(selectedProjectID)
+    _route = State(initialValue: initialProjectID.map { .detail($0) } ?? .list)
   }
 
   private var trimmedSearchQuery: String {
@@ -184,52 +187,110 @@ struct MacProjectsWorkspaceView: View {
 
   var body: some View {
     Group {
-      if let project = selectedProject {
-        MacProjectWorkspaceDetailView(
-          project: project,
+      switch route {
+      case .list:
+        projectsHome
+      case .create:
+        MacProjectSettingsView(
+          project: nil,
           workspace: workspace,
           providers: providers,
           chats: chats,
-          mcp: mcp,
-          back: { selectedProjectID = nil },
-          openChat: { conversationID in
-            openChat(conversationID)
+          back: { route = .list },
+          onCreated: { projectID in
+            route = .detail(projectID)
           },
-          startNewChat: { prompt in
-            _ = startNewChat(project.id, prompt)
-          },
-          requestDelete: { deleteProject = project }
+          startNewChat: nil,
+          openChats: nil,
+          openSources: nil,
+          openPrompts: nil,
+          openTools: nil,
+          requestDelete: nil
         )
-      } else {
-        projectsHome
+        .id("create-project")
+      case .detail(let projectID):
+        if let project = workspace.project(projectID) {
+          MacProjectSettingsView(
+            project: project,
+            workspace: workspace,
+            providers: providers,
+            chats: chats,
+            back: { route = .list },
+            onCreated: nil,
+            startNewChat: { _ = startNewChat(project.id, nil) },
+            openChats: { route = .chats(project.id) },
+            openSources: { route = .sources(project.id) },
+            openPrompts: { route = .prompts(project.id) },
+            openTools: { route = .tools(project.id) },
+            requestDelete: { deleteProject = project }
+          )
+          .id("detail-\(project.id.rawValue)")
+        } else {
+          projectsHome
+        }
+      case .chats(let projectID):
+        if let project = workspace.project(projectID) {
+          MacProjectChatsWorkspaceView(
+            project: project,
+            workspace: workspace,
+            chats: chats,
+            mcp: mcp,
+            back: { route = .detail(project.id) },
+            openChat: { conversationID in openChat(conversationID) },
+            startNewChat: { _ = startNewChat(project.id, nil) }
+          )
+          .id("chats-\(project.id.rawValue)")
+        } else {
+          projectsHome
+        }
+      case .sources(let projectID):
+        if let project = workspace.project(projectID) {
+          MacProjectSourcesWorkspaceView(
+            project: project,
+            workspace: workspace,
+            back: { route = .detail(project.id) }
+          )
+          .id("sources-\(project.id.rawValue)")
+        } else {
+          projectsHome
+        }
+      case .prompts(let projectID):
+        if let project = workspace.project(projectID) {
+          MacProjectPromptsWorkspaceView(
+            project: project,
+            workspace: workspace,
+            back: { route = .detail(project.id) },
+            startNewChat: { prompt in _ = startNewChat(project.id, prompt) }
+          )
+          .id("prompts-\(project.id.rawValue)")
+        } else {
+          projectsHome
+        }
+      case .tools(let projectID):
+        if let project = workspace.project(projectID) {
+          MacProjectToolsWorkspaceView(
+            project: project,
+            workspace: workspace,
+            mcp: mcp,
+            back: { route = .detail(project.id) }
+          )
+          .id("tools-\(project.id.rawValue)")
+        } else {
+          projectsHome
+        }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: initialProjectID) { _, projectID in
       if let projectID {
-        selectedProjectID = projectID
+        route = .detail(projectID)
       }
     }
     .onChange(of: workspace.projects.map(\.id)) { _, ids in
-      if let selectedProjectID, !ids.contains(selectedProjectID) {
-        self.selectedProjectID = nil
+      if let activeID = route.activeProjectID, !ids.contains(activeID) {
+        route = .list
       }
-    }
-    .sheet(isPresented: $showingNewProject) {
-      MacProjectCreateSheet(
-        workspace: workspace,
-        providers: providers,
-        created: { projectID in
-          selectedProjectID = projectID
-        }
-      )
-    }
-    .sheet(item: $editIdentityProject) { project in
-      MacProjectIdentityEditor(
-        project: project,
-        workspace: workspace
-      )
     }
     .confirmationDialog(
       deleteProject.map { "Delete \"\($0.name)\"?" } ?? "Delete project?",
@@ -241,11 +302,15 @@ struct MacProjectsWorkspaceView: View {
     ) {
       Button("Delete Project", role: .destructive) {
         guard let project = deleteProject else { return }
+        let name = project.name
         deleteProject = nil
         Task { @MainActor in
           if await workspace.deleteProject(project.id) {
             await mcp.reloadFromStorage()
-            if selectedProjectID == project.id { selectedProjectID = nil }
+            toastCenter?.success("Deleted \(name)")
+            if route.activeProjectID == project.id {
+              route = .list
+            }
           }
         }
       }
@@ -293,34 +358,35 @@ struct MacProjectsWorkspaceView: View {
         Divider()
 
         ScrollView {
-          LazyVStack(spacing: 10) {
-            HStack {
-              Text("\(visibleProjects.count) project\(visibleProjects.count == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              Spacer()
-            }
-            .padding(.bottom, 2)
-
+          VStack(alignment: .leading, spacing: 16) {
             if visibleProjects.isEmpty {
               ContentUnavailableView.search(text: trimmedSearchQuery)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 80)
             } else {
-              ForEach(visibleProjects) { project in
-                let defaultsStatus = MacProjectDefaultsSummary.evaluate(
-                  project: project,
-                  providers: providers
-                )
-                MacProjectHomeCard(
-                  project: project,
-                  activitySummary: projectActivitySummary(project),
-                  defaultsStatus: defaultsStatus,
-                  openProject: { selectedProjectID = project.id },
-                  startNewChat: { _ = startNewChat(project.id, nil) },
-                  editProject: { editIdentityProject = project },
-                  requestDelete: { deleteProject = project }
-                )
+              MacProjectInsetGroup {
+                ForEach(Array(visibleProjects.enumerated()), id: \.element.id) { index, project in
+                  if index > 0 {
+                    Rectangle()
+                      .fill(MacDesignTokens.Colors.separator.opacity(0.65))
+                      .frame(height: 0.5)
+                      .padding(.leading, 55)
+                  }
+                  let defaultsStatus = MacProjectDefaultsSummary.evaluate(
+                    project: project,
+                    providers: providers
+                  )
+                  MacProjectListRow(
+                    project: project,
+                    activitySummary: projectActivitySummary(project),
+                    defaultsStatus: defaultsStatus,
+                    openProject: { route = .detail(project.id) },
+                    openChats: { route = .chats(project.id) },
+                    openSources: { route = .sources(project.id) },
+                    startNewChat: { _ = startNewChat(project.id, nil) },
+                    requestDelete: { deleteProject = project }
+                  )
+                }
               }
             }
           }
@@ -353,7 +419,7 @@ struct MacProjectsWorkspaceView: View {
     guard MacProAccess.requireProjectCapacity(currentCount: workspace.projects.count) else {
       return
     }
-    showingNewProject = true
+    route = .create
   }
 
   private func projectActivitySummary(_ project: ChatProject) -> String {
@@ -367,412 +433,1075 @@ struct MacProjectsWorkspaceView: View {
     parts.append("\(chatCount) chat\(chatCount == 1 ? "" : "s")")
     parts.append("\(sourceCount) source\(sourceCount == 1 ? "" : "s")")
     if toolCount > 0 {
-      parts.append("\(toolCount) MCP server\(toolCount == 1 ? "" : "s")")
+      parts.append("\(toolCount) tool\(toolCount == 1 ? "" : "s")")
     }
     return parts.joined(separator: " · ")
   }
 }
 
-private struct MacProjectHomeCard: View {
+private struct MacProjectInsetGroup<Content: View>: View {
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+    VStack(alignment: .leading, spacing: 0) {
+      content
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MacDesignTokens.Colors.surface, in: shape)
+    .clipShape(shape)
+    .overlay {
+      shape.stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+        .allowsHitTesting(false)
+    }
+  }
+}
+
+private struct MacProjectListRow: View {
   let project: ChatProject
   let activitySummary: String
   let defaultsStatus: MacProjectDefaultsSummary.Status
   let openProject: () -> Void
+  let openChats: () -> Void
+  let openSources: () -> Void
   let startNewChat: () -> Void
-  let editProject: () -> Void
   let requestDelete: () -> Void
 
   @State private var isHovered = false
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
     HStack(spacing: 14) {
-      Button(action: openProject) {
-        HStack(spacing: 12) {
-          MacProjectWorkspaceIcon(project: project, size: 42)
+      HStack(spacing: 11) {
+        MacProjectWorkspaceIcon(project: project, size: 30)
+        Text(project.name)
+          .font(.system(size: 13.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .lineLimit(1)
+      }
+      .frame(width: 244, alignment: .leading)
 
-          VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-              Text(project.name)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                .lineLimit(1)
-              Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      Text(activitySummary)
+        .font(.system(size: 13))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+      HStack(spacing: 8) {
+        ZStack(alignment: .trailing) {
+          defaultsLabel
+            .opacity(isHovered ? 0 : 1)
+            .allowsHitTesting(false)
+
+          HStack(spacing: 4) {
+            Button("New Chat", action: startNewChat)
+              .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+            Menu {
+              rowMenuItems
+            } label: {
+              MacIconMenuLabel(systemImage: "ellipsis")
             }
-
-            Text(activitySummary)
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              .lineLimit(1)
-
-            HStack(spacing: 4) {
-              if defaultsStatus.hasIssue {
-                Image(systemName: "exclamationmark.triangle.fill")
-                  .font(.caption2)
-                  .foregroundStyle(.orange)
-              }
-              Text(defaultsStatus.cardSummary)
-                .font(.caption2)
-                .foregroundStyle(
-                  defaultsStatus.hasIssue
-                    ? Color.orange
-                    : MacDesignTokens.Colors.textMuted.opacity(0.85)
-                )
-                .lineLimit(1)
-            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
           }
-
-          Spacer(minLength: 12)
+          .opacity(isHovered ? 1 : 0)
+          .allowsHitTesting(isHovered)
         }
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
+        .frame(minWidth: 148, alignment: .trailing)
 
-      Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
-        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-
-      Menu {
-        Button("Open Project", systemImage: "arrow.right.circle", action: openProject)
-        Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
-        Button("Edit Project…", systemImage: "pencil", action: editProject)
-        Divider()
-        Button("Delete Project…", systemImage: "trash", role: .destructive, action: requestDelete)
-      } label: {
-        MacIconMenuLabel(systemImage: "ellipsis")
-      }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
-      .help("Project actions")
-    }
-    .padding(14)
-    .background(MacDesignTokens.Colors.surface, in: shape)
-    .overlay {
-      if isHovered {
-        shape.fill(Color.primary.opacity(0.025))
-          .allowsHitTesting(false)
+        Image(systemName: "chevron.right")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(
+            isHovered
+              ? MacDesignTokens.Colors.textPrimary.opacity(0.75)
+              : MacDesignTokens.Colors.textMuted.opacity(0.5)
+          )
       }
     }
-    .overlay {
-      shape.stroke(
-        isHovered
-          ? MacDesignTokens.Colors.accent.opacity(0.35)
-          : MacDesignTokens.Colors.separator.opacity(0.75),
-        lineWidth: 0.75
-      )
-    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .frame(minHeight: 52)
+    .background(Color.primary.opacity(isHovered ? 0.035 : 0))
+    .contentShape(Rectangle())
+    .onTapGesture(perform: openProject)
     .onHover { isHovered = $0 }
     .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
     .contextMenu {
-      Button("Open Project", action: openProject)
-      Button("New Chat", action: startNewChat)
-      Button("Edit Project…", action: editProject)
-      Divider()
-      Button("Delete Project", role: .destructive, action: requestDelete)
+      rowMenuItems
     }
+  }
+
+  @ViewBuilder
+  private var defaultsLabel: some View {
+    HStack(spacing: 5) {
+      if defaultsStatus.hasIssue {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(.system(size: 10.5))
+          .foregroundStyle(.orange)
+      }
+      Text(defaultsStatus.cardSummary)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(
+          defaultsStatus.hasIssue
+            ? Color.orange
+            : MacDesignTokens.Colors.textMuted
+        )
+        .lineLimit(1)
+    }
+  }
+
+  @ViewBuilder
+  private var rowMenuItems: some View {
+    Button("Open Project", systemImage: "slider.horizontal.3", action: openProject)
+    Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+    Divider()
+    Button("Chats", systemImage: "bubble.left.and.bubble.right", action: openChats)
+    Button("Sources", systemImage: "doc.on.doc", action: openSources)
+    Divider()
+    Button("Delete Project…", systemImage: "trash", role: .destructive, action: requestDelete)
   }
 }
 
-private struct MacProjectWorkspaceDetailView: View {
-  let project: ChatProject
+private struct MacProjectSettingsView: View {
+  private enum PendingNavigation {
+    case back
+    case chats
+    case sources
+    case prompts
+    case tools
+  }
+
+  let project: ChatProject?
   @Bindable var workspace: MacWorkspaceModel
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
-  @Bindable var mcp: MacMCPModel
   let back: () -> Void
-  let openChat: (ConversationID) -> Void
-  let startNewChat: (String?) -> Void
-  let requestDelete: () -> Void
+  let onCreated: ((ProjectID) -> Void)?
+  let startNewChat: (() -> Void)?
+  let openChats: (() -> Void)?
+  let openSources: (() -> Void)?
+  let openPrompts: (() -> Void)?
+  let openTools: (() -> Void)?
+  let requestDelete: (() -> Void)?
 
-  @State private var section: MacProjectWorkspaceSection = .overview
+  @Environment(\.macToastCenter) private var toastCenter
+  @FocusState private var nameFocused: Bool
+  @State private var name: String
+  @State private var symbolName: String
+  @State private var accentID: String
+  @State private var accountID: ProviderAccountID?
+  @State private var modelID: ModelID?
+  @State private var instructions: String
+  @State private var showingIconPicker = false
+  @State private var isSaving = false
+  @State private var saveError: String?
+  @State private var showingDiscardAlert = false
+  @State private var pendingNavigation: PendingNavigation? = nil
+
+  private var isCreate: Bool { project == nil }
+
+  init(
+    project: ChatProject?,
+    workspace: MacWorkspaceModel,
+    providers: MacProviderModel,
+    chats: MacChatSessionModel,
+    back: @escaping () -> Void,
+    onCreated: ((ProjectID) -> Void)?,
+    startNewChat: (() -> Void)?,
+    openChats: (() -> Void)?,
+    openSources: (() -> Void)?,
+    openPrompts: (() -> Void)?,
+    openTools: (() -> Void)?,
+    requestDelete: (() -> Void)?
+  ) {
+    self.project = project
+    self.workspace = workspace
+    self.providers = providers
+    self.chats = chats
+    self.back = back
+    self.onCreated = onCreated
+    self.startNewChat = startNewChat
+    self.openChats = openChats
+    self.openSources = openSources
+    self.openPrompts = openPrompts
+    self.openTools = openTools
+    self.requestDelete = requestDelete
+    _name = State(initialValue: project?.name ?? "")
+    _symbolName = State(initialValue: project?.symbolName ?? "folder.fill")
+    _accentID = State(initialValue: project?.accentID ?? "blue")
+    _accountID = State(initialValue: project?.accountID)
+    _modelID = State(initialValue: project?.modelID)
+    _instructions = State(initialValue: project?.instructions ?? "")
+  }
+
+  private var trimmedName: String {
+    name.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var selectedAccent: Color {
+    MacProjectAccentOption(rawValue: accentID)?.color ?? .blue
+  }
+
+  private var nameValidationError: String? {
+    guard !trimmedName.isEmpty else { return nil }
+    if trimmedName.count > ProjectWorkspaceStore.maxNameLength {
+      return "Project names must be \(ProjectWorkspaceStore.maxNameLength) characters or fewer."
+    }
+    let hasDuplicate = workspace.projects.contains { candidate in
+      candidate.id != project?.id
+        && candidate.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+    }
+    if hasDuplicate {
+      return "A project with this name already exists."
+    }
+    return nil
+  }
+
+  private var enabledAccounts: [ProviderAccount] {
+    providers.accounts.filter(\.isEnabled)
+  }
+
+  private var selectedAccount: ProviderAccount? {
+    guard let accountID else { return nil }
+    return enabledAccounts.first { $0.id == accountID }
+  }
+
+  private var unavailableAccountLabel: String? {
+    guard let accountID, selectedAccount == nil else { return nil }
+    if let existing = providers.accounts.first(where: { $0.id == accountID }) {
+      return "\(existing.label) (Disabled)"
+    }
+    return "Unavailable Account"
+  }
+
+  private var availableModels: [AccountModelRecord] {
+    guard let accountID else { return [] }
+    return providers.models(for: accountID).filter(\.isAvailable)
+  }
+
+  private var unavailableModelLabel: String? {
+    guard let accountID, let modelID,
+      !availableModels.contains(where: { $0.model.id == modelID })
+    else { return nil }
+    if let record = providers.models(for: accountID, includeHidden: true)
+      .first(where: { $0.model.id == modelID })
+    {
+      return "\(record.model.displayName) (Unavailable)"
+    }
+    return "\(modelID.rawValue) (Unavailable)"
+  }
+
+  private var hasUnavailableDefaults: Bool {
+    unavailableAccountLabel != nil || unavailableModelLabel != nil
+  }
+
+  private var identityChanged: Bool {
+    guard let project else { return true }
+    return trimmedName != project.name
+      || symbolName != project.symbolName
+      || accentID != project.accentID
+  }
+
+  private var defaultsChanged: Bool {
+    guard let project else { return true }
+    return accountID != project.accountID || modelID != project.modelID
+  }
+
+  private var instructionsChanged: Bool {
+    guard let project else { return !instructions.isEmpty }
+    return instructions != project.instructions
+  }
+
+  private var hasUnsavedChanges: Bool {
+    if isCreate {
+      return !trimmedName.isEmpty
+        || symbolName != "folder.fill"
+        || accentID != "blue"
+        || accountID != nil
+        || modelID != nil
+        || !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    return identityChanged || defaultsChanged || instructionsChanged
+  }
+
+  private var canSave: Bool {
+    guard !isSaving, !trimmedName.isEmpty, nameValidationError == nil else { return false }
+    if defaultsChanged {
+      guard accountID == nil || selectedAccount != nil else { return false }
+      guard accountID == nil || modelID == nil || availableModels.contains(where: { $0.model.id == modelID }) else {
+        return false
+      }
+    }
+    return true
+  }
+
+  private var showsBottomBar: Bool {
+    isCreate || hasUnsavedChanges || isSaving
+  }
+
+  private var chatCount: Int {
+    guard let project else { return 0 }
+    return chats.conversationSummaries.filter {
+      workspace.projectID(for: $0.id) == project.id
+    }.count
+  }
+
+  private var sourcesSummary: String {
+    guard let project else { return "None" }
+    let count = project.projectFiles.count
+    guard count > 0 else { return "None" }
+    let bytes = project.projectFiles.reduce(0) { $0 + $1.byteCount }
+    let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    return "\(count) file\(count == 1 ? "" : "s") · \(size)"
+  }
+
+  private var promptsSummary: String {
+    guard let project else { return "None" }
+    let count = project.projectPromptPresets.count
+    return count == 0 ? "None" : "\(count) prompt\(count == 1 ? "" : "s")"
+  }
+
+  private var toolsSummary: String {
+    guard let project else { return "None" }
+    let count = project.mcpConfiguration?.enabledServerIDs.count ?? 0
+    return count == 0 ? "None" : "\(count) enabled"
+  }
+
+  private var headerSummary: String {
+    guard let project else { return "Configure identity, defaults, and instructions." }
+    let sourceCount = project.projectFiles.count
+    let toolCount = project.mcpConfiguration?.enabledServerIDs.count ?? 0
+    var parts = [
+      "\(chatCount) chat\(chatCount == 1 ? "" : "s")",
+      "\(sourceCount) source\(sourceCount == 1 ? "" : "s")",
+    ]
+    if toolCount > 0 {
+      parts.append("\(toolCount) tool\(toolCount == 1 ? "" : "s")")
+    }
+    return parts.joined(separator: " · ")
+  }
 
   var body: some View {
     VStack(spacing: 0) {
-      detailHeader
+      headerBar
       Divider()
 
-      MacSegmentedControl(
-        options: MacProjectWorkspaceSection.allCases,
-        selection: $section,
-        title: \.rawValue
-      )
-      .padding(.horizontal, 18)
-      .padding(.vertical, 12)
-
-      Group {
-        switch section {
-        case .overview:
-          MacProjectOverviewView(
-            project: project,
-            workspace: workspace,
-            providers: providers,
-            startNewChat: startNewChat,
-            requestDelete: requestDelete
-          )
-        case .chats:
-          MacProjectChatsWorkspaceView(
-            project: project,
-            workspace: workspace,
-            chats: chats,
-            mcp: mcp,
-            openChat: openChat,
-            startNewChat: { startNewChat(nil) }
-          )
-        case .sources:
-          MacProjectSourcesWorkspaceView(
-            project: project,
-            workspace: workspace
-          )
-        case .tools:
-          MacProjectToolsWorkspaceView(
-            project: project,
-            workspace: workspace,
-            mcp: mcp
-          )
+      if let saveError {
+        MacProjectInlineErrorBanner(message: saveError) {
+          self.saveError = nil
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 9)
+        Divider()
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          identityGroup
+
+          if !isCreate {
+            collectionsGroup
+          }
+
+          defaultsGroup
+          instructionsGroup
+
+          if !isCreate, let requestDelete {
+            Button(role: .destructive, action: requestDelete) {
+              Text("Delete Project…")
+                .foregroundStyle(.red)
+            }
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+            .padding(.top, 4)
+          }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: 600, alignment: .leading)
+        .frame(maxWidth: .infinity)
+      }
+
+      if showsBottomBar {
+        Divider()
+        bottomActionBar
+      }
     }
     .background(MacDesignTokens.Colors.canvas)
-    .onChange(of: project.id) { _, _ in
-      section = .overview
+    .interactiveDismissDisabled(isSaving || hasUnsavedChanges)
+    .onAppear {
+      if isCreate {
+        nameFocused = true
+      }
+    }
+    .onChange(of: accountID) { _, value in
+      guard let value else {
+        modelID = nil
+        return
+      }
+      if let modelID,
+        !providers.models(for: value).contains(where: {
+          $0.model.id == modelID && $0.isAvailable
+        })
+      {
+        self.modelID = nil
+      }
+    }
+    .alert("Unsaved Changes", isPresented: $showingDiscardAlert) {
+      Button("Discard Changes", role: .destructive) {
+        let target = pendingNavigation ?? .back
+        pendingNavigation = nil
+        if let project {
+          syncDraft(from: project)
+        }
+        performNavigation(target)
+      }
+      if canSave {
+        Button(isCreate ? "Create" : "Save") {
+          let target = pendingNavigation ?? .back
+          pendingNavigation = nil
+          save(then: target)
+        }
+      }
+      Button("Keep Editing", role: .cancel) {
+        pendingNavigation = nil
+      }
+    } message: {
+      Text(
+        canSave
+          ? "You have unsaved changes to this project. Do you want to save them before leaving?"
+          : "You have unsaved changes to this project that will be lost if you leave."
+      )
     }
   }
 
-  private var detailHeader: some View {
+  private var headerBar: some View {
     HStack(spacing: 12) {
-      Button(action: back) {
-        Label("All Projects", systemImage: "chevron.left")
+      Button {
+        requestNavigation(.back)
+      } label: {
+        Label("Projects", systemImage: "chevron.left")
           .foregroundStyle(MacDesignTokens.Colors.accent)
       }
       .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+      .keyboardShortcut(.cancelAction)
+      .disabled(isSaving)
 
-      Divider()
-        .frame(height: 24)
+      Divider().frame(height: 24)
 
-      MacProjectWorkspaceIcon(project: project, size: 40)
+      Image(systemName: symbolName)
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(selectedAccent)
+        .frame(width: 34, height: 34)
+        .background(selectedAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 2) {
-        HStack(spacing: 6) {
-          Text(project.name)
-            .font(.title3.weight(.semibold))
-            .lineLimit(1)
-        }
-        Text(projectSummary)
+        Text(isCreate ? "New Project" : (project?.name ?? name))
+          .font(.system(size: 14.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .lineLimit(1)
+        Text(headerSummary)
           .font(.caption)
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
       }
 
       Spacer()
 
-      Button("New Chat", systemImage: "square.and.pencil") {
-        startNewChat(nil)
-      }
-      .buttonStyle(MacActionButtonStyle(.primary))
+      if !isCreate, let startNewChat {
+        Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
 
-      Menu {
-        Button("Overview", systemImage: "rectangle.grid.1x2") { section = .overview }
-        Button("Chats", systemImage: "bubble.left.and.bubble.right") { section = .chats }
-        Button("Sources", systemImage: "doc.on.doc") { section = .sources }
-        Button("Tools", systemImage: "wrench.and.screwdriver") { section = .tools }
-        Divider()
-        Button("Delete Project…", systemImage: "trash", role: .destructive) {
-          requestDelete()
+        Menu {
+          if openChats != nil {
+            Button("Chats", systemImage: "bubble.left.and.bubble.right") {
+              requestNavigation(.chats)
+            }
+          }
+          if openSources != nil {
+            Button("Sources", systemImage: "doc.on.doc") {
+              requestNavigation(.sources)
+            }
+          }
+          if openPrompts != nil {
+            Button("Reusable Prompts", systemImage: "text.badge.plus") {
+              requestNavigation(.prompts)
+            }
+          }
+          if openTools != nil {
+            Button("MCP Tools", systemImage: "wrench.and.screwdriver") {
+              requestNavigation(.tools)
+            }
+          }
+          if let requestDelete {
+            Divider()
+            Button("Delete Project…", systemImage: "trash", role: .destructive, action: requestDelete)
+          }
+        } label: {
+          MacIconMenuLabel(systemImage: "ellipsis")
         }
-      } label: {
-        MacIconMenuLabel(systemImage: "ellipsis")
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
     }
     .padding(.horizontal, 18)
-    .frame(height: 70)
+    .frame(height: 62)
     .background(MacDesignTokens.Colors.surface.opacity(0.45))
   }
 
-  private var projectSummary: String {
-    let chatCount = chats.conversationSummaries.filter {
-      workspace.projectID(for: $0.id) == project.id
-    }.count
-    let sourceCount = project.projectFiles.count
-    let serverCount = project.mcpConfiguration?.enabledServerIDs.count ?? 0
-    var parts = [
-      "\(chatCount) chat\(chatCount == 1 ? "" : "s")",
-      "\(sourceCount) source\(sourceCount == 1 ? "" : "s")",
-    ]
-    if serverCount > 0 {
-      parts.append("\(serverCount) MCP server\(serverCount == 1 ? "" : "s")")
+  private var identityGroup: some View {
+    MacProjectInsetGroup {
+      VStack(alignment: .leading, spacing: 0) {
+        settingsRow("Name") {
+          TextField("Project name", text: $name)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 260)
+            .focused($nameFocused)
+        }
+        if let nameValidationError {
+          Text(nameValidationError)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 8)
+        }
+      }
+
+      settingsDivider
+
+      settingsRow("Appearance") {
+        HStack(spacing: 12) {
+          Button {
+            showingIconPicker = true
+          } label: {
+            HStack(spacing: 5) {
+              Image(systemName: symbolName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(selectedAccent)
+              Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .popover(isPresented: $showingIconPicker, arrowEdge: .bottom) {
+            iconPickerPopover
+          }
+          .help("Choose icon")
+
+          HStack(spacing: 8) {
+            ForEach(MacProjectAccentOption.allCases) { option in
+              Button {
+                accentID = option.rawValue
+              } label: {
+                Circle()
+                  .fill(option.color)
+                  .frame(width: 16, height: 16)
+                  .overlay {
+                    if accentID == option.rawValue {
+                      Circle()
+                        .stroke(Color.primary, lineWidth: 1.75)
+                        .padding(-2.5)
+                    }
+                  }
+              }
+              .buttonStyle(.plain)
+              .help(option.title)
+              .accessibilityLabel(option.title)
+            }
+          }
+        }
+      }
     }
-    return parts.joined(separator: " · ")
+  }
+
+  private var iconPickerPopover: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Choose Icon")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      LazyVGrid(columns: Array(repeating: GridItem(.fixed(36), spacing: 6), count: 4), spacing: 6) {
+        ForEach(MacProjectWorkspaceEditorSupport.symbols, id: \.self) { symbol in
+          Button {
+            symbolName = symbol
+            showingIconPicker = false
+          } label: {
+            Image(systemName: symbol)
+              .font(.system(size: 15, weight: .medium))
+              .foregroundStyle(
+                symbolName == symbol ? selectedAccent : MacDesignTokens.Colors.textPrimary
+              )
+              .frame(width: 36, height: 32)
+              .background(
+                symbolName == symbol ? selectedAccent.opacity(0.16) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 7)
+              )
+              .overlay {
+                if symbolName == symbol {
+                  RoundedRectangle(cornerRadius: 7)
+                    .stroke(selectedAccent.opacity(0.45), lineWidth: 1)
+                }
+              }
+          }
+          .buttonStyle(.plain)
+          .help(MacProjectWorkspaceEditorSupport.symbolTitle(symbol))
+        }
+      }
+    }
+    .padding(14)
+    .background(MacDesignTokens.Colors.canvas)
+  }
+
+  private var collectionsGroup: some View {
+    MacProjectInsetGroup {
+      MacProjectNavigationRow(
+        title: "Chats",
+        detail: "\(chatCount) chat\(chatCount == 1 ? "" : "s")",
+        action: { requestNavigation(.chats) }
+      )
+      settingsDivider
+      MacProjectNavigationRow(
+        title: "Sources",
+        detail: sourcesSummary,
+        action: { requestNavigation(.sources) }
+      )
+      settingsDivider
+      MacProjectNavigationRow(
+        title: "Reusable Prompts",
+        detail: promptsSummary,
+        action: { requestNavigation(.prompts) }
+      )
+      settingsDivider
+      MacProjectNavigationRow(
+        title: "MCP Tools",
+        detail: toolsSummary,
+        action: { requestNavigation(.tools) }
+      )
+    }
+  }
+
+  private var defaultsGroup: some View {
+    MacProjectInsetGroup {
+      settingsRow("Default Provider") {
+        Picker("Default Provider", selection: $accountID) {
+          Text("App Default").tag(nil as ProviderAccountID?)
+          if let unavailableAccountLabel, let accountID {
+            Text(unavailableAccountLabel).tag(Optional(accountID))
+          }
+          ForEach(enabledAccounts) { account in
+            Text(account.label).tag(Optional(account.id))
+          }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 240, alignment: .trailing)
+      }
+
+      if accountID != nil {
+        settingsDivider
+        settingsRow("Default Model") {
+          Picker("Default Model", selection: $modelID) {
+            Text("Account Default").tag(nil as ModelID?)
+            if let unavailableModelLabel, let modelID {
+              Text(unavailableModelLabel).tag(Optional(modelID))
+            }
+            ForEach(availableModels) { record in
+              Text(record.model.displayName).tag(Optional(record.model.id))
+            }
+          }
+          .labelsHidden()
+          .frame(maxWidth: 240, alignment: .trailing)
+        }
+      }
+
+      if hasUnavailableDefaults {
+        settingsDivider
+        Label(
+          "A saved provider or model is no longer available. Pick an active option or switch back to App Default.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+      }
+    }
+  }
+
+  private var instructionsGroup: some View {
+    MacProjectInsetGroup {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Text("Instructions")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          Spacer()
+          if !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Button("Clear") {
+              instructions = ""
+            }
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+            .disabled(isSaving)
+          }
+        }
+
+        ZStack(alignment: .topLeading) {
+          TextEditor(text: $instructions)
+            .font(.system(size: 13))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 88)
+            .padding(6)
+            .background(
+              MacDesignTokens.Colors.codeSurface,
+              in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .overlay {
+              RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
+            }
+
+          if instructions.isEmpty {
+            Text("Custom system prompt for new chats in this project…")
+              .font(.system(size: 13))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.65))
+              .padding(.top, 11)
+              .padding(.leading, 11)
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
+        }
+
+        Text("Applied to new chats in this project. Leave blank to use the app default.")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+      .padding(14)
+    }
+  }
+
+  private var bottomActionBar: some View {
+    HStack(spacing: 10) {
+      if !isCreate {
+        HStack(spacing: 6) {
+          Circle()
+            .fill(MacDesignTokens.Colors.accent)
+            .frame(width: 6, height: 6)
+          Text("Unsaved changes")
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      }
+      Spacer()
+      if isCreate {
+        Button("Cancel") { requestNavigation(.back) }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+          .disabled(isSaving)
+        Button(isSaving ? "Creating…" : "Create") { save() }
+          .buttonStyle(MacActionButtonStyle(.primary))
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canSave)
+      } else {
+        Button("Discard") {
+          if let project {
+            syncDraft(from: project)
+          }
+        }
+        .buttonStyle(MacActionButtonStyle(.secondary))
+        .disabled(isSaving)
+        Button(isSaving ? "Saving…" : "Save") { save() }
+          .buttonStyle(MacActionButtonStyle(.primary))
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canSave)
+      }
+    }
+    .padding(.horizontal, 18)
+    .frame(height: 54)
+    .background(MacDesignTokens.Colors.surface.opacity(0.65))
+  }
+
+  private var settingsDivider: some View {
+    Rectangle()
+      .fill(MacDesignTokens.Colors.separator.opacity(0.6))
+      .frame(height: 0.5)
+      .padding(.leading, 14)
+  }
+
+  private func settingsRow<Control: View>(
+    _ title: String,
+    @ViewBuilder control: () -> Control
+  ) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+      Text(title)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      Spacer(minLength: 12)
+      control()
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 9)
+    .frame(minHeight: 44)
+  }
+
+  private func syncDraft(from project: ChatProject) {
+    name = project.name
+    symbolName = project.symbolName
+    accentID = project.accentID
+    accountID = project.accountID
+    modelID = project.modelID
+    instructions = project.instructions
+    saveError = nil
+  }
+
+  private func requestNavigation(_ target: PendingNavigation) {
+    if hasUnsavedChanges {
+      pendingNavigation = target
+      showingDiscardAlert = true
+    } else {
+      performNavigation(target)
+    }
+  }
+
+  private func performNavigation(_ target: PendingNavigation) {
+    switch target {
+    case .back: back()
+    case .chats: openChats?()
+    case .sources: openSources?()
+    case .prompts: openPrompts?()
+    case .tools: openTools?()
+    }
+  }
+
+  private func save(then followUp: PendingNavigation? = nil) {
+    guard canSave else { return }
+    isSaving = true
+    saveError = nil
+    Task { @MainActor in
+      defer { isSaving = false }
+      if let project {
+        if identityChanged {
+          let ok = await workspace.updateProjectIdentity(
+            id: project.id,
+            name: name,
+            symbolName: symbolName,
+            accentID: accentID
+          )
+          guard ok else {
+            saveError = workspace.consumeErrorMessage() ?? "Could not update project."
+            return
+          }
+        }
+        if defaultsChanged {
+          let ok = await workspace.updateProjectDefaults(
+            id: project.id,
+            accountID: accountID,
+            modelID: modelID
+          )
+          guard ok else {
+            saveError = workspace.consumeErrorMessage() ?? "Could not update project defaults."
+            return
+          }
+        }
+        if instructionsChanged {
+          let ok = await workspace.updateProjectInstructions(
+            id: project.id,
+            instructions: instructions
+          )
+          guard ok else {
+            saveError = workspace.consumeErrorMessage() ?? "Could not save project instructions."
+            return
+          }
+        }
+        if let updated = workspace.project(project.id) {
+          syncDraft(from: updated)
+          toastCenter?.success("Saved \(updated.name)")
+        } else {
+          toastCenter?.success("Saved changes")
+        }
+        if let followUp {
+          performNavigation(followUp)
+        }
+      } else {
+        if let projectID = await workspace.createProject(
+          name: name,
+          symbolName: symbolName,
+          accentID: accentID,
+          accountID: accountID,
+          modelID: modelID,
+          instructions: instructions,
+          files: [],
+          mcpConfiguration: MCPChatToolConfiguration(),
+          promptPresets: [],
+          toolPresets: []
+        ) {
+          onCreated?(projectID)
+        } else {
+          saveError = workspace.consumeErrorMessage() ?? "Could not create project."
+        }
+      }
+    }
   }
 }
 
-private struct MacProjectOverviewView: View {
+private struct MacProjectNavigationRow: View {
+  let title: String
+  let detail: String
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Text(title)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      Spacer(minLength: 12)
+      Text(detail)
+        .font(.system(size: 12.5))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(
+          isHovered
+            ? MacDesignTokens.Colors.textPrimary.opacity(0.75)
+            : MacDesignTokens.Colors.textMuted.opacity(0.55)
+        )
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 9)
+    .frame(minHeight: 44)
+    .background(Color.primary.opacity(isHovered ? 0.035 : 0))
+    .contentShape(Rectangle())
+    .onTapGesture(perform: action)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+  }
+}
+
+private struct MacProjectPromptsWorkspaceView: View {
   let project: ChatProject
   @Bindable var workspace: MacWorkspaceModel
-  @Bindable var providers: MacProviderModel
+  let back: () -> Void
   let startNewChat: (String?) -> Void
-  let requestDelete: () -> Void
 
-  @State private var editor: OverviewEditor?
+  @State private var showingNewPrompt = false
   @State private var promptToEdit: ProjectPromptPreset?
   @State private var promptToDelete: ProjectPromptPreset?
-  @State private var showingNewPrompt = false
 
-  private enum OverviewEditor: String, Identifiable {
-    case identity
-    case defaults
-    case instructions
-    var id: String { rawValue }
-  }
-
-  private var defaultsStatus: MacProjectDefaultsSummary.Status {
-    MacProjectDefaultsSummary.evaluate(project: project, providers: providers)
+  private var atPromptLimit: Bool {
+    project.projectPromptPresets.count >= ProjectWorkspaceStore.maxPresetCount
   }
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        overviewCard("Project", systemImage: "folder") {
-          HStack(spacing: 12) {
-            MacProjectWorkspaceIcon(project: project, size: 42)
-            VStack(alignment: .leading, spacing: 3) {
-              Text(project.name)
-                .font(.headline)
-              Text(MacProjectAccentOption(rawValue: project.accentID)?.title ?? "Default color")
+    VStack(spacing: 0) {
+      HStack(spacing: 12) {
+        Button(action: back) {
+          Label(project.name, systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+
+        Divider().frame(height: 24)
+
+        HStack(spacing: 6) {
+          Text("Reusable Prompts")
+            .font(.headline)
+          Text("\(project.projectPromptPresets.count)")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(MacDesignTokens.Colors.surface, in: Capsule())
+        }
+
+        Spacer()
+
+        Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+          .disabled(atPromptLimit)
+          .popover(isPresented: $showingNewPrompt, arrowEdge: .bottom) {
+            let existingNames = Set(
+              project.projectPromptPresets.map {
+                $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+              }
+            )
+            MacProjectPromptEditor(
+              existing: nil,
+              existingNames: existingNames,
+              atLimit: atPromptLimit
+            ) { preset in
+              await savePromptPreset(preset)
+            }
+          }
+      }
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
+
+      Divider()
+
+      if project.projectPromptPresets.isEmpty {
+        ContentUnavailableView {
+          Label("No Reusable Prompts", systemImage: "text.badge.plus")
+        } description: {
+          Text("Save prompts you frequently reuse in \(project.name) chats.")
+        } actions: {
+          Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
+            .buttonStyle(MacActionButtonStyle(.primary))
+            .disabled(atPromptLimit)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 12) {
+            MacProjectInsetGroup {
+              ForEach(Array(project.projectPromptPresets.enumerated()), id: \.element.id) { index, preset in
+                if index > 0 {
+                  Rectangle()
+                    .fill(MacDesignTokens.Colors.separator.opacity(0.65))
+                    .frame(height: 0.5)
+                    .padding(.leading, 14)
+                }
+                MacProjectPromptRow(
+                  preset: preset,
+                  usePrompt: { startNewChat(preset.prompt) },
+                  editPrompt: { promptToEdit = preset },
+                  deletePrompt: { promptToDelete = preset }
+                )
+                .popover(
+                  isPresented: Binding(
+                    get: { promptToEdit?.id == preset.id },
+                    set: { if !$0 { promptToEdit = nil } }
+                  ),
+                  arrowEdge: .bottom
+                ) {
+                  let otherNames = Set(
+                    project.projectPromptPresets
+                      .filter { $0.id != preset.id }
+                      .map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                  )
+                  MacProjectPromptEditor(
+                    existing: preset,
+                    existingNames: otherNames
+                  ) { value in
+                    await savePromptPreset(value)
+                  }
+                }
+              }
+            }
+
+            if atPromptLimit {
+              Text("Maximum of \(ProjectWorkspaceStore.maxPresetCount) reusable prompts reached.")
                 .font(.caption)
                 .foregroundStyle(MacDesignTokens.Colors.textMuted)
             }
-            Spacer()
-            Button("Edit") { editor = .identity }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           }
-        }
-
-        overviewCard("New Chat Defaults", systemImage: "sparkles") {
-          VStack(alignment: .leading, spacing: 10) {
-            HStack {
-              VStack(alignment: .leading, spacing: 5) {
-                MacProjectValueRow(
-                  title: "Provider Account",
-                  value: defaultsStatus.accountLabel,
-                  valueColor: defaultsStatus.isAccountUnavailable ? Color.orange : nil
-                )
-                MacProjectValueRow(
-                  title: "Model",
-                  value: defaultsStatus.modelLabel,
-                  valueColor: defaultsStatus.isModelUnavailable ? Color.orange : nil
-                )
-              }
-              Spacer()
-              Button("Edit") { editor = .defaults }
-                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            }
-            if defaultsStatus.hasIssue {
-              Label(
-                "One or more saved defaults are no longer available. Edit defaults to choose an active provider account or model.",
-                systemImage: "exclamationmark.triangle.fill"
-              )
-              .font(.caption)
-              .foregroundStyle(.orange)
-            }
-            Text("These defaults apply when a new chat is created. Existing chats keep their current provider and model.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-        }
-
-        overviewCard("Instructions", systemImage: "text.alignleft") {
-          VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-              let value = project.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
-              Text(value.isEmpty ? "App default system prompt." : value)
-                .foregroundStyle(
-                  value.isEmpty
-                    ? MacDesignTokens.Colors.textMuted
-                    : MacDesignTokens.Colors.textPrimary
-                )
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-              Button("Edit") { editor = .instructions }
-                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            }
-          }
-        }
-
-        reusablePromptsCard
-
-        VStack(alignment: .leading, spacing: 10) {
-          Text("Danger Zone")
-            .font(.headline)
-          Text("Deleting a project keeps its chats and moves them back to standalone chats.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          Button("Delete Project…", role: .destructive) { requestDelete() }
-            .buttonStyle(MacActionButtonStyle(.destructive))
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 11))
-        .overlay {
-          RoundedRectangle(cornerRadius: 11)
-            .stroke(Color.red.opacity(0.25), lineWidth: 0.5)
+          .padding(16)
         }
       }
-      .padding(18)
-      .frame(maxWidth: 760)
-      .frame(maxWidth: .infinity)
     }
-    .sheet(item: $editor) { editor in
-      switch editor {
-      case .identity:
-        MacProjectIdentityEditor(
-          project: project,
-          workspace: workspace
-        )
-      case .defaults:
-        MacProjectDefaultsEditor(
-          project: project,
-          workspace: workspace,
-          providers: providers
-        )
-      case .instructions:
-        MacProjectInstructionsEditor(
-          project: project,
-          workspace: workspace
-        )
-      }
-    }
-    .sheet(isPresented: $showingNewPrompt) {
-      let existingNames = Set(
-        project.projectPromptPresets.map {
-          $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        }
-      )
-      MacProjectPromptEditor(
-        existing: nil,
-        existingNames: existingNames,
-        atLimit: project.projectPromptPresets.count >= ProjectWorkspaceStore.maxPresetCount
-      ) { preset in
-        await savePromptPreset(preset)
-      }
-    }
-    .sheet(item: $promptToEdit) { preset in
-      let otherNames = Set(
-        project.projectPromptPresets
-          .filter { $0.id != preset.id }
-          .map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-      )
-      MacProjectPromptEditor(
-        existing: preset,
-        existingNames: otherNames
-      ) { value in
-        await savePromptPreset(value)
-      }
-    }
+    .background(MacDesignTokens.Colors.canvas)
     .confirmationDialog(
       promptToDelete.map { "Delete \"\($0.name)\"?" } ?? "Delete prompt?",
       isPresented: Binding(
@@ -789,70 +1518,6 @@ private struct MacProjectOverviewView: View {
       Button("Cancel", role: .cancel) { promptToDelete = nil }
     } message: {
       Text("This removes the reusable prompt from \(project.name).")
-    }
-  }
-
-  private func overviewCard<Content: View>(
-    _ title: String,
-    systemImage: String,
-    @ViewBuilder content: () -> Content
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Label(title, systemImage: systemImage)
-        .font(.headline)
-        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-      content()
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 11))
-    .overlay {
-      RoundedRectangle(cornerRadius: 11)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
-    }
-  }
-
-  private var reusablePromptsCard: some View {
-    let atPromptLimit = project.projectPromptPresets.count >= ProjectWorkspaceStore.maxPresetCount
-    return overviewCard("Reusable Prompts", systemImage: "text.badge.plus") {
-      VStack(spacing: 0) {
-        if project.projectPromptPresets.isEmpty {
-          HStack {
-            Text("No reusable prompts yet.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            Spacer()
-            Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(atPromptLimit)
-          }
-        } else {
-          ForEach(Array(project.projectPromptPresets.enumerated()), id: \.element.id) { index, preset in
-            MacProjectPromptRow(
-              preset: preset,
-              usePrompt: { startNewChat(preset.prompt) },
-              editPrompt: { promptToEdit = preset },
-              deletePrompt: { promptToDelete = preset }
-            )
-            if index != project.projectPromptPresets.count - 1 {
-              Divider()
-            }
-          }
-
-          HStack {
-            if atPromptLimit {
-              Text("Maximum of \(ProjectWorkspaceStore.maxPresetCount) reusable prompts reached.")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            }
-            Spacer()
-            Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(atPromptLimit)
-          }
-          .padding(.top, 10)
-        }
-      }
     }
   }
 
@@ -913,12 +1578,9 @@ private struct MacProjectPromptRow: View {
       .menuIndicator(.hidden)
       .fixedSize()
     }
-    .padding(.horizontal, 6)
-    .padding(.vertical, 8)
-    .background(
-      isHovered ? Color.primary.opacity(0.03) : Color.clear,
-      in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-    )
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .background(Color.primary.opacity(isHovered ? 0.035 : 0))
     .onHover { isHovered = $0 }
     .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
     .contextMenu {
@@ -935,6 +1597,7 @@ private struct MacProjectChatsWorkspaceView: View {
   @Bindable var workspace: MacWorkspaceModel
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
+  let back: () -> Void
   let openChat: (ConversationID) -> Void
   let startNewChat: () -> Void
 
@@ -971,23 +1634,95 @@ private struct MacProjectChatsWorkspaceView: View {
   }
 
   var body: some View {
+    Group {
+      if showingAddExisting {
+        MacProjectAddChatsSheet(
+          targetProject: project,
+          conversations: otherConversations,
+          workspace: workspace,
+          back: { showingAddExisting = false }
+        ) { conversationIDs in
+          await addExistingConversations(conversationIDs)
+        }
+      } else {
+        chatsMainContent
+      }
+    }
+    .background(MacDesignTokens.Colors.canvas)
+    .onChange(of: project.id) { _, _ in
+      searchText = ""
+      showingAddExisting = false
+    }
+    .confirmationDialog(
+      deleteTarget.map { "Delete \"\(conversationTitle($0))\"?" } ?? "Delete conversation?",
+      isPresented: Binding(
+        get: { deleteTarget != nil },
+        set: { if !$0 { deleteTarget = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Delete Conversation", role: .destructive) {
+        guard let target = deleteTarget else { return }
+        deleteTarget = nil
+        deleteConversation(target.id)
+      }
+      Button("Cancel", role: .cancel) {
+        deleteTarget = nil
+      }
+    } message: {
+      Text("This removes the conversation and its chat-specific project/tool references. This cannot be undone.")
+    }
+  }
+
+  private var chatsMainContent: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 10) {
-        MacProjectSearchField(placeholder: "Search chats", text: $searchText)
-          .frame(maxWidth: 340)
+      HStack(spacing: 12) {
+        Button(action: back) {
+          Label(project.name, systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+
+        Divider().frame(height: 24)
+
+        HStack(spacing: 6) {
+          Text("Chats")
+            .font(.headline)
+          Text("\(memberConversations.count)")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(MacDesignTokens.Colors.surface, in: Capsule())
+        }
+
         Spacer()
+
         if !otherConversations.isEmpty {
           Button("Add Existing…", systemImage: "folder.badge.plus") {
             showingAddExisting = true
           }
-          .buttonStyle(MacActionButtonStyle(.secondary))
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(workspace.isBusy)
         }
         Button("New Chat", systemImage: "plus") { startNewChat() }
-          .buttonStyle(MacActionButtonStyle(.primary))
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+      }
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
+
+      Divider()
+
+      HStack(spacing: 10) {
+        MacProjectSearchField(placeholder: "Search chats", text: $searchText)
+          .frame(maxWidth: 340)
+        Spacer()
       }
       .padding(.horizontal, 16)
-      .frame(height: 52)
+      .frame(height: 48)
+      .background(MacDesignTokens.Colors.surface.opacity(0.25))
 
       Divider()
 
@@ -1022,13 +1757,6 @@ private struct MacProjectChatsWorkspaceView: View {
       } else {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 16) {
-            HStack {
-              Text("\(memberConversations.count) chat\(memberConversations.count == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              Spacer()
-            }
-
             ForEach(MacProjectChatDateGrouper.sections(for: memberConversations), id: \.title) { section in
               VStack(alignment: .leading, spacing: 7) {
                 Text(section.title.uppercased())
@@ -1036,8 +1764,11 @@ private struct MacProjectChatsWorkspaceView: View {
                   .tracking(0.5)
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
-                VStack(spacing: 0) {
+                MacProjectInsetGroup {
                   ForEach(Array(section.conversations.enumerated()), id: \.element.id) { index, conversation in
+                    if index > 0 {
+                      Divider().padding(.leading, 46)
+                    }
                     MacProjectConversationRow(
                       title: conversationTitle(conversation),
                       preview: conversationPreview(conversation),
@@ -1045,15 +1776,24 @@ private struct MacProjectChatsWorkspaceView: View {
                       open: { openChat(conversation.id) },
                       actions: { conversationActions(conversation) }
                     )
-                    if index != section.conversations.count - 1 {
-                      Divider().padding(.leading, 46)
+                    .popover(
+                      isPresented: Binding(
+                        get: { renameTarget?.id == conversation.id },
+                        set: { if !$0 { renameTarget = nil } }
+                      ),
+                      arrowEdge: .bottom
+                    ) {
+                      MacProjectChatRenameSheet(conversation: conversation) { newTitle in
+                        let renamed = await chats.renameConversation(conversation.id, title: newTitle)
+                        if !renamed {
+                          let error = chats.errorMessage ?? "Could not rename conversation."
+                          chats.errorMessage = nil
+                          return error
+                        }
+                        return nil
+                      }
                     }
                   }
-                }
-                .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-                .overlay {
-                  RoundedRectangle(cornerRadius: 10)
-                    .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 0.5)
                 }
               }
             }
@@ -1061,48 +1801,6 @@ private struct MacProjectChatsWorkspaceView: View {
           .padding(16)
         }
       }
-    }
-    .onChange(of: project.id) { _, _ in
-      searchText = ""
-    }
-    .sheet(isPresented: $showingAddExisting) {
-      MacProjectAddChatsSheet(
-        targetProject: project,
-        conversations: otherConversations,
-        workspace: workspace
-      ) { conversationIDs in
-        await addExistingConversations(conversationIDs)
-      }
-    }
-    .sheet(item: $renameTarget) { conversation in
-      MacProjectChatRenameSheet(conversation: conversation) { newTitle in
-        let renamed = await chats.renameConversation(conversation.id, title: newTitle)
-        if !renamed {
-          let error = chats.errorMessage ?? "Could not rename conversation."
-          chats.errorMessage = nil
-          return error
-        }
-        return nil
-      }
-    }
-    .confirmationDialog(
-      deleteTarget.map { "Delete \"\(conversationTitle($0))\"?" } ?? "Delete conversation?",
-      isPresented: Binding(
-        get: { deleteTarget != nil },
-        set: { if !$0 { deleteTarget = nil } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button("Delete Conversation", role: .destructive) {
-        guard let target = deleteTarget else { return }
-        deleteTarget = nil
-        deleteConversation(target.id)
-      }
-      Button("Cancel", role: .cancel) {
-        deleteTarget = nil
-      }
-    } message: {
-      Text("This removes the conversation and its chat-specific project/tool references. This cannot be undone.")
     }
   }
 
@@ -1256,9 +1954,9 @@ private struct MacProjectAddChatsSheet: View {
   let targetProject: ChatProject
   let conversations: [ChatConversation]
   @Bindable var workspace: MacWorkspaceModel
+  let back: () -> Void
   let commitSelection: ([ConversationID]) async -> String?
 
-  @Environment(\.dismiss) private var dismiss
   @FocusState private var searchFocused: Bool
   @State private var searchText = ""
   @State private var selectedIDs: Set<ConversationID> = []
@@ -1300,7 +1998,17 @@ private struct MacProjectAddChatsSheet: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
+      HStack(spacing: 12) {
+        Button(action: back) {
+          Label("Chats", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+        .disabled(isSaving)
+
+        Divider().frame(height: 24)
+
         VStack(alignment: .leading, spacing: 2) {
           Text("Add Chats to \(targetProject.name)")
             .font(.headline)
@@ -1312,19 +2020,16 @@ private struct MacProjectAddChatsSheet: View {
             )
         }
         Spacer()
-        Button("Cancel") { dismiss() }
-          .buttonStyle(MacActionButtonStyle(.secondary))
-          .keyboardShortcut(.cancelAction)
-          .disabled(isSaving)
         Button(activeSelectedIDs.isEmpty ? "Add" : "Add (\(activeSelectedIDs.count))") {
           commit()
         }
-        .buttonStyle(MacActionButtonStyle(.primary))
+        .buttonStyle(MacActionButtonStyle(.primary, size: .small))
         .keyboardShortcut(.defaultAction)
         .disabled(activeSelectedIDs.isEmpty || isSaving)
       }
-      .padding(16)
-      .background(MacDesignTokens.Colors.surface)
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
       Divider()
 
@@ -1397,10 +2102,7 @@ private struct MacProjectAddChatsSheet: View {
         }
       }
     }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.standardHeight
-    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(MacDesignTokens.Colors.canvas)
     .overlay {
       if isSaving {
@@ -1468,7 +2170,7 @@ private struct MacProjectAddChatsSheet: View {
         isSaving = false
         errorMessage = error
       } else {
-        dismiss()
+        back()
       }
     }
   }
@@ -1565,6 +2267,7 @@ private struct MacProjectSelectableChatRow: View {
 private struct MacProjectSourcesWorkspaceView: View {
   let project: ChatProject
   @Bindable var workspace: MacWorkspaceModel
+  let back: () -> Void
 
   private static let minPreviewZoom: CGFloat = 1.0
   private static let maxPreviewZoom: CGFloat = 5.0
@@ -1610,20 +2313,108 @@ private struct MacProjectSourcesWorkspaceView: View {
   }
 
   var body: some View {
+    Group {
+      if showingLibraryPicker {
+        MacProjectLibrarySourcePickerSheet(
+          workspace: workspace,
+          excludedIDs: Set(project.projectFiles.map(\.id)),
+          existingFileCount: project.projectFiles.count,
+          existingByteCount: totalBytes,
+          back: { showingLibraryPicker = false }
+        ) { additions in
+          await addLibraryFiles(additions)
+        }
+      } else if showingPreview {
+        previewSheet
+      } else {
+        sourcesMainContent
+      }
+    }
+    .background(MacDesignTokens.Colors.canvas)
+    .onChange(of: project.id) { _, _ in
+      searchText = ""
+      showingLibraryPicker = false
+      closePreview()
+    }
+    .onDisappear {
+      cleanupPreview()
+    }
+    .fileImporter(
+      isPresented: $showingImporter,
+      allowedContentTypes: [.item],
+      allowsMultipleSelection: true
+    ) { result in
+      importFiles(result)
+    }
+    .confirmationDialog(
+      fileToRemove.map { "Remove \"\($0.filename)\"?" } ?? "Remove source?",
+      isPresented: Binding(
+        get: { fileToRemove != nil },
+        set: { if !$0 { fileToRemove = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Remove from Project", role: .destructive) {
+        guard let target = fileToRemove else { return }
+        fileToRemove = nil
+        remove(target)
+      }
+      Button("Cancel", role: .cancel) { fileToRemove = nil }
+    } message: {
+      if let target = fileToRemove, workspace.isFileInLibrary(target.id) {
+        Text("This removes the file from \(project.name). A copy remains saved in your Library.")
+      } else {
+        Text("This removes the source file from \(project.name). Save it to Library first if you want to keep a reusable copy.")
+      }
+    }
+  }
+
+  private var sourcesMainContent: some View {
     VStack(spacing: 0) {
+      HStack(spacing: 12) {
+        Button(action: back) {
+          Label(project.name, systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+
+        Divider().frame(height: 24)
+
+        HStack(spacing: 6) {
+          Text("Sources")
+            .font(.headline)
+          Text("\(project.projectFiles.count)")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(MacDesignTokens.Colors.surface, in: Capsule())
+        }
+
+        Spacer()
+
+        Button("From Library…", systemImage: "books.vertical") { showingLibraryPicker = true }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          .disabled(!canAddMoreFiles)
+        Button("Add Files", systemImage: "doc.badge.plus") { showingImporter = true }
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
+          .disabled(!canAddMoreFiles)
+      }
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
+
+      Divider()
+
       HStack(spacing: 10) {
         MacProjectSearchField(placeholder: "Search sources", text: $searchText)
           .frame(maxWidth: 340)
         Spacer()
-        Button("From Library…", systemImage: "books.vertical") { showingLibraryPicker = true }
-          .buttonStyle(MacActionButtonStyle(.secondary))
-          .disabled(!canAddMoreFiles)
-        Button("Add Files", systemImage: "doc.badge.plus") { showingImporter = true }
-          .buttonStyle(MacActionButtonStyle(.primary))
-          .disabled(!canAddMoreFiles)
       }
       .padding(.horizontal, 16)
-      .frame(height: 52)
+      .frame(height: 48)
+      .background(MacDesignTokens.Colors.surface.opacity(0.25))
 
       Divider()
 
@@ -1649,18 +2440,12 @@ private struct MacProjectSourcesWorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           VStack(spacing: 0) {
-            HStack {
-              Text("\(project.projectFiles.count) source\(project.projectFiles.count == 1 ? "" : "s") · \(formattedTotalBytes)")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
             ScrollView {
-              LazyVStack(spacing: 0) {
+              MacProjectInsetGroup {
                 ForEach(Array(visibleFiles.enumerated()), id: \.element.id) { index, file in
+                  if index > 0 {
+                    Divider().padding(.leading, 58)
+                  }
                   MacProjectSourceRow(
                     file: file,
                     subtitle: "\(sourceType(file)) · \(macProjectFileDetail(file))",
@@ -1672,17 +2457,9 @@ private struct MacProjectSourcesWorkspaceView: View {
                     saveToLibrary: { saveToLibrary(file) },
                     requestRemove: { fileToRemove = file }
                   )
-                  if index != visibleFiles.count - 1 {
-                    Divider().padding(.leading, 58)
-                  }
                 }
               }
-              .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-              .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                  .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 0.5)
-              }
-              .padding(.horizontal, 16)
+              .padding(16)
             }
 
             Divider()
@@ -1744,69 +2521,28 @@ private struct MacProjectSourcesWorkspaceView: View {
         isDropTargeted = targeted
       }
     }
-    .onChange(of: project.id) { _, _ in
-      searchText = ""
-      showingPreview = false
-      cleanupPreview()
-      previewFile = nil
-    }
-    .onDisappear {
-      cleanupPreview()
-    }
-    .fileImporter(
-      isPresented: $showingImporter,
-      allowedContentTypes: [.item],
-      allowsMultipleSelection: true
-    ) { result in
-      importFiles(result)
-    }
-    .sheet(isPresented: $showingLibraryPicker) {
-      MacProjectLibrarySourcePickerSheet(
-        workspace: workspace,
-        excludedIDs: Set(project.projectFiles.map(\.id)),
-        existingFileCount: project.projectFiles.count,
-        existingByteCount: totalBytes
-      ) { additions in
-        await addLibraryFiles(additions)
-      }
-    }
-    .sheet(
-      isPresented: $showingPreview,
-      onDismiss: {
-        cleanupPreview()
-        previewFile = nil
-      }
-    ) {
-      previewSheet
-    }
-    .confirmationDialog(
-      fileToRemove.map { "Remove \"\($0.filename)\"?" } ?? "Remove source?",
-      isPresented: Binding(
-        get: { fileToRemove != nil },
-        set: { if !$0 { fileToRemove = nil } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button("Remove from Project", role: .destructive) {
-        guard let target = fileToRemove else { return }
-        fileToRemove = nil
-        remove(target)
-      }
-      Button("Cancel", role: .cancel) { fileToRemove = nil }
-    } message: {
-      if let target = fileToRemove, workspace.isFileInLibrary(target.id) {
-        Text("This removes the file from \(project.name). A copy remains saved in your Library.")
-      } else {
-        Text("This removes the source file from \(project.name). Save it to Library first if you want to keep a reusable copy.")
-      }
-    }
+  }
+
+  private func closePreview() {
+    showingPreview = false
+    cleanupPreview()
+    previewFile = nil
   }
 
   @ViewBuilder
   private var previewSheet: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 10) {
-        VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: 12) {
+        Button(action: closePreview) {
+          Label("Sources", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+
+        Divider().frame(height: 24)
+
+        VStack(alignment: .leading, spacing: 2) {
           Text(previewFile?.filename ?? "Preview")
             .font(.headline)
             .lineLimit(1)
@@ -1884,15 +2620,10 @@ private struct MacProjectSourcesWorkspaceView: View {
           }
         }
 
-        Button("Done") {
-          showingPreview = false
-        }
-        .buttonStyle(MacActionButtonStyle(.secondary))
-        .keyboardShortcut(.cancelAction)
       }
-      .padding(.horizontal, 16)
-      .frame(height: 54)
-      .background(MacDesignTokens.Colors.surface)
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
       Divider()
 
@@ -1922,12 +2653,7 @@ private struct MacProjectSourcesWorkspaceView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .frame(
-      minWidth: MacDesignTokens.Sheet.previewMinWidth,
-      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
-      minHeight: MacDesignTokens.Sheet.previewMinHeight,
-      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
-    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(MacDesignTokens.Colors.canvas)
   }
 
@@ -2292,6 +3018,7 @@ private struct MacProjectToolsWorkspaceView: View {
   let project: ChatProject
   @Bindable var workspace: MacWorkspaceModel
   @Bindable var mcp: MacMCPModel
+  let back: () -> Void
 
   @State private var configuration: MCPChatToolConfiguration
   @State private var presets: [ProjectToolPreset]
@@ -2304,11 +3031,13 @@ private struct MacProjectToolsWorkspaceView: View {
   init(
     project: ChatProject,
     workspace: MacWorkspaceModel,
-    mcp: MacMCPModel
+    mcp: MacMCPModel,
+    back: @escaping () -> Void
   ) {
     self.project = project
     self.workspace = workspace
     self.mcp = mcp
+    self.back = back
     _configuration = State(initialValue: project.mcpConfiguration ?? MCPChatToolConfiguration())
     _presets = State(initialValue: project.projectToolPresets)
   }
@@ -2319,11 +3048,20 @@ private struct MacProjectToolsWorkspaceView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 10) {
+      HStack(spacing: 12) {
+        Button(action: back) {
+          Label(project.name, systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+
+        Divider().frame(height: 24)
+
         VStack(alignment: .leading, spacing: 2) {
-          Text("Project Tool Defaults")
+          Text("MCP Tools")
             .font(.headline)
-          Text("Chats inherit these MCP servers and permissions until that chat creates its own override.")
+          Text("Chats inherit these servers and permissions until overridden.")
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
@@ -2342,8 +3080,9 @@ private struct MacProjectToolsWorkspaceView: View {
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 10)
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
       Divider()
 
@@ -2363,17 +3102,11 @@ private struct MacProjectToolsWorkspaceView: View {
           .frame(width: 260)
       }
     }
-    .sheet(
-      isPresented: $showingSavePreset,
-      onDismiss: {
-        if let nameToOverwrite = pendingOverwriteOnDismiss {
-          pendingOverwriteOnDismiss = nil
-          pendingOverwriteName = nameToOverwrite
-        }
-      }
-    ) {
-      MacProjectToolPresetNameSheet(existingPresets: presets) { name in
-        requestSavePreset(named: name)
+    .background(MacDesignTokens.Colors.canvas)
+    .onChange(of: showingSavePreset) { _, isPresented in
+      if !isPresented, let nameToOverwrite = pendingOverwriteOnDismiss {
+        pendingOverwriteOnDismiss = nil
+        pendingOverwriteName = nameToOverwrite
       }
     }
     .confirmationDialog(
@@ -2453,6 +3186,11 @@ private struct MacProjectToolsWorkspaceView: View {
         .buttonStyle(MacIconButtonStyle())
         .disabled(controlsDisabled)
         .help("Save current configuration as preset")
+        .popover(isPresented: $showingSavePreset, arrowEdge: .bottom) {
+          MacProjectToolPresetNameSheet(existingPresets: presets) { name in
+            requestSavePreset(named: name)
+          }
+        }
       }
 
       Text("Quickly replace the current project tool defaults with a saved configuration.")
@@ -2590,629 +3328,6 @@ private struct MacProjectToolsWorkspaceView: View {
   }
 }
 
-private struct MacProjectIconColorPicker: View {
-  @Binding var symbolName: String
-  @Binding var accentID: String
-
-  private let symbols = MacProjectWorkspaceEditorSupport.symbols
-
-  private var selectedAccent: Color {
-    MacProjectAccentOption(rawValue: accentID)?.color ?? .blue
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Icon")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 8) {
-          ForEach(symbols, id: \.self) { symbol in
-            Button {
-              symbolName = symbol
-            } label: {
-              Image(systemName: symbol)
-                .foregroundStyle(
-                  symbolName == symbol ? selectedAccent : MacDesignTokens.Colors.textPrimary
-                )
-                .frame(width: 34, height: 30)
-                .background(
-                  symbolName == symbol ? selectedAccent.opacity(0.16) : Color.clear,
-                  in: RoundedRectangle(cornerRadius: 7)
-                )
-                .overlay {
-                  if symbolName == symbol {
-                    RoundedRectangle(cornerRadius: 7)
-                      .stroke(selectedAccent.opacity(0.45), lineWidth: 1)
-                  }
-                }
-            }
-            .buttonStyle(.plain)
-            .help(MacProjectWorkspaceEditorSupport.symbolTitle(symbol))
-          }
-        }
-      }
-
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Color")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        HStack(spacing: 10) {
-          ForEach(MacProjectAccentOption.allCases) { option in
-            Button {
-              accentID = option.rawValue
-            } label: {
-              Circle()
-                .fill(option.color)
-                .frame(width: 20, height: 20)
-                .overlay {
-                  if accentID == option.rawValue {
-                    Circle().stroke(Color.primary, lineWidth: 2).padding(-3)
-                  }
-                }
-            }
-            .buttonStyle(.plain)
-            .help(option.title)
-          }
-        }
-      }
-    }
-  }
-}
-
-private struct MacProjectCreateSheet: View {
-  @Bindable var workspace: MacWorkspaceModel
-  @Bindable var providers: MacProviderModel
-  let created: (ProjectID) -> Void
-
-  @Environment(\.dismiss) private var dismiss
-  @FocusState private var nameFocused: Bool
-  @State private var name = ""
-  @State private var symbolName = "folder.fill"
-  @State private var accentID = "blue"
-  @State private var accountID: ProviderAccountID?
-  @State private var modelID: ModelID?
-  @State private var isSaving = false
-  @State private var saveError: String?
-
-  private var trimmedName: String {
-    name.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var nameValidationError: String? {
-    guard !trimmedName.isEmpty else { return nil }
-    if trimmedName.count > ProjectWorkspaceStore.maxNameLength {
-      return "Project names must be \(ProjectWorkspaceStore.maxNameLength) characters or fewer."
-    }
-    let hasDuplicate = workspace.projects.contains {
-      $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
-    }
-    if hasDuplicate {
-      return "A project with this name already exists."
-    }
-    return nil
-  }
-
-  private var enabledAccounts: [ProviderAccount] {
-    providers.accounts.filter(\.isEnabled)
-  }
-
-  private var availableModels: [AccountModelRecord] {
-    guard let accountID else { return [] }
-    return providers.models(for: accountID).filter(\.isAvailable)
-  }
-
-  private var canCreate: Bool {
-    !isSaving && !trimmedName.isEmpty && nameValidationError == nil
-  }
-
-  var body: some View {
-    VStack(spacing: 0) {
-      MacProjectSheetHeader(
-        title: "New Project",
-        primaryTitle: "Create",
-        primaryEnabled: canCreate,
-        cancel: { dismiss() },
-        primary: create
-      )
-
-      Divider()
-
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          if let saveError {
-            MacProjectInlineErrorBanner(message: saveError) {
-              self.saveError = nil
-            }
-          }
-
-          VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 14) {
-              Image(systemName: symbolName)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(selectedAccent)
-                .frame(width: 52, height: 52)
-                .background(selectedAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
-
-              TextField("Project name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .focused($nameFocused)
-                .onSubmit { create() }
-            }
-
-            if let nameValidationError {
-              Text(nameValidationError)
-                .font(.caption)
-                .foregroundStyle(.red)
-            }
-          }
-
-          MacProjectIconColorPicker(symbolName: $symbolName, accentID: $accentID)
-
-          Divider()
-
-          VStack(alignment: .leading, spacing: 10) {
-            Text("New Chat Defaults")
-              .font(.headline)
-
-            Picker("Provider Account", selection: $accountID) {
-              Text("App Default").tag(nil as ProviderAccountID?)
-              ForEach(enabledAccounts) { account in
-                Text(account.label).tag(Optional(account.id))
-              }
-            }
-
-            if accountID != nil {
-              Picker("Model", selection: $modelID) {
-                Text("Account Default").tag(nil as ModelID?)
-                ForEach(availableModels) { record in
-                  Text(record.model.displayName).tag(Optional(record.model.id))
-                }
-              }
-            }
-          }
-
-          Text("Instructions, sources, reusable prompts, and tool defaults can be configured after the project is created.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-        .padding(20)
-      }
-    }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.standardHeight
-    )
-    .background(MacDesignTokens.Colors.canvas)
-    .onAppear {
-      nameFocused = true
-    }
-    .onChange(of: accountID) { _, value in
-      guard let value else {
-        modelID = nil
-        return
-      }
-      if let modelID,
-        !providers.models(for: value).contains(where: {
-          $0.model.id == modelID && $0.isAvailable
-        })
-      {
-        self.modelID = nil
-      }
-    }
-  }
-
-  private var selectedAccent: Color {
-    MacProjectAccentOption(rawValue: accentID)?.color ?? .blue
-  }
-
-  private func create() {
-    guard canCreate else { return }
-    isSaving = true
-    saveError = nil
-    Task { @MainActor in
-      defer { isSaving = false }
-      if let projectID = await workspace.createProject(
-        name: name,
-        symbolName: symbolName,
-        accentID: accentID,
-        accountID: accountID,
-        modelID: modelID,
-        instructions: "",
-        files: [],
-        mcpConfiguration: MCPChatToolConfiguration(),
-        promptPresets: [],
-        toolPresets: []
-      ) {
-        created(projectID)
-        dismiss()
-      } else {
-        saveError = workspace.consumeErrorMessage() ?? "Could not create project."
-      }
-    }
-  }
-}
-
-private struct MacProjectIdentityEditor: View {
-  let project: ChatProject
-  @Bindable var workspace: MacWorkspaceModel
-
-  @Environment(\.dismiss) private var dismiss
-  @FocusState private var nameFocused: Bool
-  @State private var name: String
-  @State private var symbolName: String
-  @State private var accentID: String
-  @State private var isSaving = false
-  @State private var saveError: String?
-
-  init(project: ChatProject, workspace: MacWorkspaceModel) {
-    self.project = project
-    self.workspace = workspace
-    _name = State(initialValue: project.name)
-    _symbolName = State(initialValue: project.symbolName)
-    _accentID = State(initialValue: project.accentID)
-  }
-
-  private var trimmedName: String {
-    name.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var selectedAccent: Color {
-    MacProjectAccentOption(rawValue: accentID)?.color ?? .blue
-  }
-
-  private var nameValidationError: String? {
-    guard !trimmedName.isEmpty else { return nil }
-    if trimmedName.count > ProjectWorkspaceStore.maxNameLength {
-      return "Project names must be \(ProjectWorkspaceStore.maxNameLength) characters or fewer."
-    }
-    let hasDuplicate = workspace.projects.contains {
-      $0.id != project.id && $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
-    }
-    if hasDuplicate {
-      return "A project with this name already exists."
-    }
-    return nil
-  }
-
-  private var canSave: Bool {
-    !isSaving && !trimmedName.isEmpty && nameValidationError == nil
-  }
-
-  var body: some View {
-    VStack(spacing: 0) {
-      MacProjectSheetHeader(
-        title: "Edit Project",
-        primaryTitle: "Save",
-        primaryEnabled: canSave,
-        cancel: { dismiss() },
-        primary: save
-      )
-      Divider()
-
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          if let saveError {
-            MacProjectInlineErrorBanner(message: saveError) {
-              self.saveError = nil
-            }
-          }
-
-          VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 14) {
-              Image(systemName: symbolName)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(selectedAccent)
-                .frame(width: 52, height: 52)
-                .background(selectedAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
-
-              TextField("Project name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .focused($nameFocused)
-                .onSubmit { save() }
-            }
-
-            if let nameValidationError {
-              Text(nameValidationError)
-                .font(.caption)
-                .foregroundStyle(.red)
-            }
-          }
-
-          MacProjectIconColorPicker(symbolName: $symbolName, accentID: $accentID)
-        }
-        .padding(20)
-      }
-    }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.compactHeight
-    )
-    .background(MacDesignTokens.Colors.canvas)
-    .onAppear {
-      nameFocused = true
-    }
-  }
-
-  private func save() {
-    guard canSave else { return }
-    isSaving = true
-    saveError = nil
-    Task { @MainActor in
-      defer { isSaving = false }
-      if await workspace.updateProjectIdentity(
-        id: project.id,
-        name: name,
-        symbolName: symbolName,
-        accentID: accentID
-      ) {
-        dismiss()
-      } else {
-        saveError = workspace.consumeErrorMessage() ?? "Could not update project."
-      }
-    }
-  }
-}
-
-private struct MacProjectDefaultsEditor: View {
-  let project: ChatProject
-  @Bindable var workspace: MacWorkspaceModel
-  @Bindable var providers: MacProviderModel
-
-  @Environment(\.dismiss) private var dismiss
-  @State private var accountID: ProviderAccountID?
-  @State private var modelID: ModelID?
-  @State private var isSaving = false
-  @State private var saveError: String?
-
-  init(
-    project: ChatProject,
-    workspace: MacWorkspaceModel,
-    providers: MacProviderModel
-  ) {
-    self.project = project
-    self.workspace = workspace
-    self.providers = providers
-    _accountID = State(initialValue: project.accountID)
-    _modelID = State(initialValue: project.modelID)
-  }
-
-  private var enabledAccounts: [ProviderAccount] {
-    providers.accounts.filter(\.isEnabled)
-  }
-
-  private var selectedAccount: ProviderAccount? {
-    guard let accountID else { return nil }
-    return enabledAccounts.first { $0.id == accountID }
-  }
-
-  private var unavailableAccountLabel: String? {
-    guard let accountID, selectedAccount == nil else { return nil }
-    if let existing = providers.accounts.first(where: { $0.id == accountID }) {
-      return "\(existing.label) (Disabled)"
-    }
-    return "Unavailable Account"
-  }
-
-  private var availableModels: [AccountModelRecord] {
-    guard let accountID else { return [] }
-    return providers.models(for: accountID).filter(\.isAvailable)
-  }
-
-  private var unavailableModelLabel: String? {
-    guard let accountID, let modelID,
-      !availableModels.contains(where: { $0.model.id == modelID })
-    else { return nil }
-    if let record = providers.models(for: accountID, includeHidden: true)
-      .first(where: { $0.model.id == modelID })
-    {
-      return "\(record.model.displayName) (Unavailable)"
-    }
-    return "\(modelID.rawValue) (Unavailable)"
-  }
-
-  private var hasUnavailableDefaults: Bool {
-    unavailableAccountLabel != nil || unavailableModelLabel != nil
-  }
-
-  private var canSave: Bool {
-    !isSaving
-      && (accountID == nil || selectedAccount != nil)
-      && (accountID == nil || modelID == nil || availableModels.contains(where: { $0.model.id == modelID }))
-  }
-
-  var body: some View {
-    VStack(spacing: 0) {
-      MacProjectSheetHeader(
-        title: "New Chat Defaults",
-        primaryTitle: "Save",
-        primaryEnabled: canSave,
-        cancel: { dismiss() },
-        primary: save
-      )
-      Divider()
-
-      VStack(spacing: 0) {
-        if let saveError {
-          MacProjectInlineErrorBanner(message: saveError) {
-            self.saveError = nil
-          }
-          .padding([.horizontal, .top], 16)
-        }
-
-        Form {
-          Picker("Provider Account", selection: $accountID) {
-            Text("App Default").tag(nil as ProviderAccountID?)
-            if let unavailableAccountLabel, let accountID {
-              Text(unavailableAccountLabel).tag(Optional(accountID))
-            }
-            ForEach(enabledAccounts) { account in
-              Text(account.label).tag(Optional(account.id))
-            }
-          }
-          if accountID != nil {
-            Picker("Model", selection: $modelID) {
-              Text("Account Default").tag(nil as ModelID?)
-              if let unavailableModelLabel, let modelID {
-                Text(unavailableModelLabel).tag(Optional(modelID))
-              }
-              ForEach(availableModels) { record in
-                Text(record.model.displayName).tag(Optional(record.model.id))
-              }
-            }
-          }
-          if hasUnavailableDefaults {
-            Label(
-              "The previously selected provider account or model is no longer available. Choose an active option or switch back to App Default / Account Default before saving.",
-              systemImage: "exclamationmark.triangle.fill"
-            )
-            .font(.caption)
-            .foregroundStyle(.orange)
-          }
-          Text("Changes apply to new chats. Existing chats keep their current provider and model.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .padding(10)
-      }
-    }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.compactHeight
-    )
-    .background(MacDesignTokens.Colors.canvas)
-    .onChange(of: accountID) { _, value in
-      guard let value else {
-        modelID = nil
-        return
-      }
-      if let modelID,
-        !providers.models(for: value).contains(where: {
-          $0.model.id == modelID && $0.isAvailable
-        })
-      {
-        self.modelID = nil
-      }
-    }
-  }
-
-  private func save() {
-    guard canSave else { return }
-    isSaving = true
-    saveError = nil
-    Task { @MainActor in
-      defer { isSaving = false }
-      if await workspace.updateProjectDefaults(
-        id: project.id,
-        accountID: accountID,
-        modelID: modelID
-      ) {
-        dismiss()
-      } else {
-        saveError = workspace.consumeErrorMessage() ?? "Could not update project defaults."
-      }
-    }
-  }
-}
-
-private struct MacProjectInstructionsEditor: View {
-  let project: ChatProject
-  @Bindable var workspace: MacWorkspaceModel
-
-  @Environment(\.dismiss) private var dismiss
-  @FocusState private var editorFocused: Bool
-  @State private var instructions: String
-  @State private var isSaving = false
-  @State private var saveError: String?
-
-  init(project: ChatProject, workspace: MacWorkspaceModel) {
-    self.project = project
-    self.workspace = workspace
-    _instructions = State(initialValue: project.instructions)
-  }
-
-  var body: some View {
-    VStack(spacing: 0) {
-      MacProjectSheetHeader(
-        title: "Project Instructions",
-        primaryTitle: "Save",
-        primaryEnabled: !isSaving,
-        cancel: { dismiss() },
-        primary: save
-      )
-      Divider()
-      VStack(alignment: .leading, spacing: 10) {
-        if let saveError {
-          MacProjectInlineErrorBanner(message: saveError) {
-            self.saveError = nil
-          }
-        }
-
-        ZStack(alignment: .topLeading) {
-          TextEditor(text: $instructions)
-            .font(.body)
-            .scrollContentBackground(.hidden)
-            .focused($editorFocused)
-            .padding(8)
-            .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-              RoundedRectangle(cornerRadius: 8)
-                .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.75)
-            }
-
-          if instructions.isEmpty {
-            Text("Custom system prompt for new chats in this project…")
-              .font(.body)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.65))
-              .padding(.top, 13)
-              .padding(.leading, 13)
-              .allowsHitTesting(false)
-              .accessibilityHidden(true)
-          }
-        }
-
-        HStack {
-          Text("Used as the system prompt for new chats in this project. Leave blank to use the app default.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          Spacer(minLength: 8)
-          if !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Button("Clear", role: .destructive) {
-              instructions = ""
-            }
-            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
-            .disabled(isSaving)
-          }
-        }
-      }
-      .padding(16)
-    }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.compactHeight
-    )
-    .background(MacDesignTokens.Colors.canvas)
-    .onAppear {
-      editorFocused = true
-    }
-  }
-
-  private func save() {
-    isSaving = true
-    saveError = nil
-    Task { @MainActor in
-      defer { isSaving = false }
-      if await workspace.updateProjectInstructions(id: project.id, instructions: instructions) {
-        dismiss()
-      } else {
-        saveError = workspace.consumeErrorMessage() ?? "Could not save project instructions."
-      }
-    }
-  }
-}
-
 private struct MacProjectPromptEditor: View {
   let existing: ProjectPromptPreset?
   let existingNames: Set<String>
@@ -3312,12 +3427,9 @@ private struct MacProjectPromptEditor: View {
           }
         }
       }
-      .padding(16)
+      .padding(14)
     }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.compactHeight
-    )
+    .frame(width: 400, height: 320)
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       nameFocused = true
@@ -3410,9 +3522,9 @@ private struct MacProjectToolPresetNameSheet: View {
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
       }
-      .padding(16)
+      .padding(14)
     }
-    .frame(width: 440, height: 195)
+    .frame(width: 340)
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       nameFocused = true
@@ -3481,8 +3593,8 @@ private struct MacProjectChatRenameSheet: View {
           .disabled(!canSave)
       }
     }
-    .padding(20)
-    .frame(width: 390)
+    .padding(16)
+    .frame(width: 340)
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       titleFocused = true
@@ -3552,24 +3664,6 @@ private struct MacProjectWorkspaceIcon: View {
       .frame(width: size, height: size)
       .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: size * 0.3))
       .accessibilityHidden(true)
-  }
-}
-
-private struct MacProjectValueRow: View {
-  let title: String
-  let value: String
-  var valueColor: Color? = nil
-
-  var body: some View {
-    HStack(alignment: .firstTextBaseline) {
-      Text(title)
-        .font(.caption)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        .frame(width: 120, alignment: .leading)
-      Text(value)
-        .font(.system(size: 13.5, weight: .medium))
-        .foregroundStyle(valueColor ?? MacDesignTokens.Colors.textPrimary)
-    }
   }
 }
 
@@ -3662,9 +3756,9 @@ private struct MacProjectLibrarySourcePickerSheet: View {
   let excludedIDs: Set<String>
   let existingFileCount: Int
   let existingByteCount: Int
+  let back: () -> Void
   let addFiles: ([ProjectFile]) async -> String?
 
-  @Environment(\.dismiss) private var dismiss
   @State private var selection: Set<LibraryEntryID> = []
   @State private var searchText = ""
   @State private var isLoading = false
@@ -3712,23 +3806,30 @@ private struct MacProjectLibrarySourcePickerSheet: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
+      HStack(spacing: 12) {
+        Button(action: back) {
+          Label("Sources", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+        .disabled(isLoading)
+
+        Divider().frame(height: 24)
+
         Text("Add Sources from Library")
           .font(.headline)
         Spacer()
-        Button("Cancel") { dismiss() }
-          .buttonStyle(MacActionButtonStyle(.secondary))
-          .keyboardShortcut(.cancelAction)
-          .disabled(isLoading)
         Button(activeSelection.isEmpty ? "Add" : "Add (\(activeSelection.count))") {
           commit()
         }
-        .buttonStyle(MacActionButtonStyle(.primary))
+        .buttonStyle(MacActionButtonStyle(.primary, size: .small))
         .keyboardShortcut(.defaultAction)
         .disabled(activeSelection.isEmpty || exceedsByteLimit || isLoading)
       }
-      .padding(16)
-      .background(MacDesignTokens.Colors.surface)
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
       Divider()
 
@@ -3805,10 +3906,7 @@ private struct MacProjectLibrarySourcePickerSheet: View {
         }
       }
     }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.standardHeight
-    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(MacDesignTokens.Colors.canvas)
     .overlay {
       if isLoading {
@@ -3878,7 +3976,7 @@ private struct MacProjectLibrarySourcePickerSheet: View {
       if let error = await addFiles(additions) {
         errorMessage = error
       } else {
-        dismiss()
+        back()
       }
     }
   }

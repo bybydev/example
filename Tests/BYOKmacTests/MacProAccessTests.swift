@@ -332,12 +332,17 @@ struct MacLibraryFeatureTests {
 
 @Suite("macOS Projects feature")
 struct MacProjectsFeatureTests {
-  @Test("Project workspace separates overview, chats, sources, and tools")
-  func projectWorkspaceSections() {
-    #expect(
-      MacProjectWorkspaceSection.allCases.map(\.rawValue)
-        == ["Overview", "Chats", "Sources", "Tools"]
-    )
+  @Test("Project workspace routes unify inline settings with pushed sub-views")
+  func projectWorkspaceRoutes() {
+    let projectID = ProjectID(rawValue: "proj-1")
+    #expect(MacProjectWorkspaceRoute.list.activeProjectID == nil)
+    #expect(MacProjectWorkspaceRoute.create.activeProjectID == nil)
+    #expect(MacProjectWorkspaceRoute.detail(projectID).activeProjectID == projectID)
+    #expect(MacProjectWorkspaceRoute.chats(projectID).activeProjectID == projectID)
+    #expect(MacProjectWorkspaceRoute.sources(projectID).activeProjectID == projectID)
+    #expect(MacProjectWorkspaceRoute.prompts(projectID).activeProjectID == projectID)
+    #expect(MacProjectWorkspaceRoute.tools(projectID).activeProjectID == projectID)
+    #expect(MacProjectWorkspaceRoute.detail(projectID) != .chats(projectID))
   }
 
   @Test("Project files show byte size and estimated token context")
