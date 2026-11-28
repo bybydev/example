@@ -3020,12 +3020,9 @@ private struct MacProjectToolsWorkspaceView: View {
   @Bindable var mcp: MacMCPModel
   let back: () -> Void
 
+  @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
   @State private var configuration: MCPChatToolConfiguration
-  @State private var presets: [ProjectToolPreset]
-  @State private var showingSavePreset = false
-  @State private var pendingOverwriteOnDismiss: String?
-  @State private var pendingOverwriteName: String?
-  @State private var presetToDelete: ProjectToolPreset?
+  @State private var showingAddServer = false
   @State private var isSaving = false
 
   init(
@@ -3039,292 +3036,140 @@ private struct MacProjectToolsWorkspaceView: View {
     self.mcp = mcp
     self.back = back
     _configuration = State(initialValue: project.mcpConfiguration ?? MCPChatToolConfiguration())
-    _presets = State(initialValue: project.projectToolPresets)
   }
 
   private var controlsDisabled: Bool {
     isSaving || workspace.isBusy
   }
 
+  private var hasCustomDefaults: Bool {
+    !configuration.enabledServerIDs.isEmpty || !configuration.toolPolicies.isEmpty
+  }
+
   var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 12) {
-        Button(action: back) {
-          Label(project.name, systemImage: "chevron.left")
-            .foregroundStyle(MacDesignTokens.Colors.accent)
-        }
-        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
-        .keyboardShortcut(.cancelAction)
-
-        Divider().frame(height: 24)
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text("MCP Tools")
-            .font(.headline)
-          Text("Chats inherit these servers and permissions until overridden.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-        Spacer()
-        if isSaving {
-          HStack(spacing: 6) {
-            ProgressView()
-              .controlSize(.small)
-            Text("Saving…")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-        } else {
-          Label("Saves automatically", systemImage: "checkmark.circle")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-      }
-      .padding(.horizontal, 18)
-      .frame(height: 62)
-      .background(MacDesignTokens.Colors.surface.opacity(0.45))
-
-      Divider()
-
-      HStack(spacing: 0) {
-        MacProjectToolsConfigurationView(
+    Group {
+      if showingAddServer {
+        MacMCPServerSettingsView(
           mcp: mcp,
-          configuration: configuration,
-          isDisabled: controlsDisabled
-        ) { updated in
-          persist(configuration: updated, presets: presets, successMessage: nil)
+          server: nil,
+          backTitle: "MCP Tools",
+          back: { showingAddServer = false },
+          onCreated: { _ in showingAddServer = false },
+          openTools: nil,
+          requestDelete: nil
+        )
+        .id("project-tools-add-mcp-server")
+      } else {
+        VStack(spacing: 0) {
+          HStack(spacing: 12) {
+            Button(action: back) {
+              Label(project.name, systemImage: "chevron.left")
+                .foregroundStyle(MacDesignTokens.Colors.accent)
+            }
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+            .keyboardShortcut(.cancelAction)
+
+            Divider().frame(height: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+              Text("MCP Tools")
+                .font(.system(size: 14.5, weight: .semibold))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              Text("Default servers and tool permissions inherited by chats in this project.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+
+            Spacer()
+
+            if isSaving {
+              HStack(spacing: 6) {
+                ProgressView()
+                  .controlSize(.small)
+                Text("Saving…")
+                  .font(.caption)
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              }
+            }
+
+            Menu {
+              Button("Manage MCP Servers…", systemImage: "shippingbox") {
+                utilitySheets.destination = .mcpServers
+              }
+              if hasCustomDefaults {
+                Divider()
+                Button("Disable All Servers", systemImage: "arrow.counterclockwise") {
+                  persist(configuration: MCPChatToolConfiguration())
+                }
+                .disabled(controlsDisabled)
+              }
+            } label: {
+              MacIconMenuLabel(systemImage: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Project tool actions")
+          }
+          .padding(.horizontal, 18)
+          .frame(height: 62)
+          .background(MacDesignTokens.Colors.surface.opacity(0.45))
+
+          Divider()
+
+          MacProjectToolsConfigurationView(
+            mcp: mcp,
+            configuration: configuration,
+            isDisabled: controlsDisabled,
+            addServer: {
+              guard MacProAccess.requireMCPServerCapacity(currentCount: mcp.servers.count) else {
+                return
+              }
+              showingAddServer = true
+            },
+            manageServers: {
+              utilitySheets.destination = .mcpServers
+            },
+            showsGuidanceBanner: false,
+            maxContentWidth: 640
+          ) { updated in
+            persist(configuration: updated)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        Divider()
-
-        toolPresets
-          .frame(width: 260)
       }
     }
     .background(MacDesignTokens.Colors.canvas)
-    .onChange(of: showingSavePreset) { _, isPresented in
-      if !isPresented, let nameToOverwrite = pendingOverwriteOnDismiss {
-        pendingOverwriteOnDismiss = nil
-        pendingOverwriteName = nameToOverwrite
-      }
-    }
-    .confirmationDialog(
-      "Replace Tool Preset?",
-      isPresented: Binding(
-        get: { pendingOverwriteName != nil },
-        set: { if !$0 { pendingOverwriteName = nil } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button("Replace", role: .destructive) {
-        if let nameToOverwrite = pendingOverwriteName {
-          commitSavePreset(named: nameToOverwrite)
-        }
-        pendingOverwriteName = nil
-      }
-      Button("Cancel", role: .cancel) {
-        pendingOverwriteName = nil
-      }
-    } message: {
-      if let nameToOverwrite = pendingOverwriteName {
-        Text("A tool preset named \"\(nameToOverwrite)\" already exists. Replace it with the current tool settings?")
-      }
-    }
-    .confirmationDialog(
-      presetToDelete.map { "Delete \"\($0.name)\"?" } ?? "Delete tool preset?",
-      isPresented: Binding(
-        get: { presetToDelete != nil },
-        set: { if !$0 { presetToDelete = nil } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button("Delete Preset", role: .destructive) {
-        guard let target = presetToDelete else { return }
-        presetToDelete = nil
-        var nextPresets = presets
-        nextPresets.removeAll { $0.id == target.id }
-        persist(
-          configuration: configuration,
-          presets: nextPresets,
-          successMessage: "Tool preset deleted"
-        )
-      }
-      Button("Cancel", role: .cancel) { presetToDelete = nil }
-    } message: {
-      Text("This removes the saved tool preset from \(project.name).")
-    }
     .onChange(of: project.id) { _, _ in
-      syncFromProject()
-      pendingOverwriteOnDismiss = nil
-      pendingOverwriteName = nil
-      presetToDelete = nil
+      configuration = project.mcpConfiguration ?? MCPChatToolConfiguration()
+      showingAddServer = false
     }
     .onChange(of: project.mcpConfiguration) { _, _ in
       if !isSaving {
         configuration = project.mcpConfiguration ?? MCPChatToolConfiguration()
       }
     }
-    .onChange(of: project.projectToolPresets) { _, _ in
-      if !isSaving {
-        presets = project.projectToolPresets
-      }
-    }
   }
 
-  private var toolPresets: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        Text("Tool Presets")
-          .font(.headline)
-        Spacer()
-        Button {
-          showingSavePreset = true
-        } label: {
-          Image(systemName: "plus")
-        }
-        .buttonStyle(MacIconButtonStyle())
-        .disabled(controlsDisabled)
-        .help("Save current configuration as preset")
-        .popover(isPresented: $showingSavePreset, arrowEdge: .bottom) {
-          MacProjectToolPresetNameSheet(existingPresets: presets) { name in
-            requestSavePreset(named: name)
-          }
-        }
-      }
-
-      Text("Quickly replace the current project tool defaults with a saved configuration.")
-        .font(.caption)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-
-      if presets.isEmpty {
-        ContentUnavailableView(
-          "No Presets",
-          systemImage: "slider.horizontal.3",
-          description: Text("Save the current tool configuration to reuse it later.")
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        ScrollView {
-          LazyVStack(spacing: 8) {
-            ForEach(presets) { preset in
-              VStack(alignment: .leading, spacing: 7) {
-                Text(preset.name)
-                  .font(.system(size: 13.5, weight: .medium))
-                Text(toolPresetSummary(preset))
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                HStack {
-                  Button("Apply") { applyPreset(preset) }
-                    .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                    .disabled(controlsDisabled)
-                  Spacer()
-                  Button(role: .destructive) {
-                    presetToDelete = preset
-                  } label: {
-                    Image(systemName: "trash")
-                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  }
-                  .buttonStyle(MacIconButtonStyle())
-                  .disabled(controlsDisabled)
-                  .help("Delete preset")
-                }
-              }
-              .padding(10)
-              .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 9))
-              .overlay {
-                RoundedRectangle(cornerRadius: 9)
-                  .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 0.5)
-              }
-            }
-          }
-        }
-      }
-
-      Button("Save Current as Preset…", systemImage: "plus") {
-        showingSavePreset = true
-      }
-      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-      .disabled(controlsDisabled)
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .padding(14)
-    .background(MacDesignTokens.Colors.canvas)
-  }
-
-  private func syncFromProject() {
-    configuration = project.mcpConfiguration ?? MCPChatToolConfiguration()
-    presets = project.projectToolPresets
-  }
-
-  private func applyPreset(_ preset: ProjectToolPreset) {
-    persist(
-      configuration: preset.configuration,
-      presets: presets,
-      successMessage: "Applied \"\(preset.name)\""
-    )
-  }
-
-  private func requestSavePreset(named rawName: String) {
-    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty, name.count <= ProjectWorkspaceStore.maxPresetNameLength else { return }
-    if presets.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-      pendingOverwriteOnDismiss = name
-    } else if presets.count < ProjectWorkspaceStore.maxPresetCount {
-      commitSavePreset(named: name)
-    }
-  }
-
-  private func commitSavePreset(named name: String) {
-    var nextPresets = presets
-    if let index = nextPresets.firstIndex(where: {
-      $0.name.caseInsensitiveCompare(name) == .orderedSame
-    }) {
-      nextPresets[index].name = name
-      nextPresets[index].configuration = configuration
-    } else if nextPresets.count < ProjectWorkspaceStore.maxPresetCount {
-      nextPresets.append(ProjectToolPreset(name: name, configuration: configuration))
-    } else {
-      return
-    }
-    persist(
-      configuration: configuration,
-      presets: nextPresets,
-      successMessage: "Tool preset saved"
-    )
-  }
-
-  private func persist(
-    configuration nextConfiguration: MCPChatToolConfiguration,
-    presets nextPresets: [ProjectToolPreset],
-    successMessage: String?
-  ) {
+  private func persist(configuration nextConfiguration: MCPChatToolConfiguration) {
     guard !controlsDisabled else { return }
     let previousConfiguration = configuration
-    let previousPresets = presets
     configuration = nextConfiguration
-    presets = nextPresets
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
       let saved = await workspace.replaceProjectToolSettings(
         id: project.id,
         mcpConfiguration: nextConfiguration,
-        toolPresets: nextPresets,
-        successMessage: successMessage
+        toolPresets: project.projectToolPresets,
+        successMessage: nil
       )
       if saved {
         await mcp.reloadFromStorage()
       } else {
         configuration = previousConfiguration
-        presets = previousPresets
       }
     }
-  }
-
-  private func toolPresetSummary(_ preset: ProjectToolPreset) -> String {
-    let count = preset.configuration.enabledServerIDs.count
-    return "\(count) server\(count == 1 ? "" : "s")"
   }
 }
 
@@ -3461,80 +3306,6 @@ private struct MacProjectPromptEditor: View {
         dismiss()
       }
     }
-  }
-}
-
-private struct MacProjectToolPresetNameSheet: View {
-  let existingPresets: [ProjectToolPreset]
-  let save: (String) -> Void
-
-  @Environment(\.dismiss) private var dismiss
-  @FocusState private var nameFocused: Bool
-  @State private var name = ""
-
-  private var trimmedName: String {
-    name.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var matchesExistingPreset: Bool {
-    guard !trimmedName.isEmpty else { return false }
-    return existingPresets.contains {
-      $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
-    }
-  }
-
-  private var validationError: String? {
-    if trimmedName.count > ProjectWorkspaceStore.maxPresetNameLength {
-      return "Preset names must be \(ProjectWorkspaceStore.maxPresetNameLength) characters or fewer."
-    }
-    if !matchesExistingPreset && existingPresets.count >= ProjectWorkspaceStore.maxPresetCount {
-      return "A project can contain at most \(ProjectWorkspaceStore.maxPresetCount) tool presets. Enter an existing preset name to update it, or delete one first."
-    }
-    return nil
-  }
-
-  private var canSave: Bool {
-    !trimmedName.isEmpty && validationError == nil
-  }
-
-  var body: some View {
-    VStack(spacing: 0) {
-      MacProjectSheetHeader(
-        title: "Save Tool Preset",
-        primaryTitle: "Save",
-        primaryEnabled: canSave,
-        cancel: { dismiss() },
-        primary: saveValue
-      )
-      Divider()
-      VStack(alignment: .leading, spacing: 10) {
-        TextField("Preset name", text: $name)
-          .textFieldStyle(.roundedBorder)
-          .focused($nameFocused)
-          .onSubmit { saveValue() }
-        if let validationError {
-          Text(validationError)
-            .font(.caption)
-            .foregroundStyle(.red)
-        } else {
-          Text("Saving with an existing preset name will ask before replacing that preset.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-      }
-      .padding(14)
-    }
-    .frame(width: 340)
-    .background(MacDesignTokens.Colors.canvas)
-    .onAppear {
-      nameFocused = true
-    }
-  }
-
-  private func saveValue() {
-    guard canSave else { return }
-    save(trimmedName)
-    dismiss()
   }
 }
 

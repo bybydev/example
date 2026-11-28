@@ -572,7 +572,7 @@ private struct MacMCPServerListRow: View {
   }
 }
 
-private struct MacMCPServerSettingsView: View {
+struct MacMCPServerSettingsView: View {
   private enum PendingNavigation {
     case back
     case tools
@@ -1731,7 +1731,6 @@ struct MacChatToolsView: View {
   let conversationID: ConversationID?
   let projectID: ProjectID?
   let draftConfiguration: Binding<MCPChatToolConfiguration?>?
-  let presets: [ProjectToolPreset]
   let isGenerating: Bool
   let modelSupportsTools: Bool
   let manageServers: (() -> Void)?
@@ -1746,7 +1745,7 @@ struct MacChatToolsView: View {
     conversationID: ConversationID?,
     projectID: ProjectID? = nil,
     draftConfiguration: Binding<MCPChatToolConfiguration?>? = nil,
-    presets: [ProjectToolPreset],
+    presets: [ProjectToolPreset] = [],
     isGenerating: Bool = false,
     modelSupportsTools: Bool = true,
     manageServers: (() -> Void)? = nil
@@ -1755,7 +1754,7 @@ struct MacChatToolsView: View {
     self.conversationID = conversationID
     self.projectID = projectID
     self.draftConfiguration = draftConfiguration
-    self.presets = presets
+    _ = presets
     self.isGenerating = isGenerating
     self.modelSupportsTools = modelSupportsTools
     self.manageServers = manageServers
@@ -1814,7 +1813,6 @@ struct MacChatToolsView: View {
   }
 
   var body: some View {
-    let activeConfig = normalizedToolConfiguration(currentConfiguration)
     Group {
       if showingAddServer {
         MacMCPServerSettingsView(
@@ -1838,29 +1836,6 @@ struct MacChatToolsView: View {
                 .foregroundStyle(MacDesignTokens.Colors.textMuted)
             }
             Spacer()
-
-            if !presets.isEmpty {
-              Menu {
-                ForEach(presets) { preset in
-                  let isApplied = normalizedToolConfiguration(preset.configuration) == activeConfig
-                  Button {
-                    applyPreset(preset)
-                  } label: {
-                    if isApplied {
-                      Label(preset.name, systemImage: "checkmark")
-                    } else {
-                      Text(preset.name)
-                    }
-                  }
-                }
-              } label: {
-                MacMenuButtonLabel(title: "Apply Preset")
-              }
-              .menuStyle(.borderlessButton)
-              .menuIndicator(.hidden)
-              .fixedSize()
-              .disabled(isMutationDisabled)
-            }
 
             if hasChatOverride, project != nil {
               Button("Reset") {
@@ -1946,25 +1921,6 @@ struct MacChatToolsView: View {
     }
   }
 
-  private func applyPreset(_ preset: ProjectToolPreset) {
-    if let conversationID {
-      Task {
-        _ = await mcp.applyChatConfiguration(
-          preset.configuration,
-          conversationID: conversationID
-        )
-      }
-    } else {
-      let result = mcp.validatedDraftPresetConfiguration(
-        preset.configuration,
-        projectID: projectID
-      )
-      if result.succeeded {
-        draftConfiguration?.wrappedValue = result.configuration
-      }
-    }
-  }
-
   private func resetToProjectDefaults() {
     if let conversationID {
       Task { _ = await mcp.removeChatConfiguration(conversationID) }
@@ -2041,21 +1997,16 @@ struct MacChatToolsView: View {
       }
     }
   }
-
-  private func normalizedToolConfiguration(
-    _ configuration: MCPChatToolConfiguration
-  ) -> MCPChatToolConfiguration {
-    MCPChatToolConfiguration(
-      enabledServerIDs: Array(Set(configuration.enabledServerIDs)).sorted { $0.rawValue < $1.rawValue },
-      toolPolicies: configuration.toolPolicies.filter { $0.value != .ask }
-    )
-  }
 }
 
 struct MacProjectToolsConfigurationView: View {
   @Bindable var mcp: MacMCPModel
   let configuration: MCPChatToolConfiguration
   var isDisabled: Bool = false
+  var addServer: (() -> Void)? = nil
+  var manageServers: (() -> Void)? = nil
+  var showsGuidanceBanner: Bool = false
+  var maxContentWidth: CGFloat? = 640
   let onConfigurationChange: (MCPChatToolConfiguration) -> Void
   @State private var showingAddServer = false
 
@@ -2077,10 +2028,16 @@ struct MacProjectToolsConfigurationView: View {
         configuration: configuration,
         context: .project,
         isReadOnly: isDisabled,
+        showsGuidanceBanner: showsGuidanceBanner,
+        maxContentWidth: maxContentWidth,
         addServer: {
-          guard MacProAccess.requireMCPServerCapacity(currentCount: mcp.servers.count) else { return }
-          showingAddServer = true
+          if let addServer {
+            addServer()
+          } else if MacProAccess.requireMCPServerCapacity(currentCount: mcp.servers.count) {
+            showingAddServer = true
+          }
         },
+        manageServers: manageServers,
         setServerEnabled: { serverID, enabled in
           var updated = configuration
           updated.enabledServerIDs.removeAll { $0 == serverID }
@@ -2120,6 +2077,8 @@ private struct MacMCPServerConfigurationList: View {
   var isGenerating: Bool = false
   var modelSupportsTools: Bool = true
   var isReadOnly: Bool = false
+  var showsGuidanceBanner: Bool = true
+  var maxContentWidth: CGFloat? = nil
   var addServer: (() -> Void)? = nil
   var manageServers: (() -> Void)? = nil
   let setServerEnabled: (MCPServerID, Bool) -> Void
@@ -2130,54 +2089,54 @@ private struct MacMCPServerConfigurationList: View {
     isGenerating || isReadOnly || (mcp.isBusy && isChatContext)
   }
 
+  private var showsTopWarningBar: Bool {
+    isGenerating || !modelSupportsTools
+  }
+
   var body: some View {
     VStack(spacing: 0) {
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 10) {
-          Image(systemName: context.guidanceIcon)
-            .foregroundStyle(MacDesignTokens.Colors.accent)
-          Text(context.guidance)
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          Spacer()
-        }
+      if showsTopWarningBar {
+        VStack(alignment: .leading, spacing: 8) {
+          if isGenerating {
+            HStack(alignment: .top, spacing: 8) {
+              Image(systemName: "hourglass")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+                .padding(.top, 1)
+              Text("Wait for the current response to finish before changing tools.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            }
+          }
 
-        if isGenerating {
-          HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "hourglass")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(.orange)
-              .padding(.top, 1)
-            Text("Wait for the current response to finish before changing tools.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          if !modelSupportsTools {
+            HStack(alignment: .top, spacing: 8) {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+                .padding(.top, 1)
+              Text("The current model does not support tools. Enabled tools will not be sent until you switch models.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            }
           }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.orange.opacity(0.08))
 
-        if !modelSupportsTools {
-          HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(.orange)
-              .padding(.top, 1)
-            Text("The current model does not support tools. Enabled tools will not be sent until you switch models.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          }
-        }
+        Divider()
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 12)
-      .background(MacDesignTokens.Colors.surface.opacity(0.75))
 
       if mcp.servers.isEmpty {
         ContentUnavailableView {
-          Label("No MCP Servers", systemImage: "server.rack")
+          Label("No MCP Servers", systemImage: "shippingbox.and.arrow.backward")
         } description: {
           Text("Add a remote MCP server to discover and enable tools.")
         } actions: {
           if let addServer {
-            Button("Add MCP Server") {
+            Button("Add MCP Server", systemImage: "plus") {
               addServer()
             }
             .buttonStyle(MacActionButtonStyle(.primary))
@@ -2187,26 +2146,55 @@ private struct MacMCPServerConfigurationList: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ScrollView {
-          LazyVStack(spacing: 10) {
-            ForEach(mcp.servers) { server in
-              MacMCPServerConfigCard(
-                mcp: mcp,
-                server: server,
-                configuration: configuration,
-                context: context,
-                isGenerating: isGenerating,
-                isReadOnly: isReadOnly,
-                isMutationDisabled: isMutationDisabled,
-                manageServers: manageServers,
-                setServerEnabled: { setServerEnabled(server.id, $0) },
-                setPolicy: setPolicy,
-                setAllPolicies: setAllPolicies.map { handler in
-                  { policy in handler(server.id, policy) }
-                }
-              )
+          VStack(alignment: .leading, spacing: 14) {
+            if !isChatContext {
+              Text("Servers")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .textCase(.uppercase)
+                .tracking(0.4)
+                .padding(.leading, 4)
+                .accessibilityAddTraits(.isHeader)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+              ForEach(mcp.servers) { server in
+                MacMCPServerConfigCard(
+                  mcp: mcp,
+                  server: server,
+                  configuration: configuration,
+                  context: context,
+                  isGenerating: isGenerating,
+                  isReadOnly: isReadOnly,
+                  isMutationDisabled: isMutationDisabled,
+                  manageServers: manageServers,
+                  setServerEnabled: { setServerEnabled(server.id, $0) },
+                  setPolicy: setPolicy,
+                  setAllPolicies: setAllPolicies.map { handler in
+                    { policy in handler(server.id, policy) }
+                  }
+                )
+              }
+            }
+
+            if showsGuidanceBanner {
+              Text(context.guidance)
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .padding(.horizontal, 4)
+                .padding(.top, 2)
+            } else {
+              Text("Changes save automatically. New tools default to Ask.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .padding(.horizontal, 4)
+                .padding(.top, 2)
             }
           }
-          .padding(14)
+          .padding(.horizontal, 18)
+          .padding(.vertical, 16)
+          .frame(maxWidth: maxContentWidth ?? .infinity, alignment: .leading)
+          .frame(maxWidth: .infinity)
         }
       }
     }
@@ -2231,225 +2219,293 @@ private struct MacMCPServerConfigCard: View {
   let setPolicy: (String, ChatToolPermissionPolicy) -> Void
   let setAllPolicies: ((ChatToolPermissionPolicy) -> Void)?
 
-  @State private var isHovered = false
+  @State private var isExpanded = false
+  @State private var isHeaderHovered = false
+
+  private var isEnabledInScope: Bool {
+    configuration.isServerEnabled(server.id)
+  }
+
+  private var missingCredential: Bool {
+    server.authentication.kind != .none && !mcp.hasCredential(server.id)
+  }
+
+  private var isRefreshing: Bool {
+    mcp.refreshingServerIDs.contains(server.id)
+  }
+
+  private var tools: [MCPToolBinding] {
+    mcp.tools(for: server.id)
+  }
+
+  private var activeCount: Int {
+    tools.filter { configuration.policy(for: $0.exposedName) != .disabled }.count
+  }
+
+  private var snapshot: MCPServerSnapshot? {
+    mcp.snapshot(for: server.id)
+  }
+
+  private var isServerAvailable: Bool {
+    server.isEnabled && !missingCredential
+  }
+
+  private var canExpand: Bool {
+    isServerAvailable && isEnabledInScope
+  }
 
   var body: some View {
-    let enabled = configuration.isServerEnabled(server.id)
-    let missingCredential = server.authentication.kind != .none && !mcp.hasCredential(server.id)
-    let isRefreshing = mcp.refreshingServerIDs.contains(server.id)
-    let tools = mcp.tools(for: server.id)
-    let activeCount = tools.filter { configuration.policy(for: $0.exposedName) != .disabled }.count
-    let snapshot = mcp.snapshot(for: server.id)
-    let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+    MacMCPInsetGroup {
+      headerRow
 
-    VStack(alignment: .leading, spacing: 0) {
-      DisclosureGroup {
-        VStack(alignment: .leading, spacing: 8) {
-          if !server.isEnabled {
-            HStack {
-              Label(
-                "Enable this server globally in MCP Servers before using its tools here.",
-                systemImage: "pause.circle"
-              )
+      if canExpand && isExpanded {
+        Rectangle()
+          .fill(MacDesignTokens.Colors.separator.opacity(0.6))
+          .frame(height: 0.5)
+
+        expandedToolsSection
+      }
+    }
+    .onChange(of: isEnabledInScope) { oldValue, newValue in
+      if !oldValue && newValue && isServerAvailable {
+        withAnimation(.easeOut(duration: MacDesignTokens.Control.interactionDuration)) {
+          isExpanded = true
+        }
+      } else if !newValue {
+        isExpanded = false
+      }
+    }
+  }
+
+  private var headerRow: some View {
+    HStack(spacing: 10) {
+      HStack(spacing: 10) {
+        if canExpand {
+          Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .frame(width: 12)
+        } else {
+          Color.clear
+            .frame(width: 12, height: 12)
+        }
+
+        MacMCPServerIcon(
+          isEnabled: server.isEnabled,
+          hasIssue: server.isEnabled && missingCredential,
+          size: 30
+        )
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(server.name)
+            .font(.system(size: 13.5, weight: .semibold))
+            .foregroundStyle(
+              server.isEnabled
+                ? MacDesignTokens.Colors.textPrimary
+                : MacDesignTokens.Colors.textMuted
+            )
+            .lineLimit(1)
+          statusSubtitle
+        }
+
+        Spacer(minLength: 8)
+      }
+      .contentShape(Rectangle())
+      .onTapGesture {
+        guard canExpand else { return }
+        withAnimation(.easeOut(duration: MacDesignTokens.Control.interactionDuration)) {
+          isExpanded.toggle()
+        }
+      }
+
+      if !isServerAvailable {
+        if let manageServers {
+          Button("Open Servers", action: manageServers)
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        }
+        if isEnabledInScope {
+          serverToggle
+        }
+      } else {
+        if isRefreshing {
+          ProgressView()
+            .controlSize(.small)
+            .frame(width: 24, height: 24)
+            .accessibilityLabel("Refreshing tools for \(server.name)")
+        } else {
+          Button {
+            Task { _ = await mcp.refresh(server.id) }
+          } label: {
+            Image(systemName: "arrow.clockwise")
+              .font(.system(size: 12, weight: .medium))
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .disabled(mcp.isBusy || isReadOnly)
+          .help("Refresh tools for \(server.name)")
+          .accessibilityLabel("Refresh tools for \(server.name)")
+        }
+
+        serverToggle
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .frame(minHeight: 54)
+    .background(Color.primary.opacity(canExpand && isHeaderHovered ? 0.03 : 0))
+    .onHover { isHeaderHovered = $0 }
+    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHeaderHovered)
+  }
+
+  private var serverToggle: some View {
+    Toggle(
+      context.enableTitle,
+      isOn: Binding(
+        get: { isEnabledInScope },
+        set: { setServerEnabled($0) }
+      )
+    )
+    .labelsHidden()
+    .toggleStyle(.switch)
+    .controlSize(.small)
+    .disabled(
+      (!isServerAvailable && !isEnabledInScope)
+        || mcp.isBusy
+        || isGenerating
+        || isReadOnly
+    )
+    .help(context.enableTitle)
+    .accessibilityLabel("\(context.enableTitle): \(server.name)")
+  }
+
+  @ViewBuilder
+  private var statusSubtitle: some View {
+    if !server.isEnabled {
+      Text("Globally disabled")
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    } else if missingCredential {
+      Text("Missing credential")
+        .font(.caption)
+        .foregroundStyle(.orange)
+    } else if isEnabledInScope && !tools.isEmpty {
+      Text("\(activeCount) of \(tools.count) \(tools.count == 1 ? "tool" : "tools") active")
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    } else if isEnabledInScope && tools.isEmpty {
+      Text("No cached tools — refresh to discover")
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    } else if snapshot != nil {
+      Text("\(tools.count) \(tools.count == 1 ? "tool" : "tools") discovered")
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    } else {
+      Text("Not discovered yet")
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    }
+  }
+
+  @ViewBuilder
+  private var expandedToolsSection: some View {
+    if tools.isEmpty {
+      HStack(spacing: 12) {
+        Text("No cached tools yet.")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        Spacer()
+        Button("Refresh Tools", systemImage: "arrow.clockwise") {
+          Task { _ = await mcp.refresh(server.id) }
+        }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        .disabled(mcp.isBusy || isReadOnly)
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+    } else {
+      VStack(alignment: .leading, spacing: 0) {
+        if tools.count > 1, let setAllPolicies {
+          HStack(spacing: 10) {
+            Text("\(activeCount) of \(tools.count) active")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              Spacer()
-              if let manageServers {
-                Button("Open MCP Servers", action: manageServers)
-                  .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              }
-            }
-          } else if missingCredential {
-            HStack {
-              Label(
-                "Missing credential. Add it in MCP Servers before enabling.",
-                systemImage: "exclamationmark.triangle.fill"
-              )
-              .font(.caption)
-              .foregroundStyle(.orange)
-              Spacer()
-              if let manageServers {
-                Button("Open MCP Servers", action: manageServers)
-                  .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              }
-            }
-          } else if !enabled {
-            Label(
-              context == .project
-                ? "Enable in Project to configure this server's tool permissions."
-                : "Enable for This Chat to configure this server's tool permissions.",
-              systemImage: "switch.2"
-            )
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          } else if tools.isEmpty {
-            HStack {
-              Text("No cached tools yet.")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              Spacer()
-              Button("Refresh Tools", systemImage: "arrow.clockwise") {
-                Task { _ = await mcp.refresh(server.id) }
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(mcp.isBusy || isReadOnly)
-            }
-          } else {
-            if tools.count > 1, let setAllPolicies {
-              HStack {
-                Text("\(activeCount) of \(tools.count) tools active")
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                Spacer()
-                Menu {
-                  ForEach(ChatToolPermissionPolicy.allCases, id: \.self) { policy in
-                    Button("Set All to \(policy.displayName)") {
-                      setAllPolicies(policy)
-                    }
-                  }
-                } label: {
-                  MacMenuButtonLabel(title: "Set All…", size: .small)
+            Spacer()
+            Menu {
+              ForEach(ChatToolPermissionPolicy.allCases, id: \.self) { policy in
+                Button("Set All to \(policy.displayName)") {
+                  setAllPolicies(policy)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .disabled(isMutationDisabled)
               }
-              .padding(.bottom, 2)
-              Divider()
+            } label: {
+              MacMenuButtonLabel(title: "Set All", size: .small)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(isMutationDisabled)
+          }
+          .padding(.horizontal, 14)
+          .padding(.vertical, 8)
+          .background(MacDesignTokens.Colors.canvas.opacity(0.35))
 
-            ForEach(tools) { binding in
-              toolPermissionRow(binding)
-            }
-          }
+          Rectangle()
+            .fill(MacDesignTokens.Colors.separator.opacity(0.55))
+            .frame(height: 0.5)
         }
-        .padding(.top, 8)
-      } label: {
-        HStack(spacing: 10) {
-          Circle()
-            .fill(
-              !server.isEnabled
-                ? MacDesignTokens.Colors.textMuted.opacity(0.5)
-                : (missingCredential ? Color.orange : MacDesignTokens.Colors.accent)
-            )
-            .frame(width: 8, height: 8)
-          VStack(alignment: .leading, spacing: 2) {
-            Text(server.name)
-              .font(.system(size: 13.5, weight: .medium))
-            if !server.isEnabled {
-              Text("Globally disabled")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            } else if missingCredential {
-              Text("Missing credential. Add it in MCP Servers before enabling.")
-                .font(.caption)
-                .foregroundStyle(.orange)
-            } else if enabled && !tools.isEmpty {
-              Text("\(activeCount) of \(tools.count) \(tools.count == 1 ? "tool" : "tools") active")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            } else {
-              Text("\(tools.count) \(tools.count == 1 ? "tool" : "tools") discovered")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            }
-          }
-          Spacer()
-          if server.isEnabled && !missingCredential {
-            if isRefreshing {
-              ProgressView()
-                .controlSize(.small)
-                .frame(width: 24, height: 24)
-                .accessibilityLabel("Refreshing tools for \(server.name)")
-            } else {
-              Button {
-                Task { _ = await mcp.refresh(server.id) }
-              } label: {
-                Image(systemName: "arrow.clockwise")
-                  .font(.system(size: 12, weight: .semibold))
-              }
-              .buttonStyle(MacIconButtonStyle())
-              .disabled(mcp.isBusy || isReadOnly)
-              .help("Refresh tools for \(server.name)")
-              .accessibilityLabel("Refresh tools for \(server.name)")
-            }
-          }
-          Toggle(
-            context.enableTitle,
-            isOn: Binding(
-              get: { configuration.isServerEnabled(server.id) },
-              set: { setServerEnabled($0) }
-            )
-          )
-          .toggleStyle(.switch)
-          .controlSize(.small)
-          .disabled(
-            ((!server.isEnabled || missingCredential) && !enabled)
-              || mcp.isBusy
-              || isGenerating
-              || isReadOnly
-          )
-        }
-        .padding(.vertical, 4)
-      }
 
-      if let snapshot {
-        HStack {
-          Text("MCP \(snapshot.protocolVersion)")
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-          Spacer()
+        ForEach(Array(tools.enumerated()), id: \.element.id) { index, binding in
+          if index > 0 {
+            Rectangle()
+              .fill(MacDesignTokens.Colors.separator.opacity(0.5))
+              .frame(height: 0.5)
+              .padding(.leading, 14)
+          }
+          toolPermissionRow(binding)
         }
-        .padding(.top, 6)
       }
     }
-    .padding(12)
-    .background(MacDesignTokens.Colors.surface, in: shape)
-    .overlay {
-      shape.stroke(
-        isHovered
-          ? MacDesignTokens.Colors.accent.opacity(0.3)
-          : MacDesignTokens.Colors.separator.opacity(0.75),
-        lineWidth: 0.75
-      )
-    }
-    .onHover { isHovered = $0 }
-    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
   }
 
   private func toolPermissionRow(_ binding: MCPToolBinding) -> some View {
     let tool = binding.remoteTool
     let description = tool.description.trimmingCharacters(in: .whitespacesAndNewlines)
-    return HStack(alignment: .top, spacing: 10) {
+    let isReadOnlyTool = macMCPAnnotationBool("readOnlyHint", tool: tool) == true
+    let isDestructiveTool = macMCPAnnotationBool("destructiveHint", tool: tool) == true
+
+    return HStack(alignment: .center, spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
-        Text(tool.title ?? tool.remoteName)
-          .font(.system(size: 13, weight: .medium))
+        HStack(spacing: 7) {
+          Text(tool.title ?? tool.remoteName)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .lineLimit(1)
+          if isReadOnlyTool {
+            Label("Read-only", systemImage: "eye")
+              .font(.caption2)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          if isDestructiveTool {
+            Label("Destructive", systemImage: "exclamationmark.triangle")
+              .font(.caption2)
+              .foregroundStyle(.orange)
+          }
+        }
         if !description.isEmpty {
           Text(description)
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            .lineLimit(3)
+            .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
         }
-        HStack(spacing: 7) {
-          if tool.title != nil {
-            Text(tool.remoteName)
-              .font(.caption2.monospaced())
-              .foregroundStyle(.tertiary)
-          }
-          if macMCPAnnotationBool("readOnlyHint", tool: tool) == true {
-            Label("Read-only", systemImage: "eye")
-          }
-          if macMCPAnnotationBool("destructiveHint", tool: tool) == true {
-            Label("Destructive", systemImage: "exclamationmark.triangle")
-              .foregroundStyle(.orange)
-          }
+        if tool.title != nil {
+          Text(tool.remoteName)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.tertiary)
         }
-        .font(.caption2)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
       }
-      Spacer()
+
+      Spacer(minLength: 8)
+
       Picker(
         "Permission",
         selection: Binding(
@@ -2463,10 +2519,11 @@ private struct MacMCPServerConfigCard: View {
       }
       .labelsHidden()
       .pickerStyle(.menu)
-      .frame(width: 130)
+      .frame(width: 118)
       .disabled(isMutationDisabled)
     }
-    .padding(.vertical, 3)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
   }
 }
 
