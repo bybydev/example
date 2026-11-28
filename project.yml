@@ -21,7 +21,7 @@ packages:
     exactVersion: 2.4.1
   Highlighter:
     url: https://github.com/smittytone/HighlighterSwift
-    exactVersion: 3.0.3
+    exactVersion: 4.0.0
   LaTeXSwiftUI:
     url: https://github.com/hoangbkit/LaTeXSwiftUI
     exactVersion: 2.0.1

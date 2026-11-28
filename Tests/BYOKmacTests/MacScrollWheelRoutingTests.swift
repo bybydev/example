@@ -419,4 +419,86 @@ final class MacScrollWheelRoutingTests: XCTestCase {
     passthroughView.isHidden = true
     XCTAssertNil(passthroughView.hitTest(NSPoint(x: 60, y: 50)))
   }
+
+  @MainActor
+  func testSizeThatFitsAndLayoutReuseCachedIdealSize() {
+    let view = MacShiftHorizontalClipView(
+      rootView: Color.clear.frame(width: 800, height: 120),
+      contentKey: "v1"
+    )
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 120, accuracy: 0.5)
+    XCTAssertEqual(view.idealSizeMeasurementCount, 1)
+
+    _ = view.sizeThatFits(proposedWidth: 500)
+    _ = view.sizeThatFits(proposedWidth: 220)
+    view.frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+    view.layoutSubtreeIfNeeded()
+    XCTAssertEqual(view.idealSizeMeasurementCount, 1)
+
+    view.updateRootView(Color.clear.frame(width: 800, height: 240), contentKey: "v1")
+    _ = view.sizeThatFits(proposedWidth: 300)
+    XCTAssertEqual(view.idealSizeMeasurementCount, 1)
+
+    view.updateRootView(Color.clear.frame(width: 800, height: 240), contentKey: "v2")
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 240, accuracy: 0.5)
+    XCTAssertEqual(view.idealSizeMeasurementCount, 2)
+  }
+
+  @MainActor
+  func testInactiveClipViewHidesAndSkipsIdealSizeMeasurement() {
+    let view = MacShiftHorizontalClipView(
+      rootView: Color.clear.frame(width: 800, height: 120),
+      contentKey: "v1"
+    )
+    XCTAssertFalse(view.isHidden)
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 120, accuracy: 0.5)
+    XCTAssertEqual(view.idealSizeMeasurementCount, 1)
+
+    view.isActive = false
+    XCTAssertTrue(view.isHidden)
+
+    view.updateRootView(Color.clear.frame(width: 800, height: 300), contentKey: "v2")
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 120, accuracy: 0.5)
+    view.frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+    view.layoutSubtreeIfNeeded()
+    XCTAssertEqual(view.idealSizeMeasurementCount, 1)
+
+    view.isActive = true
+    XCTAssertFalse(view.isHidden)
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 300, accuracy: 0.5)
+    XCTAssertEqual(view.idealSizeMeasurementCount, 2)
+  }
+
+  @MainActor
+  func testNonKeyWindowSuppressesOnDidLayoutIdealSizeResync() async throws {
+    let frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+    let window = NSWindow(
+      contentRect: frame,
+      styleMask: .borderless,
+      backing: .buffered,
+      defer: true
+    )
+    window.isReleasedWhenClosed = false
+    let container = NSView(frame: frame)
+    let view = MacShiftHorizontalClipView(
+      rootView: Color.clear.frame(width: 800, height: 120),
+      contentKey: "v1"
+    )
+    view.frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+    container.addSubview(view)
+    window.contentView = container
+    defer { window.close() }
+
+    XCTAssertFalse(window.isKeyWindow)
+    _ = view.sizeThatFits(proposedWidth: 300)
+    view.layoutSubtreeIfNeeded()
+    let baselineCount = view.idealSizeMeasurementCount
+
+    let host = try XCTUnwrap(view.subviews.first)
+    host.needsLayout = true
+    host.layoutSubtreeIfNeeded()
+    await drainMainQueue()
+
+    XCTAssertEqual(view.idealSizeMeasurementCount, baselineCount)
+  }
 }

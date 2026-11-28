@@ -130,6 +130,8 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
   private let contentKey: AnyHashable?
   private let content: Content
 
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+
   init(
     showsHorizontalIndicator: Bool = false,
     allowsContentHitTesting: Bool = true,
@@ -147,6 +149,7 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
       rootView: content,
       showsHorizontalIndicator: showsHorizontalIndicator,
       allowsContentHitTesting: allowsContentHitTesting,
+      isActive: isTranscriptActive,
       contentKey: contentKey
     )
   }
@@ -157,6 +160,7 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
   ) {
     nsView.showsHorizontalIndicator = showsHorizontalIndicator
     nsView.allowsContentHitTesting = allowsContentHitTesting
+    nsView.isActive = isTranscriptActive
     nsView.updateRootView(content, contentKey: contentKey)
   }
 
@@ -166,6 +170,44 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
     context: Context
   ) -> CGSize? {
     nsView.sizeThatFits(proposedWidth: proposal.width)
+  }
+}
+
+/// Shared observer that briefly suppresses async `NSHostingView.fittingSize`
+/// resyncs across mounted chat blocks while any window begins/ends a sheet or
+/// transitions key state, avoiding redundant layout storms during sheet
+/// animations without installing per-block notification observers.
+@MainActor
+private final class MacWindowSheetTransitionGuard: NSObject {
+  static let shared = MacWindowSheetTransitionGuard()
+
+  private var suppressUntil: CFTimeInterval = 0
+
+  override private init() {
+    super.init()
+    let center = NotificationCenter.default
+    let names: [Notification.Name] = [
+      NSWindow.willBeginSheetNotification,
+      NSWindow.didEndSheetNotification,
+      NSWindow.didResignKeyNotification,
+      NSWindow.didBecomeKeyNotification,
+    ]
+    for name in names {
+      center.addObserver(
+        self,
+        selector: #selector(handleWindowTransition(_:)),
+        name: name,
+        object: nil
+      )
+    }
+  }
+
+  var isTransitioning: Bool {
+    CACurrentMediaTime() < suppressUntil
+  }
+
+  @objc private func handleWindowTransition(_ notification: Notification) {
+    suppressUntil = max(suppressUntil, CACurrentMediaTime() + 0.35)
   }
 }
 
@@ -190,7 +232,9 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
   private let hostingView: MacPassthroughHostingView<Content>
   private let indicatorLayer = CALayer()
   private var lastContentKey: AnyHashable?
+  private var cachedIdealSize: CGSize?
   private var lastMeasuredIdealSize: CGSize = .zero
+  private(set) var idealSizeMeasurementCount = 0
   private var documentWidth: CGFloat = 1
   private var horizontalOffset: CGFloat = 0
   private var lockedGestureAxis: MacScrollWheelRouting.Axis?
@@ -209,30 +253,66 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
 
   var allowsContentHitTesting: Bool
 
+  var isActive: Bool {
+    didSet {
+      guard isActive != oldValue else { return }
+      isHidden = !isActive
+      if !isActive {
+        idealSizeSyncTask?.cancel()
+        idealSizeSyncTask = nil
+        indicatorFadeTask?.cancel()
+        indicatorFadeTask = nil
+        lockedGestureAxis = nil
+        indicatorLayer.isHidden = true
+      } else if cachedIdealSize == nil {
+        needsLayout = true
+        invalidateIntrinsicContentSize()
+      }
+    }
+  }
+
   override var isFlipped: Bool { true }
 
   init(
     rootView: Content,
     showsHorizontalIndicator: Bool = false,
     allowsContentHitTesting: Bool = true,
+    isActive: Bool = true,
     contentKey: AnyHashable? = nil
   ) {
     self.showsHorizontalIndicator = showsHorizontalIndicator
     self.allowsContentHitTesting = allowsContentHitTesting
+    self.isActive = isActive
     self.lastContentKey = contentKey
     hostingView = MacPassthroughHostingView(rootView: rootView)
     super.init(frame: .zero)
 
+    _ = MacWindowSheetTransitionGuard.shared
+    isHidden = !isActive
     wantsLayer = true
     layer?.masksToBounds = true
     hostingView.translatesAutoresizingMaskIntoConstraints = true
     hostingView.onIntrinsicContentSizeInvalidated = { [weak self] in
       guard let self, !self.isUpdatingRootView else { return }
+      self.cachedIdealSize = nil
+      guard self.isActive else { return }
       self.needsLayout = true
       self.invalidateIntrinsicContentSize()
     }
     hostingView.onDidLayout = { [weak self] in
-      guard let self, !self.isUpdatingRootView, !self.isApplyingLayout else { return }
+      guard let self,
+        !self.isUpdatingRootView,
+        !self.isApplyingLayout,
+        self.isActive,
+        !self.isHiddenOrHasHiddenAncestor
+      else { return }
+      if let window = self.window,
+        window.attachedSheet != nil
+          || !window.isKeyWindow
+          || MacWindowSheetTransitionGuard.shared.isTransitioning
+      {
+        return
+      }
       self.scheduleIdealSizeSyncIfNeeded()
     }
     addSubview(hostingView)
@@ -269,15 +349,26 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
       return
     }
     lastContentKey = contentKey
+    cachedIdealSize = nil
     isUpdatingRootView = true
     defer { isUpdatingRootView = false }
     hostingView.rootView = rootView
     hostingView.invalidateIntrinsicContentSize()
-    needsLayout = true
+    if isActive {
+      needsLayout = true
+    }
   }
 
-  private func measureIdealSize() -> CGSize {
+  private func resolvedIdealSize() -> CGSize {
+    if let cachedIdealSize {
+      return cachedIdealSize
+    }
+    if !isActive, lastMeasuredIdealSize.width > 0 || lastMeasuredIdealSize.height > 0 {
+      return lastMeasuredIdealSize
+    }
     let ideal = hostingView.fittingSize
+    idealSizeMeasurementCount += 1
+    cachedIdealSize = ideal
     lastMeasuredIdealSize = ideal
     return ideal
   }
@@ -287,12 +378,22 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     idealSizeSyncTask = Task { @MainActor [weak self] in
       guard let self, !Task.isCancelled else { return }
       self.idealSizeSyncTask = nil
+      guard self.isActive, !self.isHiddenOrHasHiddenAncestor else { return }
+      if let window = self.window,
+        window.attachedSheet != nil
+          || !window.isKeyWindow
+          || MacWindowSheetTransitionGuard.shared.isTransitioning
+      {
+        return
+      }
       let ideal = self.hostingView.fittingSize
+      self.idealSizeMeasurementCount += 1
+      self.cachedIdealSize = ideal
       let changed =
         abs(ideal.width - self.lastMeasuredIdealSize.width) > 0.5
         || abs(ideal.height - self.lastMeasuredIdealSize.height) > 0.5
-      guard changed else { return }
       self.lastMeasuredIdealSize = ideal
+      guard changed else { return }
       self.needsLayout = true
       self.invalidateIntrinsicContentSize()
     }
@@ -302,17 +403,18 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     // SwiftUI can probe several widths while its layout graph is updating.
     // Only measure here: changing the hosting view's frame or forcing layout
     // reenters that graph and can abort inside AttributeGraph on macOS 15.
-    let ideal = measureIdealSize()
+    let ideal = resolvedIdealSize()
     let viewportWidth = max(proposedWidth ?? ideal.width, 1)
     return CGSize(width: viewportWidth, height: max(ideal.height, 1))
   }
 
   override func layout() {
     super.layout()
+    guard isActive else { return }
     isApplyingLayout = true
     defer { isApplyingLayout = false }
     // Apply geometry only after the parent has assigned the actual viewport.
-    let ideal = measureIdealSize()
+    let ideal = resolvedIdealSize()
     documentWidth = max(bounds.width, ideal.width, 1)
     horizontalOffset = min(horizontalOffset, max(documentWidth - bounds.width, 0))
     let targetFrame = NSRect(

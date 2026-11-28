@@ -2216,6 +2216,7 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
 
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.macAppTheme) private var theme
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
 
   private var renderKey: RenderKey {
     RenderKey(
@@ -2249,16 +2250,21 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
     let key = renderKey
     let wrappedKey = AnyHashable(key)
     let container = MacSelectableTextContainerPool.shared.acquire(forKey: wrappedKey)
+    container.isHidden = !isTranscriptActive
     container.textView.delegate = context.coordinator
-    updateContainer(container, key: key, wrappedKey: wrappedKey)
+    updateContainer(container, key: key, wrappedKey: wrappedKey, touchCacheOnHit: true)
     return container
   }
 
   func updateNSView(_ nsView: MacPassthroughSelectableTextContainer, context: Context) {
+    nsView.isHidden = !isTranscriptActive
+    nsView.textView.delegate = context.coordinator
+    if !isTranscriptActive, nsView.lastRenderKey != nil {
+      return
+    }
     let key = renderKey
     let wrappedKey = AnyHashable(key)
-    nsView.textView.delegate = context.coordinator
-    updateContainer(nsView, key: key, wrappedKey: wrappedKey)
+    updateContainer(nsView, key: key, wrappedKey: wrappedKey, touchCacheOnHit: false)
   }
 
   static func dismantleNSView(
@@ -2281,10 +2287,13 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
   private func updateContainer(
     _ container: MacPassthroughSelectableTextContainer,
     key: RenderKey,
-    wrappedKey: AnyHashable
+    wrappedKey: AnyHashable,
+    touchCacheOnHit: Bool
   ) {
     if container.lastRenderKey == wrappedKey {
-      _ = MacSelectableMarkdownRenderCache.shared.entry(for: wrappedKey)
+      if touchCacheOnHit {
+        _ = MacSelectableMarkdownRenderCache.shared.entry(for: wrappedKey)
+      }
       return
     }
     container.lastRenderKey = wrappedKey

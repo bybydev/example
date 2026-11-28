@@ -4356,7 +4356,10 @@ struct MacMermaidAnswerView: View {
         let streamingPreview = lines.count > 8
           ? "…\n" + lines.suffix(8).joined(separator: "\n")
           : source
-        MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+        MacHorizontalPassthroughScrollView(
+          showsHorizontalIndicator: true,
+          contentKey: streamingPreview
+        ) {
           Text(streamingPreview)
             .font(.system(size: 12.5, design: .monospaced))
             .foregroundStyle(.secondary)
@@ -4440,7 +4443,10 @@ struct MacMermaidAnswerView: View {
     }()
 
     VStack(spacing: 0) {
-      MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+      MacHorizontalPassthroughScrollView(
+        showsHorizontalIndicator: true,
+        contentKey: displayedContent
+      ) {
         Text(displayedContent)
           .font(.system(size: 13, design: .monospaced))
           .textSelection(.enabled)
