@@ -67,31 +67,31 @@ enum MacPurchaseStore {
     PurchaseFeature(
       id: "provider-accounts",
       systemImage: "key.horizontal.fill",
-      title: "Unlimited provider accounts",
+      title: "Provider accounts",
       message: "Connect as many provider accounts as you need instead of the single free account.",
-      freeValue: "1 connection",
+      freeValue: "1",
       proValue: "Unlimited"
     ),
     PurchaseFeature(
       id: "projects",
       systemImage: "folder.fill",
-      title: "Unlimited projects",
+      title: "Projects",
       message: "Organize chats, files, prompts, models, and tools across unlimited projects.",
-      freeValue: "1 project",
+      freeValue: "1",
       proValue: "Unlimited"
     ),
     PurchaseFeature(
       id: "mcp-servers",
       systemImage: "shippingbox.fill",
-      title: "Unlimited MCP servers",
+      title: "MCP servers",
       message: "Connect unlimited remote MCP servers instead of the single free server.",
-      freeValue: "1 server",
+      freeValue: "1",
       proValue: "Unlimited"
     ),
     PurchaseFeature(
       id: "analytics-history",
       systemImage: "chart.bar.xaxis",
-      title: "Full analytics history",
+      title: "Usage analytics",
       message: "All analytics features are free for today. Pro unlocks 7-day, 30-day, monthly, and all-time history.",
       freeValue: "Today",
       proValue: "All date ranges"
@@ -99,7 +99,7 @@ enum MacPurchaseStore {
     PurchaseFeature(
       id: "chat-search",
       systemImage: "magnifyingglass",
-      title: "Full-text chat search",
+      title: "Chat search",
       message: "Search chat titles for free. Pro unlocks fast full-text search across every message and attachment name.",
       freeValue: "Titles",
       proValue: "Full-text search"
@@ -107,9 +107,9 @@ enum MacPurchaseStore {
     PurchaseFeature(
       id: "themes",
       systemImage: "paintpalette.fill",
-      title: "All themes",
-      message: "GitHub Light and GitHub Dark Dimmed are free. Pro unlocks every built-in theme.",
-      freeValue: "2 GitHub themes",
+      title: "Themes",
+      message: "Basic themes are free. Pro unlocks every built-in theme.",
+      freeValue: "Basic",
       proValue: "All themes"
     ),
   ]
@@ -238,17 +238,17 @@ enum MacProFeature: String, CaseIterable, Identifiable, Sendable {
   var title: String {
     switch self {
     case .providerAccounts:
-      "Provider Accounts"
+      "Provider accounts"
     case .projects:
       "Projects"
     case .mcpServers:
-      "MCP Servers"
+      "MCP servers"
     case .analytics:
-      "Analytics History"
+      "Usage analytics"
     case .chatSearch:
-      "Full-Text Chat Search"
+      "Chat search"
     case .themes:
-      "All Themes"
+      "Themes"
     }
   }
 
@@ -282,7 +282,7 @@ enum MacProFeature: String, CaseIterable, Identifiable, Sendable {
     case .chatSearch:
       "Search chat titles for free. Upgrade to BYOK Pro for fast full-text search across every message and attachment name in your history."
     case .themes:
-      "GitHub Light and GitHub Dark Dimmed are free. Upgrade to BYOK Pro to unlock every built-in macOS theme."
+      "Basic themes are free. Upgrade to BYOK Pro to unlock every built-in macOS theme."
     }
   }
 
@@ -306,17 +306,17 @@ enum MacProFeature: String, CaseIterable, Identifiable, Sendable {
   var freeComparisonValue: String {
     switch self {
     case .providerAccounts:
-      "1 connection"
+      "1"
     case .projects:
-      "1 project"
+      "1"
     case .mcpServers:
-      "1 server"
+      "1"
     case .analytics:
       "Today"
     case .chatSearch:
-      "Titles only"
+      "Titles"
     case .themes:
-      "2 GitHub themes"
+      "Basic"
     }
   }
 

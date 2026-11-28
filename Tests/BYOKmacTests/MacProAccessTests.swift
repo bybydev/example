@@ -214,6 +214,36 @@ struct MacProAccessTests {
     }
   }
 
+  @Test("Plan comparison rows use plain feature names and Basic for free themes")
+  func planComparisonTableCopy() {
+    let expectedTitles = [
+      "Provider accounts",
+      "Projects",
+      "MCP servers",
+      "Usage analytics",
+      "Chat search",
+      "Themes",
+    ]
+    let expectedFree = ["1", "1", "1", "Today", "Titles", "Basic"]
+    let expectedPro = [
+      "Unlimited",
+      "Unlimited",
+      "Unlimited",
+      "All date ranges",
+      "Full-text search",
+      "All themes",
+    ]
+
+    #expect(MacPurchaseStore.features.map(\.title) == expectedTitles)
+    #expect(MacPurchaseStore.features.map(\.freeValue) == expectedFree)
+    #expect(MacPurchaseStore.features.map(\.proValue) == expectedPro)
+
+    let upsellRows = MacProFeature.themes.comparisonRows
+    #expect(upsellRows.map(\.feature) == expectedTitles)
+    #expect(upsellRows.map(\.freeValue) == expectedFree)
+    #expect(upsellRows.map(\.proValue) == expectedPro)
+  }
+
   @Test("MacProGateCenter separates contextual upsell requests from paywall opens")
   func gateCenterUpsellCoordination() {
     let gate = MacProGateCenter()
