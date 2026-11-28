@@ -1271,7 +1271,7 @@ private enum MacDeveloperSeedFixtures {
           <details>
           <summary>Collapsible Disclosure · Sample Configuration Snippet</summary>
 
-          Set `transcriptFontSize` between `12pt` and `24pt` in Preferences, or use **Select Across Blocks** to drag-select continuously across text, tables, and code blocks.
+          Set `transcriptFontSize` between `12pt` and `24pt` in Preferences, or right-click any prose selection to **Copy as Markdown**.
           </details>
           """#,
           reasoning: "Include every MacCalloutKind case (.note, .tip, .important, .warning, .caution) and two <details> blocks with inline formatting and links.",
@@ -1924,11 +1924,10 @@ private enum MacDeveloperSeedFixtures {
 
           - [x] `⌘F` highlights matches across user messages, assistant prose, callouts, `<details>`, footnotes, and code blocks
           - [x] Next/Previous match (`↩` / `⇧↩`) scrolls the active occurrence smoothly into view
-          - [x] **Select Across Blocks** lets you drag across paragraphs, tables, code blocks, and footnotes in one selection
-          - [x] **Copy as Markdown** restores headings, fences, blockquotes, rules, and `[^id]` footnotes cleanly
+          - [x] **Copy as Markdown** restores headings, lists, blockquotes, rules, and `[^id]` footnotes cleanly
           - [x] `⌘+` / `⌘-` / `⌘0` rescales body text, tables, footnotes, and MathJax SVGs together
           """#,
-          reasoning: "Give concrete manual QA prompts so the developer can test ⌘F, unified selection, Copy as Markdown, and zoom directly inside this seeded thread.",
+          reasoning: "Give concrete manual QA prompts so the developer can test ⌘F, Copy as Markdown, and zoom directly inside this seeded thread.",
           reasoningDurationSeconds: 3,
           inTokens: 4_010,
           outTokens: 265,

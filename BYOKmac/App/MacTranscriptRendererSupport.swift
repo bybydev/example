@@ -738,7 +738,6 @@ enum MacSelectableMarkdownBuilder {
     let mutedColor: NSColor
     let accentColor: NSColor
     let codeBackgroundColor: NSColor
-    let codeBlockBackgroundColor: NSColor
     let separatorColor: NSColor
     let findQuery: String
     let activeFindOccurrence: Int?
@@ -812,62 +811,14 @@ enum MacSelectableMarkdownBuilder {
     return true
   }
 
-  /// Renders a Markdown string (or full multi-block assistant message including
-  /// fenced code blocks and tables) into an `NSAttributedString` with attached
+  /// Renders a prose Markdown segment into an `NSAttributedString` with attached
   /// source Markdown ranges so users can copy any selection as Markdown.
   @MainActor
   static func attributedString(
     for source: String,
-    includeStructuredBlocks: Bool,
     style: Style
   ) -> NSAttributedString {
-    let result = NSMutableAttributedString()
-
-    if includeStructuredBlocks {
-      let blocks = MacAnswerContentParser.parse(source)
-      for (index, block) in blocks.enumerated() {
-        if index > 0 {
-          result.append(NSAttributedString(string: "\n\n"))
-        }
-        switch block {
-        case .markdown(let md):
-          result.append(renderMarkdownBlock(md, style: style))
-        case .code(let language, let content, _):
-          let fenceHeader = language.map { "```\($0)\n" } ?? "```\n"
-          let rawMarkdown = "\(fenceHeader)\(content)\n```"
-          result.append(renderCodeBlock(language: language, content: content, rawMarkdown: rawMarkdown, style: style))
-        case .math(let expression, _):
-          let rawMarkdown = "$$\n\(expression)\n$$"
-          result.append(renderCodeBlock(language: "math", content: expression, rawMarkdown: rawMarkdown, style: style))
-        case .table(let table):
-          result.append(renderTableBlock(table, style: style))
-        case .callout(let kind, let body):
-          let prefix = "> [!\(kind.rawValue.uppercased())]\n"
-          let rendered = renderMarkdownBlock("**\(kind.title)**\n\n\(body)", style: style)
-          let mutable = NSMutableAttributedString(attributedString: rendered)
-          let rawLines = body.components(separatedBy: .newlines).map { "> \($0)" }.joined(separator: "\n")
-          mutable.addAttribute(
-            markdownSourceAttributeKey,
-            value: prefix + rawLines,
-            range: NSRange(location: 0, length: mutable.length)
-          )
-          result.append(mutable)
-        case .details(let summary, let body, _):
-          let rendered = renderMarkdownBlock("**\(summary)**\n\n\(body)", style: style)
-          let mutable = NSMutableAttributedString(attributedString: rendered)
-          mutable.addAttribute(
-            markdownSourceAttributeKey,
-            value: "<details>\n<summary>\(summary)</summary>\n\n\(body)\n</details>",
-            range: NSRange(location: 0, length: mutable.length)
-          )
-          result.append(mutable)
-        case .footnotes(let footnotes):
-          result.append(renderFootnotesBlock(footnotes, style: style))
-        }
-      }
-    } else {
-      result.append(renderMarkdownBlock(source, style: style))
-    }
+    let result = NSMutableAttributedString(attributedString: renderMarkdownBlock(source, style: style))
 
     if !style.findQuery.isEmpty {
       MacTranscriptFindSupport.applyNSColorHighlights(
@@ -1404,157 +1355,6 @@ enum MacSelectableMarkdownBuilder {
         .paragraphStyle: paragraphStyle,
       ]
     )
-  }
-
-  private static func renderCodeBlock(
-    language: String?,
-    content: String,
-    rawMarkdown: String,
-    style: Style
-  ) -> NSAttributedString {
-    let codeFont = NSFont.monospacedSystemFont(ofSize: max(11, style.textSize - 2), weight: .regular)
-    let para = NSMutableParagraphStyle()
-    para.firstLineHeadIndent = 10
-    para.headIndent = 10
-    para.lineSpacing = 3
-    para.paragraphSpacing = 6
-
-    let output = NSMutableAttributedString()
-    if let language, !language.isEmpty {
-      let header = NSAttributedString(
-        string: language.uppercased() + "\n",
-        attributes: [
-          .font: NSFont.monospacedSystemFont(ofSize: max(9.5, style.textSize - 4), weight: .semibold),
-          .foregroundColor: style.mutedColor,
-          .paragraphStyle: para,
-        ]
-      )
-      output.append(header)
-    }
-    output.append(
-      NSAttributedString(
-        string: content,
-        attributes: [
-          .font: codeFont,
-          .foregroundColor: style.textColor,
-          .backgroundColor: style.codeBlockBackgroundColor,
-          .paragraphStyle: para,
-        ]
-      )
-    )
-    output.addAttribute(
-      markdownSourceAttributeKey,
-      value: rawMarkdown,
-      range: NSRange(location: 0, length: output.length)
-    )
-    return output
-  }
-
-  private static func renderTableBlock(
-    _ table: MacParsedMarkdownTable,
-    style: Style
-  ) -> NSAttributedString {
-    let monoFont = NSFont.monospacedSystemFont(ofSize: max(11, style.textSize - 2), weight: .regular)
-    let headerFont = NSFont.monospacedSystemFont(ofSize: max(11, style.textSize - 2), weight: .semibold)
-    let para = NSMutableParagraphStyle()
-    para.lineSpacing = 3
-    para.paragraphSpacing = 4
-
-    let output = NSMutableAttributedString()
-    let headerLine = table.headers.map(MacAnswerContentParser.plainTableCellText).joined(separator: "  |  ")
-    output.append(
-      NSAttributedString(
-        string: headerLine,
-        attributes: [
-          .font: headerFont,
-          .foregroundColor: style.textColor,
-          .paragraphStyle: para,
-        ]
-      )
-    )
-    for row in table.rows {
-      let line = "\n" + row.map(MacAnswerContentParser.plainTableCellText).joined(separator: "  |  ")
-      output.append(
-        NSAttributedString(
-          string: line,
-          attributes: [
-            .font: monoFont,
-            .foregroundColor: style.textColor,
-            .paragraphStyle: para,
-          ]
-        )
-      )
-    }
-    output.addAttribute(
-      markdownSourceAttributeKey,
-      value: table.markdownText,
-      range: NSRange(location: 0, length: output.length)
-    )
-    return output
-  }
-
-  @MainActor
-  private static func renderFootnotesBlock(
-    _ footnotes: [MacParsedFootnote],
-    style: Style
-  ) -> NSAttributedString {
-    let noteFontSize = max(11.5, style.textSize - 2)
-    let markerFont = NSFont.monospacedDigitSystemFont(ofSize: noteFontSize, weight: .semibold)
-    let maxMarkerWidth = footnotes.reduce(CGFloat(0)) { current, note in
-      let w = ceil(("\(note.label)." as NSString).size(withAttributes: [.font: markerFont]).width)
-      return max(current, w)
-    }
-    let textStart = max(round(noteFontSize * 1.6), maxMarkerWidth + round(noteFontSize * 0.5))
-
-    let output = NSMutableAttributedString()
-    for (offset, footnote) in footnotes.enumerated() {
-      let isLast = offset == footnotes.count - 1
-      let para = NSMutableParagraphStyle()
-      para.firstLineHeadIndent = 0
-      para.headIndent = textStart
-      para.tabStops = [NSTextTab(textAlignment: .left, location: textStart)]
-      para.lineSpacing = noteFontSize * 0.28
-      para.paragraphSpacing = isLast ? 0 : noteFontSize * 0.35
-
-      let marker = NSAttributedString(
-        string: "\(footnote.label).\t",
-        attributes: [
-          .font: markerFont,
-          .foregroundColor: style.muted ? style.mutedColor : style.accentColor,
-          .paragraphStyle: para,
-        ]
-      )
-      output.append(marker)
-      output.append(
-        renderInlineMarkdown(
-          footnote.body,
-          fontSize: noteFontSize,
-          fontWeight: .regular,
-          foregroundColor: style.mutedColor,
-          style: style,
-          paragraphStyle: para,
-          rawSource: footnote.rawMarkdown
-        )
-      )
-      if !isLast {
-        output.append(
-          NSAttributedString(
-            string: "\n",
-            attributes: [
-              .font: NSFont.systemFont(ofSize: noteFontSize, weight: .regular),
-              .paragraphStyle: para,
-            ]
-          )
-        )
-      }
-    }
-
-    output.addAttribute(
-      markdownSourceAttributeKey,
-      value: footnotes.map(\.rawMarkdown).joined(separator: "\n\n"),
-      range: NSRange(location: 0, length: output.length)
-    )
-    return output
   }
 
   @MainActor
@@ -2208,7 +2008,6 @@ final class MacSelectableTextContainerPool {
 @MainActor
 struct MacSelectableMarkdownTextView: NSViewRepresentable {
   let source: String
-  var includeStructuredBlocks: Bool = false
   var textSize: CGFloat = 15
   var muted: Bool = false
   var findQuery: String = ""
@@ -2221,7 +2020,6 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
   private var renderKey: RenderKey {
     RenderKey(
       source: source,
-      includeStructuredBlocks: includeStructuredBlocks,
       fontSizeTenths: Int((textSize * 10).rounded()),
       muted: muted,
       isDark: colorScheme == .dark,
@@ -2233,7 +2031,6 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
 
   private struct RenderKey: Hashable {
     let source: String
-    let includeStructuredBlocks: Bool
     let fontSizeTenths: Int
     let muted: Bool
     let isDark: Bool
@@ -2307,7 +2104,6 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
       mutedColor: NSColor(theme.textMuted),
       accentColor: NSColor(theme.accent),
       codeBackgroundColor: NSColor(theme.textPrimary.opacity(colorScheme == .dark ? 0.095 : 0.065)),
-      codeBlockBackgroundColor: NSColor(theme.codeSurface),
       separatorColor: NSColor(theme.separator.opacity(0.70)),
       findQuery: findQuery,
       activeFindOccurrence: activeFindOccurrence
@@ -2319,7 +2115,6 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
     } else {
       let attributed = MacSelectableMarkdownBuilder.attributedString(
         for: source,
-        includeStructuredBlocks: includeStructuredBlocks,
         style: style
       )
       entry = MacSelectableMarkdownRenderCache.makeEntry(from: attributed)

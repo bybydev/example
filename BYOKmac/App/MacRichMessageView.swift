@@ -12,8 +12,6 @@ struct MacRichMessageView: View {
   let storedMessage: ChatMessage
   let failureContext: String?
   let isLatestAssistant: Bool
-  var isUnifiedSelectionMode: Bool = false
-  var onExitUnifiedSelection: (() -> Void)? = nil
   let onShowDetails: (ChatMessage) -> Void
   let onEditMessage: (ChatMessage) -> Void
   let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
@@ -36,8 +34,6 @@ struct MacRichMessageView: View {
     message: ChatMessage,
     failureContext: String? = nil,
     isLatestAssistant: Bool = false,
-    isUnifiedSelectionMode: Bool = false,
-    onExitUnifiedSelection: (() -> Void)? = nil,
     onShowDetails: @escaping (ChatMessage) -> Void,
     onEditMessage: @escaping (ChatMessage) -> Void,
     onPreviewAttachment: @escaping (ChatAttachment, ChatMessage) -> Void,
@@ -50,8 +46,6 @@ struct MacRichMessageView: View {
     storedMessage = message
     self.failureContext = failureContext
     self.isLatestAssistant = isLatestAssistant
-    self.isUnifiedSelectionMode = isUnifiedSelectionMode
-    self.onExitUnifiedSelection = onExitUnifiedSelection
     self.onShowDetails = onShowDetails
     self.onEditMessage = onEditMessage
     self.onPreviewAttachment = onPreviewAttachment
@@ -235,41 +229,6 @@ struct MacRichMessageView: View {
               .lineSpacing(transcriptFontSize * 0.32)
               .textSelection(.enabled)
               .fixedSize(horizontal: false, vertical: true)
-          }
-        } else if isUnifiedSelectionMode {
-          VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-              Image(systemName: "selection.pin.in.out")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(theme.accent)
-              Text("Unified selection · Right-click to Copy as Markdown")
-                .font(.caption)
-                .foregroundStyle(theme.textMuted)
-              Spacer(minLength: 8)
-              if let onExitUnifiedSelection {
-                Button("Done") {
-                  onExitUnifiedSelection()
-                }
-                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous))
-            .overlay {
-              RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small, style: .continuous)
-                .stroke(theme.separator.opacity(0.8), lineWidth: 0.75)
-            }
-
-            MacSelectableMarkdownTextView(
-              source: renderedMarkdown,
-              includeStructuredBlocks: true,
-              textSize: transcriptFontSize,
-              muted: false,
-              findQuery: findContext.query,
-              activeFindOccurrence: activeFindOccurrenceForMessage
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
           }
         } else {
           MacMarkdownMessageContent(

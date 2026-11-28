@@ -127,7 +127,7 @@ struct MacTranscriptRendererSupportTests {
     #expect(annotated.contains("[1](https://swift.org/concurrency)"))
   }
 
-  @Test("Cross-block selectable Markdown builds attributed document and extracts Copy as Markdown")
+  @Test("Selectable Markdown builds attributed document and extracts Copy as Markdown")
   @MainActor
   func selectableMarkdownBuilderAndCopyAsMarkdown() {
     let markdown = """
@@ -135,9 +135,8 @@ struct MacTranscriptRendererSupportTests {
 
     First paragraph with **bold** and `inline`.
 
-    ```swift
-    let x = 1
-    ```
+    - First item
+    - Second item
     """
     #expect(MacSelectableMarkdownBuilder.canRenderNatively("## Overview\n\nSimple text."))
     #expect(!MacSelectableMarkdownBuilder.canRenderNatively("![img](https://example.com/a.png)"))
@@ -152,18 +151,16 @@ struct MacTranscriptRendererSupportTests {
       mutedColor: .secondaryLabelColor,
       accentColor: .controlAccentColor,
       codeBackgroundColor: .quaternaryLabelColor,
-      codeBlockBackgroundColor: .textBackgroundColor,
       separatorColor: .separatorColor,
       findQuery: "bold",
       activeFindOccurrence: 0
     )
     let attributed = MacSelectableMarkdownBuilder.attributedString(
       for: markdown,
-      includeStructuredBlocks: true,
       style: style
     )
     #expect(attributed.string.contains("Overview"))
-    #expect(attributed.string.contains("let x = 1"))
+    #expect(attributed.string.contains("First item"))
 
     let fullRange = NSRange(location: 0, length: attributed.length)
     let copiedMarkdown = MacSelectableMarkdownBuilder.markdownSnippet(
@@ -171,7 +168,7 @@ struct MacTranscriptRendererSupportTests {
       selectedRange: fullRange
     )
     #expect(copiedMarkdown.contains("## Overview"))
-    #expect(copiedMarkdown.contains("```swift"))
+    #expect(copiedMarkdown.contains("- First item"))
   }
 
   @Test("Streaming tail formatter preserves inline styles inside headings and renders nested bullets")
@@ -231,7 +228,6 @@ struct MacTranscriptRendererSupportTests {
       mutedColor: .secondaryLabelColor,
       accentColor: .controlAccentColor,
       codeBackgroundColor: .quaternaryLabelColor,
-      codeBlockBackgroundColor: .textBackgroundColor,
       separatorColor: .separatorColor,
       findQuery: "",
       activeFindOccurrence: nil
@@ -239,7 +235,6 @@ struct MacTranscriptRendererSupportTests {
 
     let attributed = MacSelectableMarkdownBuilder.attributedString(
       for: markdown,
-      includeStructuredBlocks: false,
       style: style
     )
     let text = attributed.string
@@ -499,16 +494,11 @@ struct MacTranscriptRendererSupportTests {
   @Test("Inline footnote references render as raised superscripts outside code and preserve raw Markdown on copy")
   @MainActor
   func inlineFootnoteSuperscriptStylingAndCopyAsMarkdown() {
-    let source = """
-    See Descript[^1] and CapCut[^note], but keep `[^2]` literal.
-
-    [^1]: Descript: https://www.descript.com/
-    [^note]: CapCut: https://www.capcut.com/
-    """
+    let prose = "See Descript[^1] and CapCut[^note], but keep `[^2]` literal."
 
     // Streaming tail path
     let tailFormatted = MacStreamingTailFormatter.formattedAttributedString(
-      "See Descript[^1] and CapCut[^note], but keep `[^2]` literal.",
+      prose,
       textSize: 15,
       foregroundColor: .primary,
       mutedColor: .secondary,
@@ -527,7 +517,7 @@ struct MacTranscriptRendererSupportTests {
     }
     #expect((supRun?.baselineOffset ?? 0) > 0)
 
-    // Completed selectable Markdown path (including structured footnote block)
+    // Completed selectable Markdown prose path
     let style = MacSelectableMarkdownBuilder.Style(
       textSize: 15,
       muted: false,
@@ -537,21 +527,20 @@ struct MacTranscriptRendererSupportTests {
       mutedColor: .secondaryLabelColor,
       accentColor: .controlAccentColor,
       codeBackgroundColor: .quaternaryLabelColor,
-      codeBlockBackgroundColor: .textBackgroundColor,
       separatorColor: .separatorColor,
       findQuery: "",
       activeFindOccurrence: nil
     )
     let attributed = MacSelectableMarkdownBuilder.attributedString(
-      for: source,
-      includeStructuredBlocks: true,
+      for: prose,
       style: style
     )
     let nsText = attributed.string as NSString
     #expect(!attributed.string.contains("[^1]"))
+    #expect(!attributed.string.contains("[^note]"))
+    #expect(attributed.string.contains("\u{2009}1"))
+    #expect(attributed.string.contains("\u{2009}note"))
     #expect(attributed.string.contains("[^2]"))
-    #expect(attributed.string.contains("1.\tDescript:"))
-    #expect(attributed.string.contains("note.\tCapCut:"))
 
     let supRange = nsText.range(of: "\u{2009}1")
     #expect(supRange.location != NSNotFound)
@@ -563,8 +552,7 @@ struct MacTranscriptRendererSupportTests {
       selectedRange: NSRange(location: 0, length: attributed.length)
     )
     #expect(copied.contains("See Descript[^1]"))
-    #expect(copied.contains("[^1]: Descript: https://www.descript.com/"))
-    #expect(copied.contains("[^note]: CapCut: https://www.capcut.com/"))
+    #expect(copied.contains("`[^2]`"))
   }
 
   @Test("List bullets normalize 4-space nesting cleanly and render bolder/larger at primary-tinted contrast")
@@ -603,14 +591,12 @@ struct MacTranscriptRendererSupportTests {
       mutedColor: .gray,
       accentColor: .controlAccentColor,
       codeBackgroundColor: .quaternaryLabelColor,
-      codeBlockBackgroundColor: .textBackgroundColor,
       separatorColor: .separatorColor,
       findQuery: "",
       activeFindOccurrence: nil
     )
     let attributed = MacSelectableMarkdownBuilder.attributedString(
       for: markdown,
-      includeStructuredBlocks: false,
       style: style
     )
     let text = attributed.string
@@ -631,7 +617,6 @@ struct MacTranscriptRendererSupportTests {
     let orderedMarkdown = (1...10).map { "\($0). Step \($0)" }.joined(separator: "\n")
     let orderedAttr = MacSelectableMarkdownBuilder.attributedString(
       for: orderedMarkdown,
-      includeStructuredBlocks: false,
       style: style
     )
     let orderedText = orderedAttr.string as NSString
@@ -733,7 +718,6 @@ struct MacTranscriptRendererSupportTests {
       mutedColor: .secondaryLabelColor,
       accentColor: .controlAccentColor,
       codeBackgroundColor: .quaternaryLabelColor,
-      codeBlockBackgroundColor: .textBackgroundColor,
       separatorColor: .separatorColor,
       findQuery: "",
       activeFindOccurrence: nil
@@ -744,7 +728,6 @@ struct MacTranscriptRendererSupportTests {
     let entryA = MacSelectableMarkdownRenderCache.makeEntry(
       from: MacSelectableMarkdownBuilder.attributedString(
         for: "Hello **world** with `code`.",
-        includeStructuredBlocks: false,
         style: style
       )
     )

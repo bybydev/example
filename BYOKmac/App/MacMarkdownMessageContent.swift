@@ -262,7 +262,6 @@ struct MacMarkdownMessageContent: View {
     } else if !isStreaming, MacSelectableMarkdownBuilder.canRenderNatively(segment.text) {
       MacSelectableMarkdownTextView(
         source: segment.text,
-        includeStructuredBlocks: false,
         textSize: textSize,
         muted: muted,
         findQuery: findQuery,

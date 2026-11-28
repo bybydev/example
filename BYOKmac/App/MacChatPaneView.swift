@@ -3441,7 +3441,6 @@ private struct MacTranscriptMessageRow: View {
 
   @Environment(\.macTranscriptFind) private var findContext
   @Environment(\.macAppTheme) private var theme
-  @State private var isUnifiedSelectionMode = false
 
   private var isActiveFindMessage: Bool {
     findContext.isActive && findContext.activeMessageID == message.id
@@ -3473,8 +3472,6 @@ private struct MacTranscriptMessageRow: View {
             message: message,
             failureContext: failureContext,
             isLatestAssistant: isLatestAssistant,
-            isUnifiedSelectionMode: isUnifiedSelectionMode,
-            onExitUnifiedSelection: { isUnifiedSelectionMode = false },
             onShowDetails: onShowDetails,
             onEditMessage: onEditMessage,
             onPreviewAttachment: onPreviewAttachment,
@@ -3489,8 +3486,6 @@ private struct MacTranscriptMessageRow: View {
               isLatestAssistant: isLatestAssistant,
               includeRetry: true,
               hideEmptyContentActions: message.status == .failed,
-              isUnifiedSelectionMode: isUnifiedSelectionMode,
-              onToggleUnifiedSelection: { isUnifiedSelectionMode.toggle() },
               onShowDetails: { onShowDetails(message) },
               onSaveImages: onSaveImages,
               onRequestRegenerate: onRequestRegenerate
@@ -3507,9 +3502,6 @@ private struct MacTranscriptMessageRow: View {
           .frame(width: 3)
           .padding(.vertical, 2)
       }
-    }
-    .onChange(of: message.id) { _, _ in
-      isUnifiedSelectionMode = false
     }
   }
 }
@@ -3818,8 +3810,6 @@ private struct MacAssistantMessageActions: View {
   let isLatestAssistant: Bool
   var includeRetry: Bool = true
   var hideEmptyContentActions: Bool = false
-  var isUnifiedSelectionMode: Bool = false
-  var onToggleUnifiedSelection: (() -> Void)? = nil
   let onShowDetails: () -> Void
   let onSaveImages: ([MacResponseImageCandidate]) -> Void
   let onRequestRegenerate: () -> Void
@@ -3874,16 +3864,6 @@ private struct MacAssistantMessageActions: View {
       structuredCitations: message.citations,
       extractedSources: textSources
     )
-  }
-
-  private var hasStructuredBlocks: Bool {
-    guard let blocks = preparedAnswer?.blocks else { return false }
-    return blocks.contains { block in
-      switch block {
-      case .code, .table, .math, .callout, .details, .footnotes: true
-      case .markdown: false
-      }
-    }
   }
 
   private var hasSavableImages: Bool {
@@ -3988,26 +3968,11 @@ private struct MacAssistantMessageActions: View {
     let hasSaveAttachments = conversationID != nil && !attachments.isEmpty
     let hasSaveResponse = conversationID != nil && showContentActions && hasCopyableContent
     let hasExportOrShare = showContentActions && hasCopyableContent
-    let canToggleUnifiedSelection =
-      onToggleUnifiedSelection != nil
-      && showContentActions
-      && hasCopyableContent
-      && (hasStructuredBlocks || isUnifiedSelectionMode)
     let hasTopSection =
-      hasReasoning || canToggleUnifiedSelection || hasSavableImages
+      hasReasoning || hasSavableImages
       || hasSaveResponse || hasSaveAttachments || hasExportOrShare
 
     return MacThemedActionPopoverContainer {
-      if canToggleUnifiedSelection, let onToggleUnifiedSelection {
-        MacThemedPopoverActionRow(
-          title: isUnifiedSelectionMode ? "Exit Unified Selection" : "Select Across Blocks",
-          systemImage: "selection.pin.in.out"
-        ) {
-          showingMorePopover = false
-          onToggleUnifiedSelection()
-        }
-      }
-
       if hasReasoning {
         MacThemedPopoverActionRow(
           title: "Copy Reasoning",
