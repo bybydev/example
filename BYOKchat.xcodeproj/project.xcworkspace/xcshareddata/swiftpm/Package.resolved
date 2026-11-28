@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hoangbkit/MacAppFoundation",
       "state" : {
-        "revision" : "9641f5f09f3a984dab455e8821a863c31c632db0",
-        "version" : "1.8.0"
+        "revision" : "ca64ad7cd399bcaa5d2770be12b6dcab85b80877",
+        "version" : "1.9.0"
       }
     },
     {
