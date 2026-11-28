@@ -342,7 +342,7 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? {
     if !allowsContentHitTesting {
       guard !isHiddenOrHasHiddenAncestor, alphaValue > 0.01 else { return nil }
-      let isInside = superview?.mouse(point, in: frame) ?? frame.contains(point)
+      let isInside = superview?.isMousePoint(point, in: frame) ?? frame.contains(point)
       return isInside ? self : nil
     }
     return super.hitTest(point)
