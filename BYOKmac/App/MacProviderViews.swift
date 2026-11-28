@@ -142,34 +142,94 @@ nonisolated enum MacComposerModelPickerSupport: Sendable {
     let searchKey: String
     let isFavorite: Bool
     let isManual: Bool
+    let isHidden: Bool
     let isAvailable: Bool
+    let contextLabel: String?
     let supportsVision: Bool
+    let supportsFiles: Bool
+    let supportsReasoning: Bool
+    let supportsTools: Bool
+
+    var hasMetadataLine: Bool {
+      !isAvailable || contextLabel != nil || supportsVision || supportsFiles || supportsReasoning
+        || supportsTools
+    }
   }
 
-  static func makeRows(from records: [AccountModelRecord]) -> [RowItem] {
+  static func makeRow(
+    from record: AccountModelRecord,
+    capabilities: ResolvedModelCapabilities? = nil
+  ) -> RowItem {
+    let modelID = record.model.id
+    let rawName = record.model.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let displayName = rawName.isEmpty ? modelID.rawValue : rawName
+    let subtitleID =
+      displayName.caseInsensitiveCompare(modelID.rawValue) == .orderedSame
+      ? nil
+      : modelID.rawValue
+    let searchKey = "\(displayName) \(modelID.rawValue)".lowercased()
+    let contextWindow = capabilities?.contextWindow ?? record.model.contextWindow
+    let contextLabel = contextWindow.map {
+      "\($0.formatted(.number.notation(.compactName))) ctx"
+    }
+    let supportsVision =
+      capabilities?[.imageInput] == .supported
+      || record.model.inputModalities.contains("image")
+    let supportsFiles =
+      capabilities?[.fileInput] == .supported
+      || record.model.inputModalities.contains("file")
+    let supportsReasoning = capabilities?[.reasoning] == .supported
+    let supportsTools = capabilities?[.tools] == .supported
+
+    return RowItem(
+      id: modelID,
+      displayName: displayName,
+      subtitleID: subtitleID,
+      searchKey: searchKey,
+      isFavorite: record.isFavorite,
+      isManual: record.isManual,
+      isHidden: record.isHidden,
+      isAvailable: record.isAvailable,
+      contextLabel: contextLabel,
+      supportsVision: supportsVision,
+      supportsFiles: supportsFiles,
+      supportsReasoning: supportsReasoning,
+      supportsTools: supportsTools
+    )
+  }
+
+  static func makeUnlistedRow(
+    modelID: ModelID,
+    capabilities: ResolvedModelCapabilities? = nil
+  ) -> RowItem {
+    let contextLabel = capabilities?.contextWindow.map {
+      "\($0.formatted(.number.notation(.compactName))) ctx"
+    }
+    return RowItem(
+      id: modelID,
+      displayName: modelID.rawValue,
+      subtitleID: nil,
+      searchKey: modelID.rawValue.lowercased(),
+      isFavorite: false,
+      isManual: false,
+      isHidden: false,
+      isAvailable: false,
+      contextLabel: contextLabel,
+      supportsVision: capabilities?[.imageInput] == .supported,
+      supportsFiles: capabilities?[.fileInput] == .supported,
+      supportsReasoning: capabilities?[.reasoning] == .supported,
+      supportsTools: capabilities?[.tools] == .supported
+    )
+  }
+
+  static func makeRows(
+    from records: [AccountModelRecord],
+    capabilitiesFor: ((AccountModelRecord) -> ResolvedModelCapabilities)? = nil
+  ) -> [RowItem] {
     var rows: [RowItem] = []
     rows.reserveCapacity(records.count)
     for record in records {
-      let modelID = record.model.id
-      let rawName = record.model.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-      let displayName = rawName.isEmpty ? modelID.rawValue : rawName
-      let subtitleID =
-        displayName.caseInsensitiveCompare(modelID.rawValue) == .orderedSame
-        ? nil
-        : modelID.rawValue
-      let searchKey = "\(displayName) \(modelID.rawValue)".lowercased()
-      rows.append(
-        RowItem(
-          id: modelID,
-          displayName: displayName,
-          subtitleID: subtitleID,
-          searchKey: searchKey,
-          isFavorite: record.isFavorite,
-          isManual: record.isManual,
-          isAvailable: record.isAvailable,
-          supportsVision: record.model.inputModalities.contains("image")
-        )
-      )
+      rows.append(makeRow(from: record, capabilities: capabilitiesFor?(record)))
     }
     return rows
   }
@@ -205,7 +265,6 @@ struct MacComposerModelPopover: View {
   let manageProviders: () -> Void
   let onCommit: (MacChatTarget) async -> Bool
 
-  @Environment(\.dismiss) private var dismiss
   @State private var accountID: ProviderAccountID?
   @State private var activeAccountID: ProviderAccountID?
   @State private var activeModelID: ModelID?
@@ -253,8 +312,10 @@ struct MacComposerModelPopover: View {
       seedModelID = nil
     }
 
-    let initialRows = seedAccountID.map {
-      MacComposerModelPickerSupport.makeRows(from: providers.models(for: $0))
+    let initialRows = seedAccountID.map { id in
+      MacComposerModelPickerSupport.makeRows(from: providers.models(for: id)) { record in
+        providers.capabilities(accountID: id, modelID: record.model.id)
+      }
     } ?? []
     let control: ModelReasoningControl
     if let seedAccountID, let seedModelID {
@@ -395,22 +456,32 @@ struct MacComposerModelPopover: View {
   }
 
   private var providerStrip: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 6) {
-        ForEach(cachedAccounts) { account in
-          let isSelected = account.id == accountID
-          let ready = providers.isReady(account)
-          MacComposerProviderChip(
-            account: account,
-            isSelected: isSelected,
-            isReady: ready
-          ) {
-            selectAccount(account.id)
+    ScrollViewReader { proxy in
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 6) {
+          ForEach(cachedAccounts) { account in
+            let isSelected = account.id == accountID
+            let isActiveTarget = account.id == activeAccountID
+            let ready = providers.isReady(account)
+            MacComposerProviderChip(
+              account: account,
+              isSelected: isSelected,
+              isActiveTarget: isActiveTarget,
+              isReady: ready
+            ) {
+              selectAccount(account.id)
+            }
+            .id(account.id)
           }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 8)
+      .onAppear {
+        if let accountID {
+          proxy.scrollTo(accountID, anchor: .center)
+        }
+      }
     }
     .background(MacDesignTokens.Colors.surface.opacity(0.6))
   }
@@ -444,6 +515,7 @@ struct MacComposerModelPopover: View {
           .font(.system(size: 12.5))
           .focused($searchFocused)
           .onSubmit {
+            guard !trimmedQuery.isEmpty else { return }
             if let firstAvailable = filteredRows.first(where: \.isAvailable) {
               selectModel(firstAvailable.id)
             }
@@ -565,8 +637,28 @@ struct MacComposerModelPopover: View {
     .background(Color.orange.opacity(0.10))
   }
 
+  private var unlistedActiveRow: MacComposerModelPickerSupport.RowItem? {
+    guard trimmedQuery.isEmpty,
+      let accountID,
+      accountID == activeAccountID,
+      let activeModelID,
+      !filteredRows.contains(where: { $0.id == activeModelID })
+    else { return nil }
+    let capabilities = providers.capabilities(accountID: accountID, modelID: activeModelID)
+    if let hiddenRecord = providers.models(for: accountID, includeHidden: true)
+      .first(where: { $0.model.id == activeModelID })
+    {
+      return MacComposerModelPickerSupport.makeRow(from: hiddenRecord, capabilities: capabilities)
+    }
+    return MacComposerModelPickerSupport.makeUnlistedRow(
+      modelID: activeModelID,
+      capabilities: capabilities
+    )
+  }
+
   @ViewBuilder
   private var modelList: some View {
+    let pinnedCurrent = unlistedActiveRow
     if selectedAccount == nil {
       ContentUnavailableView {
         Label("No Enabled Providers", systemImage: "sparkles")
@@ -577,7 +669,7 @@ struct MacComposerModelPopover: View {
           .buttonStyle(MacActionButtonStyle(.primary, size: .small))
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-    } else if filteredRows.isEmpty {
+    } else if filteredRows.isEmpty && pinnedCurrent == nil {
       ContentUnavailableView {
         Label(
           trimmedQuery.isEmpty ? "No Models" : "No Matching Models",
@@ -607,42 +699,35 @@ struct MacComposerModelPopover: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
-      let partitioned = MacComposerModelPickerSupport.partitionRows(
-        filteredRows,
-        hasQuery: !trimmedQuery.isEmpty
-      )
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 2) {
-          if !partitioned.favorites.isEmpty {
-            sectionHeader("Favorites")
-            ForEach(partitioned.favorites) { row in
+      ScrollViewReader { proxy in
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 2) {
+            if let pinnedCurrent {
+              modelRowView(pinnedCurrent)
+                .id(pinnedCurrent.id)
+            }
+
+            ForEach(filteredRows) { row in
               modelRowView(row)
-            }
-            if !partitioned.others.isEmpty {
-              sectionHeader("All Models")
-                .padding(.top, 6)
+                .id(row.id)
             }
           }
-
-          ForEach(partitioned.others) { row in
-            modelRowView(row)
-          }
+          .padding(.horizontal, 6)
+          .padding(.vertical, 6)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: accountID) {
+          guard trimmedQuery.isEmpty,
+            let accountID,
+            accountID == activeAccountID,
+            let activeModelID
+          else { return }
+          await Task.yield()
+          guard !Task.isCancelled else { return }
+          proxy.scrollTo(activeModelID, anchor: .center)
+        }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-  }
-
-  private func sectionHeader(_ title: String) -> some View {
-    Text(title.uppercased())
-      .font(.system(size: 10, weight: .semibold))
-      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      .tracking(0.4)
-      .padding(.horizontal, 8)
-      .padding(.top, 2)
-      .padding(.bottom, 2)
   }
 
   private func modelRowView(_ row: MacComposerModelPickerSupport.RowItem) -> some View {
@@ -650,7 +735,7 @@ struct MacComposerModelPopover: View {
     return MacComposerModelRow(
       row: row,
       isSelected: isCurrent,
-      isDisabled: !row.isAvailable || !canSelectFromCurrentAccount || isSaving
+      isDisabled: (!row.isAvailable && !isCurrent) || !canSelectFromCurrentAccount || isSaving
     ) {
       selectModel(row.id)
     }
@@ -790,7 +875,10 @@ struct MacComposerModelPopover: View {
       filteredRows = []
       return
     }
-    let rows = MacComposerModelPickerSupport.makeRows(from: providers.models(for: accountID))
+    let rows = MacComposerModelPickerSupport.makeRows(from: providers.models(for: accountID)) {
+      record in
+      providers.capabilities(accountID: accountID, modelID: record.model.id)
+    }
     cachedRows = rows
     filteredRows = MacComposerModelPickerSupport.filterRows(rows, query: searchText)
   }
@@ -808,6 +896,9 @@ struct MacComposerModelPopover: View {
 
   private func selectModel(_ modelID: ModelID) {
     guard let accountID, canSelectFromCurrentAccount, !isSaving else { return }
+    if accountID == activeAccountID && modelID == activeModelID {
+      return
+    }
     let control = providers.capabilities(accountID: accountID, modelID: modelID).reasoning
     let normalized = control.normalize(reasoning)
     let target = MacChatTarget(
@@ -823,7 +914,7 @@ struct MacComposerModelPopover: View {
         activeAccountID = accountID
         activeModelID = modelID
         reasoning = normalized
-        dismiss()
+        statusMessage = "Model updated"
       } else {
         errorMessage = "Could not switch to this model."
       }
@@ -849,7 +940,8 @@ struct MacComposerModelPopover: View {
           reasoning = normalized
           manualModelDraft = ""
           showingManualEntry = false
-          dismiss()
+          rebuildAccountRows()
+          statusMessage = "Model updated"
         } else {
           errorMessage = "Could not switch to \"\(trimmed)\"."
         }
@@ -919,6 +1011,7 @@ struct MacComposerModelPopover: View {
 private struct MacComposerProviderChip: View {
   let account: ProviderAccount
   let isSelected: Bool
+  let isActiveTarget: Bool
   let isReady: Bool
   let action: () -> Void
 
@@ -937,6 +1030,10 @@ private struct MacComposerProviderChip: View {
         if !isReady {
           Circle()
             .fill(Color.orange)
+            .frame(width: 5, height: 5)
+        } else if isActiveTarget && !isSelected {
+          Circle()
+            .fill(MacDesignTokens.Colors.accent)
             .frame(width: 5, height: 5)
         }
       }
@@ -975,7 +1072,7 @@ private struct MacComposerModelRow: View {
   var body: some View {
     Button(action: action) {
       HStack(spacing: 8) {
-        VStack(alignment: .leading, spacing: 1.5) {
+        VStack(alignment: .leading, spacing: 2.5) {
           HStack(spacing: 5) {
             Text(row.displayName)
               .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
@@ -996,6 +1093,15 @@ private struct MacComposerModelRow: View {
                 .padding(.vertical, 1)
                 .background(MacDesignTokens.Colors.accentSoft, in: Capsule())
             }
+
+            if row.isHidden {
+              Text("Hidden")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+            }
           }
 
           if let subtitleID = row.subtitleID {
@@ -1005,16 +1111,57 @@ private struct MacComposerModelRow: View {
               .lineLimit(1)
               .truncationMode(.middle)
           }
+
+          if row.hasMetadataLine {
+            HStack(spacing: 6) {
+              if !row.isAvailable {
+                Text("Unavailable")
+                  .font(.system(size: 10, weight: .medium))
+                  .foregroundStyle(.orange)
+              }
+
+              if let contextLabel = row.contextLabel {
+                Text(contextLabel)
+                  .font(.system(size: 10.5).monospacedDigit())
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              }
+
+              if row.supportsVision {
+                Image(systemName: "eye")
+                  .font(.system(size: 10))
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  .help("Vision")
+                  .accessibilityLabel("Vision")
+              }
+
+              if row.supportsFiles {
+                Image(systemName: "doc")
+                  .font(.system(size: 10))
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  .help("Files")
+                  .accessibilityLabel("Files")
+              }
+
+              if row.supportsReasoning {
+                Image(systemName: "brain")
+                  .font(.system(size: 10))
+                  .foregroundStyle(MacDesignTokens.Colors.accent)
+                  .help("Reasoning")
+                  .accessibilityLabel("Reasoning")
+              }
+
+              if row.supportsTools {
+                Image(systemName: "wrench.and.screwdriver")
+                  .font(.system(size: 10))
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  .help("Tools")
+                  .accessibilityLabel("Tools")
+              }
+            }
+          }
         }
 
         Spacer(minLength: 6)
-
-        if row.supportsVision {
-          Image(systemName: "eye")
-            .font(.system(size: 10.5))
-            .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.8))
-            .help("Supports image input")
-        }
 
         if isSelected {
           Image(systemName: "checkmark")
@@ -1034,14 +1181,14 @@ private struct MacComposerModelRow: View {
     }
     .buttonStyle(.plain)
     .disabled(isDisabled)
-    .opacity(row.isAvailable ? 1 : 0.5)
+    .opacity(row.isAvailable ? 1 : 0.6)
     .onHover { isHovered = $0 }
   }
 
   private var rowBackground: Color {
     if isSelected { return MacDesignTokens.Colors.selection }
     if isHovered && !isDisabled { return Color.primary.opacity(0.05) }
-    return .clear
+    return Color.clear
   }
 }
 

@@ -2527,6 +2527,7 @@ private struct MacComposerView: View {
   @State private var showingFileImporter = false
   @State private var showingLibraryPicker = false
   @State private var previewingAttachment: ChatAttachment?
+  @State private var suppressComposerRefocusOnPopoverDismiss = false
 
   private var fileDropTargeted: Bool {
     urlDropTargeted || imageDropTargeted
@@ -2749,7 +2750,10 @@ private struct MacComposerView: View {
     .onChange(of: conversationID) { _, _ in
       urlDropTargeted = false
       imageDropTargeted = false
-      showingTargetPopover = false
+      if showingTargetPopover {
+        suppressComposerRefocusOnPopoverDismiss = true
+        showingTargetPopover = false
+      }
     }
   }
 
@@ -3078,6 +3082,7 @@ private struct MacComposerView: View {
         initialTarget: target,
         maxOutputTokens: chats.effectiveOptions(for: conversationID).maxOutputTokens,
         manageProviders: {
+          suppressComposerRefocusOnPopoverDismiss = true
           showingTargetPopover = false
           manageProviders()
         },
@@ -3085,6 +3090,15 @@ private struct MacComposerView: View {
           await chats.applyTarget(newTarget, conversationID: conversationID)
         }
       )
+    }
+    .onChange(of: showingTargetPopover) { wasPresented, isPresented in
+      if wasPresented && !isPresented {
+        if suppressComposerRefocusOnPopoverDismiss {
+          suppressComposerRefocusOnPopoverDismiss = false
+        } else {
+          editorFocused = true
+        }
+      }
     }
     .help(target == nil ? "Set up a provider" : "Change model or reasoning (\(targetDetails))")
     .accessibilityLabel("Change provider, model, and reasoning")

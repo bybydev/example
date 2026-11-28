@@ -926,6 +926,21 @@ struct MacProviderModelTests {
         == ["custom-model"]
     )
     #expect(MacComposerModelPickerSupport.filterRows(rows, query: "   ").count == 3)
+
+    let capabilityRows = MacComposerModelPickerSupport.makeRows(from: records) { record in
+      ModelCapabilityResolver.resolve(
+        kind: .anthropic,
+        modelID: record.model.id,
+        model: record.model
+      )
+    }
+    #expect(capabilityRows[0].supportsVision)
+    #expect(capabilityRows[0].hasMetadataLine)
+
+    let unlisted = MacComposerModelPickerSupport.makeUnlistedRow(modelID: "removed-model")
+    #expect(unlisted.id == "removed-model")
+    #expect(!unlisted.isAvailable)
+    #expect(unlisted.hasMetadataLine)
   }
 }
 
