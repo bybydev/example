@@ -1621,6 +1621,7 @@ private struct MacConversationRow: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .help(displayTitle)
     .overlay(alignment: .trailing) {
       Button {
         showingOptionsPopover.toggle()

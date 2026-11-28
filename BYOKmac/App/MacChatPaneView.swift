@@ -551,6 +551,7 @@ private struct MacChatHeader: View {
           }
         }
       }
+      .help(title)
 
       if let activeProject {
         MacChatProjectBadgeButton(project: activeProject, action: openProject)

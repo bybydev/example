@@ -360,20 +360,20 @@ struct MacLibraryView: View {
   @State private var kindFilter: MacLibraryKindFilter = .all
   @State private var sourceFilter: MacLibrarySourceFilter = .all
   @State private var viewMode: MacLibraryViewMode = .gallery
-  @State private var showingInspector = false
   @State private var showingImporter = false
   @State private var renameTarget: LibraryEntry?
   @State private var deleteTargets: Set<LibraryEntryID> = []
-  @State private var previewEntry: LibraryEntry?
+  @State private var activePreviewEntryID: LibraryEntryID?
   @State private var previewURL: URL?
   @State private var previewImage: NSImage?
+  @State private var previewDimensions: (width: Int, height: Int)?
   @State private var previewZoomScale: CGFloat = 1.0
   @State private var previewLoadingID: LibraryEntryID?
-  @State private var showingPreview = false
+  @State private var previewError: String?
+  @State private var showingPreviewInfo = false
   @State private var isWorking = false
   @State private var isDropTargeted = false
   @State private var shareTempDirectories: [URL] = []
-  @State private var inspectorDimensions: (width: Int, height: Int)?
 
   private static let minPreviewZoom: CGFloat = 1.0
   private static let maxPreviewZoom: CGFloat = 5.0
@@ -396,14 +396,15 @@ struct MacLibraryView: View {
     }
   }
 
+  private var activePreviewEntry: LibraryEntry? {
+    guard let activePreviewEntryID else { return nil }
+    return workspace.libraryEntries.first { $0.id == activePreviewEntryID }
+  }
+
   private var selectedEntries: [LibraryEntry] {
     workspace.libraryEntries
       .filter { selection.contains($0.id) }
       .sorted { $0.createdAt > $1.createdAt }
-  }
-
-  private var selectedEntry: LibraryEntry? {
-    selectedEntries.count == 1 ? selectedEntries[0] : nil
   }
 
   private var selectedTotalBytes: Int {
@@ -422,8 +423,21 @@ struct MacLibraryView: View {
     kindFilter != .all || sourceFilter != .all
   }
 
+  private var filterButtonTitle: String {
+    switch (sourceFilter, kindFilter) {
+    case (.all, .all):
+      return "Filter"
+    case (let source, .all):
+      return source.compactTitle
+    case (.all, let kind):
+      return kind.rawValue
+    case (let source, let kind):
+      return "\(source.compactTitle) · \(kind.rawValue)"
+    }
+  }
+
   private var shortcutsEnabled: Bool {
-    !isSearchFocused && !showingPreview && renameTarget == nil && deleteTargets.isEmpty
+    !isSearchFocused && activePreviewEntryID == nil && renameTarget == nil && deleteTargets.isEmpty
   }
 
   private func clearSearchAndFilters() {
@@ -432,25 +446,17 @@ struct MacLibraryView: View {
     sourceFilter = .all
   }
 
+  private func clearSelection() {
+    selection = []
+    lastSelectedID = nil
+  }
+
   var body: some View {
-    VStack(spacing: 0) {
-      browserControls
-      Divider()
-
-      if !selection.isEmpty {
-        selectionBar
-        Divider()
-      }
-
-      HStack(spacing: 0) {
-        browserContent
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        if showingInspector {
-          Divider()
-          inspector
-            .frame(width: 260)
-        }
+    Group {
+      if let entry = activePreviewEntry {
+        previewScreen(entry)
+      } else {
+        browserScreen
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -481,8 +487,10 @@ struct MacLibraryView: View {
     .onChange(of: visibleEntries.map(\.id)) { _, _ in
       normalizeSelection()
     }
-    .task(id: selectedEntry?.id) {
-      await loadInspectorDimensions(for: selectedEntry)
+    .onChange(of: workspace.libraryEntries.map(\.id)) { _, ids in
+      if let activePreviewEntryID, !ids.contains(activePreviewEntryID) {
+        closePreview()
+      }
     }
     .onDisappear {
       cleanupPreview()
@@ -501,22 +509,6 @@ struct MacLibraryView: View {
         importFiles(urls)
       }
     }
-    .sheet(item: $renameTarget) { entry in
-      MacLibraryRenameSheet(entry: entry) { filename in
-        let ok = await workspace.renameLibraryEntry(entry.id, filename: filename)
-        if ok { return nil }
-        return workspace.consumeErrorMessage() ?? "Could not rename item."
-      }
-    }
-    .sheet(
-      isPresented: $showingPreview,
-      onDismiss: {
-        cleanupPreview()
-        previewEntry = nil
-      }
-    ) {
-      previewSheet
-    }
     .confirmationDialog(
       deleteTargets.count == 1 ? "Delete file?" : "Delete \(deleteTargets.count) files?",
       isPresented: Binding(
@@ -534,6 +526,9 @@ struct MacLibraryView: View {
           if await workspace.deleteLibraryEntries(targets) {
             selection.subtract(targets)
             normalizeSelection()
+            if let activePreviewEntryID, targets.contains(activePreviewEntryID) {
+              closePreview()
+            }
           }
         }
       }
@@ -559,17 +554,40 @@ struct MacLibraryView: View {
   }
 
   @ViewBuilder
+  private var browserScreen: some View {
+    if workspace.libraryEntries.isEmpty {
+      ContentUnavailableView {
+        Label("Library is Empty", systemImage: "books.vertical")
+      } description: {
+        Text("Import or drop files here, or save attachments, responses, and project files.")
+      } actions: {
+        Button("Import Files…", systemImage: "plus") {
+          showingImporter = true
+        }
+        .buttonStyle(MacActionButtonStyle(.primary))
+        .disabled(isWorking)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else {
+      VStack(spacing: 0) {
+        browserToolbar
+        Divider()
+
+        browserContent
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        if !selection.isEmpty {
+          Divider()
+          batchActionBar
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
   private var keyboardShortcutTriggers: some View {
     if shortcutsEnabled {
       ZStack {
-        if let selectedEntry {
-          Button("Quick Look") {
-            preview(selectedEntry)
-          }
-          .keyboardShortcut(.space, modifiers: [])
-          .disabled(previewLoadingID != nil || isWorking)
-        }
-
         if !visibleEntries.isEmpty {
           Button("Select All") {
             selection = Set(visibleEntries.map(\.id))
@@ -618,87 +636,73 @@ struct MacLibraryView: View {
     .allowsHitTesting(false)
   }
 
-  private var browserControls: some View {
-    VStack(spacing: 10) {
-      HStack(spacing: 10) {
-        searchField
+  private var browserToolbar: some View {
+    HStack(spacing: 10) {
+      searchField
 
-        MacSegmentedControl(
-          options: MacLibrarySourceFilter.allCases,
-          selection: $sourceFilter,
-          title: \.compactTitle
-        )
-        .frame(width: 310)
-
-        Spacer(minLength: 8)
-
-        Button("Import", systemImage: "plus") {
-          showingImporter = true
-        }
-        .buttonStyle(MacActionButtonStyle(.primary))
-        .disabled(isWorking)
-      }
-
-      HStack(spacing: 10) {
-        Text(storageSummary)
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-
-        if visibleEntries.count != workspace.libraryEntries.count {
-          Text("· \(visibleEntries.count) shown")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      Menu {
+        Section("Source") {
+          Picker("Source", selection: $sourceFilter) {
+            ForEach(MacLibrarySourceFilter.allCases) { filter in
+              Text(filter.rawValue).tag(filter)
+            }
+          }
         }
 
-        Spacer()
-
-        let kindFilterActive = kindFilter != .all
-        Menu {
+        Section("Type") {
           Picker("Type", selection: $kindFilter) {
             ForEach(MacLibraryKindFilter.allCases) { filter in
               Text(filter.rawValue).tag(filter)
             }
           }
-          if filtersAreActive {
-            Divider()
-            Button("Clear Filters") {
-              kindFilter = .all
-              sourceFilter = .all
-            }
+        }
+
+        if filtersAreActive {
+          Divider()
+          Button("Clear Filters") {
+            kindFilter = .all
+            sourceFilter = .all
           }
-        } label: {
-          MacMenuButtonLabel(
-            title: kindFilter == .all ? "Type" : kindFilter.rawValue,
-            systemImage: kindFilterActive
-              ? "line.3.horizontal.decrease.circle.fill"
-              : "line.3.horizontal.decrease.circle",
-            size: .small,
-            isAccentIcon: kindFilterActive
-          )
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Filter by file type")
-
-        viewModeControl
-
-        MacLibraryInspectorToggleButton(isActive: showingInspector) {
-          showingInspector.toggle()
-        }
+      } label: {
+        MacMenuButtonLabel(
+          title: filterButtonTitle,
+          systemImage: filtersAreActive
+            ? "line.3.horizontal.decrease.circle.fill"
+            : "line.3.horizontal.decrease.circle",
+          size: .small,
+          isAccentIcon: filtersAreActive
+        )
       }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .help("Filter by source or file type")
+
+      Spacer(minLength: 8)
+
+      viewModeControl
+
+      Button("Import", systemImage: "plus") {
+        showingImporter = true
+      }
+      .buttonStyle(MacActionButtonStyle(.primary))
+      .disabled(isWorking)
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 12)
+    .frame(height: 54)
+    .background(MacDesignTokens.Colors.surface.opacity(0.45))
   }
 
   private var searchField: some View {
     HStack(spacing: 7) {
       Image(systemName: "magnifyingglass")
+        .font(.system(size: 12))
         .foregroundStyle(.secondary)
 
       TextField("Search files", text: $searchText)
         .textFieldStyle(.plain)
+        .font(.system(size: 13))
         .focused($isSearchFocused)
 
       if !searchText.isEmpty {
@@ -713,10 +717,10 @@ struct MacLibraryView: View {
       }
     }
     .padding(.horizontal, 10)
-    .frame(width: 260, height: 30)
-    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 7))
+    .frame(width: 240, height: 32)
+    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
     .overlay {
-      RoundedRectangle(cornerRadius: 7)
+      RoundedRectangle(cornerRadius: 8)
         .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
     }
   }
@@ -740,22 +744,17 @@ struct MacLibraryView: View {
     }
   }
 
-  private var selectionBar: some View {
-    HStack(spacing: 8) {
-      Text(selection.count == 1 ? "1 selected" : "\(selection.count) selected")
-        .font(.caption.weight(.medium))
+  private var batchActionBar: some View {
+    let selectedBytesText = ByteCountFormatter.string(
+      fromByteCount: Int64(selectedTotalBytes),
+      countStyle: .file
+    )
+    return HStack(spacing: 10) {
+      Text("\(selection.count) selected · \(selectedBytesText)")
+        .font(.system(size: 12.5, weight: .medium))
         .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
       Spacer()
-
-      if let selectedEntry {
-        Button("Quick Look", systemImage: "eye") {
-          preview(selectedEntry)
-        }
-        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-        .disabled(previewLoadingID != nil || isWorking)
-        .help("Quick Look (Space)")
-      }
 
       Button("Export", systemImage: "square.and.arrow.down") {
         export(selectedEntries)
@@ -769,51 +768,29 @@ struct MacLibraryView: View {
       .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
       .disabled(isWorking)
 
-      if let selectedEntry {
-        Button("Rename", systemImage: "pencil") {
-          renameTarget = selectedEntry
-        }
-        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-        .disabled(isWorking)
-      }
-
-      Button("Delete", systemImage: "trash", role: .destructive) {
+      Button(role: .destructive) {
         deleteTargets = selection
+      } label: {
+        Text("Delete")
+          .foregroundStyle(.red)
       }
-      .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
+      .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
       .disabled(isWorking)
 
-      Button {
-        selection = []
-        lastSelectedID = nil
-      } label: {
-        Image(systemName: "xmark.circle.fill")
-          .foregroundStyle(.secondary)
+      Button("Clear") {
+        clearSelection()
       }
-      .buttonStyle(MacIconButtonStyle())
-      .help("Clear selection")
+      .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+      .keyboardShortcut(.cancelAction)
     }
-    .padding(.horizontal, 16)
-    .frame(height: 44)
-    .background(MacDesignTokens.Colors.surface.opacity(0.62))
+    .padding(.horizontal, 18)
+    .frame(height: 52)
+    .background(MacDesignTokens.Colors.surface.opacity(0.65))
   }
 
   @ViewBuilder
   private var browserContent: some View {
-    if workspace.libraryEntries.isEmpty {
-      ContentUnavailableView {
-        Label("Library is Empty", systemImage: "books.vertical")
-      } description: {
-        Text("Import or drop files here, or save attachments, responses, and project files.")
-      } actions: {
-        Button("Import Files…", systemImage: "plus") {
-          showingImporter = true
-        }
-        .buttonStyle(MacActionButtonStyle(.primary))
-        .disabled(isWorking)
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-    } else if visibleEntries.isEmpty {
+    if visibleEntries.isEmpty {
       ContentUnavailableView {
         Label(
           trimmedSearchQuery.isEmpty ? "No Files" : "No Matches",
@@ -851,16 +828,16 @@ struct MacLibraryView: View {
     let sections = MacLibraryDateGrouper.sections(for: entries)
     return ScrollView {
       LazyVStack(alignment: .leading, spacing: 20) {
-        ForEach(sections, id: \.title) { section in
+        ForEach(Array(sections.enumerated()), id: \.element.title) { sectionIndex, section in
           VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(section.title)
+            sectionHeaderRow(section.title, showsStorageSummary: sectionIndex == 0)
 
             LazyVGrid(
               columns: [
-                GridItem(.adaptive(minimum: 176, maximum: 224), spacing: 14, alignment: .top)
+                GridItem(.adaptive(minimum: 168, maximum: 210), spacing: 12, alignment: .top)
               ],
               alignment: .leading,
-              spacing: 14
+              spacing: 12
             ) {
               ForEach(section.entries) { entry in
                 MacLibraryGalleryCard(
@@ -868,8 +845,16 @@ struct MacLibraryView: View {
                   workspace: workspace,
                   sourceTitle: sourceTitle(for: entry),
                   isSelected: selection.contains(entry.id),
-                  onClick: { handleRowClick(entry, orderedEntries: entries) }
+                  isMultiSelecting: !selection.isEmpty,
+                  onClick: { handleItemClick(entry, orderedEntries: entries) },
+                  menuItems: { contextActions(entry) }
                 )
+                .popover(
+                  isPresented: renameBinding(for: entry),
+                  arrowEdge: .bottom
+                ) {
+                  renamePopoverContent(for: entry)
+                }
                 .contextMenu { contextActions(entry) }
               }
             }
@@ -884,253 +869,119 @@ struct MacLibraryView: View {
   private var listContent: some View {
     let entries = visibleEntries
     let sections = MacLibraryDateGrouper.sections(for: entries)
-    return VStack(spacing: 0) {
-      listColumnHeader
+    return ScrollView {
+      LazyVStack(alignment: .leading, spacing: 18) {
+        ForEach(Array(sections.enumerated()), id: \.element.title) { sectionIndex, section in
+          VStack(alignment: .leading, spacing: 7) {
+            sectionHeaderRow(section.title, showsStorageSummary: sectionIndex == 0)
 
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-          ForEach(sections, id: \.title) { section in
-            Section {
-              ForEach(section.entries) { entry in
+            MacLibraryInsetGroup {
+              ForEach(Array(section.entries.enumerated()), id: \.element.id) { index, entry in
+                if index > 0 {
+                  Rectangle()
+                    .fill(MacDesignTokens.Colors.separator.opacity(0.65))
+                    .frame(height: 0.5)
+                    .padding(.leading, 58)
+                }
                 MacLibraryListRow(
                   entry: entry,
                   workspace: workspace,
                   sourceTitle: sourceTitle(for: entry),
                   fileTypeTitle: fileTypeTitle(for: entry),
                   isSelected: selection.contains(entry.id),
-                  onClick: { handleRowClick(entry, orderedEntries: entries) }
+                  isMultiSelecting: !selection.isEmpty,
+                  isWorking: isWorking,
+                  onClick: { handleItemClick(entry, orderedEntries: entries) },
+                  onExport: { export([entry]) },
+                  menuItems: { contextActions(entry) }
                 )
+                .popover(
+                  isPresented: renameBinding(for: entry),
+                  arrowEdge: .bottom
+                ) {
+                  renamePopoverContent(for: entry)
+                }
                 .contextMenu { contextActions(entry) }
-
-                Divider()
-                  .padding(.leading, 58)
               }
-            } header: {
-              sectionHeader(section.title)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 6)
-                .background(MacDesignTokens.Colors.canvas)
             }
           }
         }
-        .padding(.bottom, 16)
       }
+      .padding(16)
     }
     .background(MacDesignTokens.Colors.canvas)
   }
 
-  private var listColumnHeader: some View {
-    HStack(spacing: 12) {
-      Text("Name")
-        .frame(maxWidth: .infinity, alignment: .leading)
-      Text("Source")
-        .frame(width: 170, alignment: .leading)
-      Text("Type")
-        .frame(width: 72, alignment: .leading)
-      Text("Size")
-        .frame(width: 72, alignment: .trailing)
-      Text("Added")
-        .frame(width: 88, alignment: .trailing)
-    }
-    .font(.caption.weight(.medium))
-    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-    .padding(.horizontal, 16)
-    .frame(height: 34)
-    .background(MacDesignTokens.Colors.surface.opacity(0.72))
-    .overlay(alignment: .bottom) {
-      Divider()
-    }
-  }
-
-  private func sectionHeader(_ title: String) -> some View {
-    Text(title.uppercased())
-      .font(.caption2.weight(.semibold))
-      .tracking(0.5)
-      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-  }
-
-  @ViewBuilder
-  private var inspector: some View {
-    if selectedEntries.count > 1 {
-      VStack(spacing: 14) {
-        Spacer()
-        Image(systemName: "checkmark.circle")
-          .font(.system(size: 28))
-          .foregroundStyle(MacDesignTokens.Colors.accent)
-        Text("\(selectedEntries.count) Files Selected")
-          .font(.headline)
-        Text(
-          ByteCountFormatter.string(
-            fromByteCount: Int64(selectedTotalBytes),
-            countStyle: .file
-          )
-        )
-        .font(.caption.weight(.medium))
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-
-        VStack(spacing: 8) {
-          Button("Export Selected…", systemImage: "square.and.arrow.down") {
-            export(selectedEntries)
-          }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-          .disabled(isWorking)
-
-          Button("Share Selected…", systemImage: "square.and.arrow.up") {
-            share(selectedEntries)
-          }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-          .disabled(isWorking)
-
-          Button("Delete Selected", systemImage: "trash", role: .destructive) {
-            deleteTargets = selection
-          }
-          .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
-          .disabled(isWorking)
-        }
-        .padding(.top, 4)
-
-        Spacer()
-      }
-      .padding(22)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(MacDesignTokens.Colors.surface.opacity(0.32))
-    } else if let entry = selectedEntry {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          MacLibraryThumbnailView(
-            entry: entry,
-            workspace: workspace,
-            size: 180,
-            cornerRadius: 12,
-            symbolSize: 36
-          )
-          .frame(maxWidth: .infinity)
-
-          VStack(alignment: .leading, spacing: 5) {
-            Text(entry.filename)
-              .font(.headline)
-              .textSelection(.enabled)
-            Text(fileTypeTitle(for: entry))
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-
-          Divider()
-
-          inspectorField("Source", value: sourceTitle(for: entry))
-          inspectorField("Size", value: entry.byteCountText)
-          if let dimensions = inspectorDimensions {
-            inspectorField("Dimensions", value: "\(dimensions.width) × \(dimensions.height)")
-          }
-          inspectorField("MIME Type", value: entry.mimeType)
-          inspectorField(
-            "Added",
-            value: entry.createdAt.formatted(date: .abbreviated, time: .shortened)
-          )
-
-          if let source = sourceChat(for: entry) {
-            Divider()
-            if chats.summary(source.conversationID) != nil {
-              Button("Open Source Message", systemImage: "bubble.left") {
-                openSourceChat(source.conversationID, source.messageID)
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            } else {
-              Label(
-                "Source Chat Deleted",
-                systemImage: "bubble.left.and.exclamationmark.bubble.right"
-              )
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            }
-          } else if let projectID = sourceProjectID(for: entry) {
-            Divider()
-            if workspace.project(projectID) != nil {
-              Button("Open Source Project", systemImage: "folder") {
-                openSourceProject(projectID)
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            } else {
-              Label("Source Project Deleted", systemImage: "folder.badge.questionmark")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            }
-          }
-
-          Divider()
-
-          HStack(spacing: 8) {
-            Button("Quick Look", systemImage: "eye") {
-              preview(entry)
-            }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-            .disabled(previewLoadingID != nil || isWorking)
-
-            Menu {
-              Button("Export…", systemImage: "square.and.arrow.down") {
-                export([entry])
-              }
-              Button("Share…", systemImage: "square.and.arrow.up") {
-                share([entry])
-              }
-              Button("Rename", systemImage: "pencil") {
-                renameTarget = entry
-              }
-              Divider()
-              Button("Delete", systemImage: "trash", role: .destructive) {
-                deleteTargets = [entry.id]
-              }
-            } label: {
-              MacIconMenuLabel(systemImage: "ellipsis")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(isWorking)
-          }
-        }
-        .padding(16)
-      }
-      .background(MacDesignTokens.Colors.surface.opacity(0.32))
-    } else {
-      ContentUnavailableView(
-        "No Selection",
-        systemImage: "info.circle",
-        description: Text("Select a file to see its details.")
-      )
-      .padding(18)
-      .background(MacDesignTokens.Colors.surface.opacity(0.32))
-    }
-  }
-
-  private func inspectorField(_ title: String, value: String) -> some View {
-    VStack(alignment: .leading, spacing: 3) {
+  private func sectionHeaderRow(_ title: String, showsStorageSummary: Bool) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
       Text(title)
-        .font(.caption2.weight(.medium))
+        .font(.system(size: 11, weight: .semibold))
         .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      Text(value)
-        .font(.caption)
-        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-        .textSelection(.enabled)
+        .textCase(.uppercase)
+        .tracking(0.4)
+        .accessibilityAddTraits(.isHeader)
+
+      Spacer()
+
+      if showsStorageSummary {
+        Text(storageSummaryLine)
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+    }
+    .padding(.horizontal, 4)
+  }
+
+  private var storageSummaryLine: String {
+    if visibleEntries.count != workspace.libraryEntries.count {
+      return "\(visibleEntries.count) of \(storageSummary)"
+    }
+    return storageSummary
+  }
+
+  private func renameBinding(for entry: LibraryEntry) -> Binding<Bool> {
+    Binding(
+      get: { renameTarget?.id == entry.id },
+      set: { isPresented in
+        if !isPresented, renameTarget?.id == entry.id {
+          renameTarget = nil
+        }
+      }
+    )
+  }
+
+  private func renamePopoverContent(for entry: LibraryEntry) -> some View {
+    MacLibraryRenamePopover(entry: entry) { filename in
+      let ok = await workspace.renameLibraryEntry(entry.id, filename: filename)
+      if ok { return nil }
+      return workspace.consumeErrorMessage() ?? "Could not rename item."
     }
   }
 
-  @ViewBuilder
-  private var previewSheet: some View {
+  private func previewScreen(_ entry: LibraryEntry) -> some View {
     VStack(spacing: 0) {
-      HStack(spacing: 10) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(previewEntry?.filename ?? "Preview")
-            .font(.headline)
+      HStack(spacing: 12) {
+        Button {
+          closePreview()
+        } label: {
+          Label("Library", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+
+        Divider().frame(height: 24)
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(entry.filename)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .lineLimit(1)
-          if let previewEntry {
-            Text("\(sourceTitle(for: previewEntry)) · \(previewEntry.byteCountText)")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              .lineLimit(1)
-          }
+            .help(entry.filename)
+          Text(previewSubtitle(for: entry))
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(1)
         }
 
         Spacer(minLength: 8)
@@ -1155,9 +1006,9 @@ struct MacLibraryView: View {
             } label: {
               Text("\(Int((previewZoomScale * 100).rounded()))%")
                 .font(.caption.monospacedDigit())
-                .frame(minWidth: 42)
+                .frame(minWidth: 40)
             }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
             .disabled(abs(previewZoomScale - Self.minPreviewZoom) < 0.01)
             .help("Reset Zoom")
 
@@ -1174,43 +1025,74 @@ struct MacLibraryView: View {
           }
         }
 
-        if let entry = previewEntry {
+        Button("Export", systemImage: "square.and.arrow.down") {
+          export([entry])
+        }
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        .disabled(isWorking)
+
+        Button {
+          showingPreviewInfo.toggle()
+        } label: {
+          Image(systemName: "info.circle")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(
+              showingPreviewInfo
+                ? MacDesignTokens.Colors.accent
+                : MacDesignTokens.Colors.textMuted
+            )
+        }
+        .buttonStyle(MacIconButtonStyle())
+        .help("File Info")
+        .accessibilityLabel("File Info")
+        .popover(isPresented: $showingPreviewInfo, arrowEdge: .bottom) {
+          previewInfoPopover(entry)
+        }
+
+        Menu {
           if let source = sourceChat(for: entry), chats.summary(source.conversationID) != nil {
-            Button("Open Source", systemImage: "bubble.left") {
-              showingPreview = false
+            Button("Open Source Message", systemImage: "bubble.left") {
               openSourceChat(source.conversationID, source.messageID)
             }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           } else if let projectID = sourceProjectID(for: entry), workspace.project(projectID) != nil {
-            Button("Open Project", systemImage: "folder") {
-              showingPreview = false
+            Button("Open Source Project", systemImage: "folder") {
               openSourceProject(projectID)
             }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           }
-
-          Button("Export…", systemImage: "square.and.arrow.down") {
-            export([entry])
-          }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-          .disabled(isWorking)
 
           Button("Share…", systemImage: "square.and.arrow.up") {
             share([entry])
           }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .disabled(isWorking)
-        }
 
-        Button("Done") {
-          showingPreview = false
+          Button("Rename…", systemImage: "pencil") {
+            renameTarget = entry
+          }
+          .disabled(isWorking)
+
+          Divider()
+
+          Button("Delete…", systemImage: "trash", role: .destructive) {
+            deleteTargets = [entry.id]
+          }
+          .disabled(isWorking)
+        } label: {
+          MacIconMenuLabel(systemImage: "ellipsis")
         }
-        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-        .keyboardShortcut(.cancelAction)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("File actions")
+        .popover(
+          isPresented: renameBinding(for: entry),
+          arrowEdge: .bottom
+        ) {
+          renamePopoverContent(for: entry)
+        }
       }
-      .padding(.horizontal, 16)
-      .frame(height: 54)
-      .background(MacDesignTokens.Colors.surface)
+      .padding(.horizontal, 18)
+      .frame(height: 62)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
 
       Divider()
 
@@ -1225,25 +1107,102 @@ struct MacLibraryView: View {
       } else if let previewURL {
         MacLibraryQuickLookView(url: previewURL)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else if let previewError {
+        ContentUnavailableView(
+          "Preview Unavailable",
+          systemImage: "exclamationmark.triangle",
+          description: Text(previewError)
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ProgressView()
           .controlSize(.large)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .frame(
-      minWidth: MacDesignTokens.Sheet.previewMinWidth,
-      idealWidth: MacDesignTokens.Sheet.previewIdealWidth,
-      minHeight: MacDesignTokens.Sheet.previewMinHeight,
-      idealHeight: MacDesignTokens.Sheet.previewIdealHeight
-    )
     .background(MacDesignTokens.Colors.canvas)
+  }
+
+  private func previewSubtitle(for entry: LibraryEntry) -> String {
+    var parts = [sourceTitle(for: entry), entry.byteCountText]
+    if let dims = previewDimensions {
+      parts.append("\(dims.width) × \(dims.height)")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  private func previewInfoPopover(_ entry: LibraryEntry) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(entry.filename)
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .textSelection(.enabled)
+
+      Divider()
+
+      infoField("Source", value: sourceTitle(for: entry))
+      infoField("Type", value: fileTypeTitle(for: entry))
+      infoField("Size", value: entry.byteCountText)
+      if let dims = previewDimensions {
+        infoField("Dimensions", value: "\(dims.width) × \(dims.height)")
+      }
+      infoField("MIME Type", value: entry.mimeType)
+      infoField(
+        "Added",
+        value: entry.createdAt.formatted(date: .abbreviated, time: .shortened)
+      )
+
+      if let source = sourceChat(for: entry) {
+        Divider()
+        if chats.summary(source.conversationID) != nil {
+          Button("Open Source Message", systemImage: "bubble.left") {
+            showingPreviewInfo = false
+            openSourceChat(source.conversationID, source.messageID)
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        } else {
+          Label("Source Chat Deleted", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      } else if let projectID = sourceProjectID(for: entry) {
+        Divider()
+        if workspace.project(projectID) != nil {
+          Button("Open Source Project", systemImage: "folder") {
+            showingPreviewInfo = false
+            openSourceProject(projectID)
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        } else {
+          Label("Source Project Deleted", systemImage: "folder.badge.questionmark")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      }
+    }
+    .padding(14)
+    .frame(width: 260, alignment: .leading)
+    .background(MacDesignTokens.Colors.surface)
+  }
+
+  private func infoField(_ title: String, value: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .frame(width: 72, alignment: .leading)
+      Text(value)
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .textSelection(.enabled)
+        .lineLimit(2)
+    }
   }
 
   @ViewBuilder
   private func contextActions(_ entry: LibraryEntry) -> some View {
-    Button("Quick Look", systemImage: "eye") {
-      preview(entry)
+    Button("Preview", systemImage: "eye") {
+      openPreview(entry)
     }
     Button("Export…", systemImage: "square.and.arrow.down") {
       export([entry])
@@ -1275,10 +1234,18 @@ struct MacLibraryView: View {
     }
 
     Divider()
-    Button("Rename", systemImage: "pencil") {
+    Button("Select", systemImage: selection.contains(entry.id) ? "checkmark.circle.fill" : "checkmark.circle") {
+      if selection.contains(entry.id) {
+        selection.remove(entry.id)
+      } else {
+        selection.insert(entry.id)
+        lastSelectedID = entry.id
+      }
+    }
+    Button("Rename…", systemImage: "pencil") {
       renameTarget = entry
     }
-    Button("Delete", systemImage: "trash", role: .destructive) {
+    Button("Delete…", systemImage: "trash", role: .destructive) {
       deleteTargets = [entry.id]
     }
   }
@@ -1334,9 +1301,8 @@ struct MacLibraryView: View {
     return "File"
   }
 
-  private func handleRowClick(_ entry: LibraryEntry, orderedEntries: [LibraryEntry]) {
+  private func handleItemClick(_ entry: LibraryEntry, orderedEntries: [LibraryEntry]) {
     let modifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let clickCount = NSApp.currentEvent?.clickCount ?? 1
 
     if modifiers.contains(.shift),
       let anchor = lastSelectedID,
@@ -1349,7 +1315,7 @@ struct MacLibraryView: View {
       return
     }
 
-    if modifiers.contains(.command) {
+    if modifiers.contains(.command) || !selection.isEmpty {
       if selection.contains(entry.id) {
         selection.remove(entry.id)
       } else {
@@ -1359,11 +1325,7 @@ struct MacLibraryView: View {
       return
     }
 
-    selection = [entry.id]
-    lastSelectedID = entry.id
-    if clickCount >= 2 {
-      preview(entry)
-    }
+    openPreview(entry)
   }
 
   private func normalizeSelection() {
@@ -1372,23 +1334,6 @@ struct MacLibraryView: View {
     if let lastSelectedID, !visibleIDs.contains(lastSelectedID) {
       self.lastSelectedID = nil
     }
-  }
-
-  private func loadInspectorDimensions(for entry: LibraryEntry?) async {
-    guard let entry, entry.isImage else {
-      inspectorDimensions = nil
-      return
-    }
-    let entryID = entry.id
-    guard let data = await workspace.libraryData(entry), !data.isEmpty else {
-      if selectedEntry?.id == entryID { inspectorDimensions = nil }
-      return
-    }
-    let dims = await Task.detached(priority: .utility) {
-      MacLibraryThumbnailCache.imageDimensions(from: data)
-    }.value
-    guard !Task.isCancelled, selectedEntry?.id == entryID else { return }
-    inspectorDimensions = dims
   }
 
   private func importFiles(_ urls: [URL]) {
@@ -1429,11 +1374,8 @@ struct MacLibraryView: View {
           if !trimmedSearchQuery.isEmpty {
             searchText = ""
           }
-          selection = Set(addedEntries.map(\.id))
-          lastSelectedID = addedEntries.first?.id
-        } else {
-          normalizeSelection()
         }
+        normalizeSelection()
       } else {
         normalizeSelection()
       }
@@ -1454,13 +1396,14 @@ struct MacLibraryView: View {
     }
   }
 
-  private func preview(_ entry: LibraryEntry) {
-    guard previewLoadingID == nil else { return }
-
+  private func openPreview(_ entry: LibraryEntry) {
     cleanupPreview()
-    previewEntry = entry
+    activePreviewEntryID = entry.id
     previewZoomScale = Self.minPreviewZoom
     previewLoadingID = entry.id
+    previewError = nil
+    showingPreviewInfo = false
+
     let requestedID = entry.id
     let filename = Self.safeFilename(entry.filename)
 
@@ -1468,7 +1411,7 @@ struct MacLibraryView: View {
       guard let data = await workspace.libraryData(entry), !data.isEmpty else {
         if previewLoadingID == requestedID {
           previewLoadingID = nil
-          workspace.errorMessage = "The saved bytes for \(entry.filename) are unavailable."
+          previewError = "The saved bytes for \(entry.filename) are unavailable."
         }
         return
       }
@@ -1483,9 +1426,18 @@ struct MacLibraryView: View {
         guard previewLoadingID == requestedID else { return }
         if let bitmap {
           previewImage = NSImage(cgImage: bitmap.cgImage, size: bitmap.pointSize)
+          previewDimensions = (bitmap.cgImage.width, bitmap.cgImage.height)
           previewLoadingID = nil
-          showingPreview = true
           return
+        }
+      }
+
+      if entry.isImage {
+        let dims = await Task.detached(priority: .utility) {
+          MacLibraryThumbnailCache.imageDimensions(from: data)
+        }.value
+        if previewLoadingID == requestedID {
+          previewDimensions = dims
         }
       }
 
@@ -1513,15 +1465,20 @@ struct MacLibraryView: View {
 
         previewURL = url
         previewLoadingID = nil
-        showingPreview = true
       } catch {
         if previewLoadingID == requestedID {
           previewLoadingID = nil
           MacAppAnalytics.reportError("library_preview_failed", component: "library")
-          workspace.errorMessage = error.localizedDescription
+          previewError = error.localizedDescription
         }
       }
     }
+  }
+
+  private func closePreview() {
+    showingPreviewInfo = false
+    activePreviewEntryID = nil
+    cleanupPreview()
   }
 
   private func cleanupPreview() {
@@ -1532,8 +1489,10 @@ struct MacLibraryView: View {
     }
     self.previewURL = nil
     previewImage = nil
+    previewDimensions = nil
     previewZoomScale = Self.minPreviewZoom
     previewLoadingID = nil
+    previewError = nil
   }
 
   private func cleanupShareTempDirectories() {
@@ -1800,103 +1759,119 @@ private struct MacLibraryViewModeButton: View {
   }
 }
 
-private struct MacLibraryInspectorToggleButton: View {
-  let isActive: Bool
-  let action: () -> Void
-
-  @State private var isHovered = false
+private struct MacLibraryInsetGroup<Content: View>: View {
+  @ViewBuilder let content: Content
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
-    Button(action: action) {
-      Image(systemName: "sidebar.right")
-        .foregroundStyle(
-          isActive
-            ? MacDesignTokens.Colors.accent
-            : (isHovered ? MacDesignTokens.Colors.textPrimary : MacDesignTokens.Colors.textMuted)
-        )
-        .frame(width: 28, height: 26)
-        .background(backgroundColor, in: shape)
-        .overlay {
-          if isActive {
-            shape.stroke(MacDesignTokens.Colors.accent.opacity(0.3), lineWidth: 0.75)
-          }
-        }
-        .contentShape(shape)
+    let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+    VStack(alignment: .leading, spacing: 0) {
+      content
     }
-    .buttonStyle(.plain)
-    .onHover { isHovered = $0 }
-    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
-    .help(isActive ? "Hide Info" : "Show Info")
-    .accessibilityLabel(isActive ? "Hide Library info" : "Show Library info")
-    .accessibilityAddTraits(isActive ? [.isSelected] : [])
-  }
-
-  private var backgroundColor: Color {
-    if isActive { return MacDesignTokens.Colors.accent.opacity(isHovered ? 0.19 : 0.14) }
-    if isHovered { return Color.primary.opacity(MacDesignTokens.Control.hoverOpacity) }
-    return Color.clear
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MacDesignTokens.Colors.surface, in: shape)
+    .clipShape(shape)
+    .overlay {
+      shape.stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+        .allowsHitTesting(false)
+    }
   }
 }
 
-private struct MacLibraryGalleryCard: View {
+private struct MacLibraryGalleryCard<MenuItems: View>: View {
   let entry: LibraryEntry
   @Bindable var workspace: MacWorkspaceModel
   let sourceTitle: String
   let isSelected: Bool
+  let isMultiSelecting: Bool
   let onClick: () -> Void
+  @ViewBuilder let menuItems: () -> MenuItems
 
   @State private var isHovered = false
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
-    Button(action: onClick) {
-      VStack(alignment: .leading, spacing: 0) {
+    VStack(alignment: .leading, spacing: 0) {
+      ZStack(alignment: .top) {
         MacLibraryThumbnailView(
           entry: entry,
           workspace: workspace,
           width: nil,
-          height: 138,
-          cornerRadius: 8,
+          height: 126,
+          cornerRadius: 0,
           symbolSize: 30
         )
-        .padding(8)
 
-        Divider()
+        HStack {
+          if isMultiSelecting || isSelected {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+              .font(.system(size: 16, weight: .semibold))
+              .foregroundStyle(isSelected ? MacDesignTokens.Colors.accent : Color.white.opacity(0.85))
+              .background(
+                Circle()
+                  .fill(isSelected ? Color.white : Color.black.opacity(0.28))
+                  .padding(1)
+              )
+          }
 
-        VStack(alignment: .leading, spacing: 4) {
-          Text(entry.filename)
-            .font(.system(size: 12.5, weight: .medium))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-            .lineLimit(1)
+          Spacer()
 
-          Text("\(sourceTitle) · \(entry.byteCountText)")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            .lineLimit(1)
-
-          Text(entry.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-            .font(.caption2)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.82))
-            .lineLimit(1)
+          if !isMultiSelecting {
+            Menu {
+              menuItems()
+            } label: {
+              Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                .frame(width: 24, height: 22)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay {
+                  RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 0.5)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+            .help("File actions")
+          }
         }
-        .padding(10)
+        .padding(7)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(MacDesignTokens.Colors.surface, in: shape)
-      .overlay {
-        if isHovered && !isSelected {
-          shape.fill(Color.primary.opacity(0.025))
-        }
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(entry.filename)
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .lineLimit(1)
+
+        Text("\(sourceTitle) · \(entry.byteCountText)")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .lineLimit(1)
       }
-      .overlay {
-        shape.stroke(borderColor, lineWidth: isSelected ? 1.5 : 0.75)
-      }
-      .contentShape(shape)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
     }
-    .buttonStyle(.plain)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MacDesignTokens.Colors.surface, in: shape)
+    .clipShape(shape)
+    .overlay {
+      if isHovered && !isSelected {
+        shape.fill(Color.primary.opacity(0.025))
+          .allowsHitTesting(false)
+      }
+    }
+    .overlay {
+      shape.stroke(borderColor, lineWidth: isSelected ? 1.5 : 0.75)
+        .allowsHitTesting(false)
+    }
+    .contentShape(shape)
+    .onTapGesture(perform: onClick)
     .onHover { isHovered = $0 }
     .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help(entry.filename)
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
   }
 
@@ -1907,61 +1882,110 @@ private struct MacLibraryGalleryCard: View {
   }
 }
 
-private struct MacLibraryListRow: View {
+private struct MacLibraryListRow<MenuItems: View>: View {
   let entry: LibraryEntry
   @Bindable var workspace: MacWorkspaceModel
   let sourceTitle: String
   let fileTypeTitle: String
   let isSelected: Bool
+  let isMultiSelecting: Bool
+  let isWorking: Bool
   let onClick: () -> Void
+  let onExport: () -> Void
+  @ViewBuilder let menuItems: () -> MenuItems
 
   @State private var isHovered = false
 
-  var body: some View {
-    Button(action: onClick) {
-      HStack(spacing: 12) {
-        HStack(spacing: 10) {
-          MacLibraryThumbnailView(
-            entry: entry,
-            workspace: workspace,
-            size: 34,
-            cornerRadius: 7,
-            symbolSize: 14
-          )
+  private var showsHoverActions: Bool {
+    isHovered && !isMultiSelecting
+  }
 
+  var body: some View {
+    HStack(spacing: 12) {
+      HStack(spacing: 10) {
+        if isMultiSelecting {
+          Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(
+              isSelected
+                ? MacDesignTokens.Colors.accent
+                : MacDesignTokens.Colors.textMuted.opacity(0.6)
+            )
+            .frame(width: 18)
+        }
+
+        MacLibraryThumbnailView(
+          entry: entry,
+          workspace: workspace,
+          size: 34,
+          cornerRadius: 7,
+          symbolSize: 14
+        )
+
+        VStack(alignment: .leading, spacing: 2) {
           Text(entry.filename)
-            .font(.system(size: 12.5, weight: .medium))
+            .font(.system(size: 13, weight: .medium))
             .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .lineLimit(1)
+          Text("\(sourceTitle) · \(fileTypeTitle)")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-        Text(sourceTitle)
-          .frame(width: 170, alignment: .leading)
-          .lineLimit(1)
-
-        Text(fileTypeTitle)
-          .frame(width: 72, alignment: .leading)
-          .lineLimit(1)
-
-        Text(entry.byteCountText)
-          .frame(width: 72, alignment: .trailing)
-          .lineLimit(1)
-
-        Text(entry.createdAt, format: .dateTime.month(.abbreviated).day())
-          .frame(width: 88, alignment: .trailing)
-          .lineLimit(1)
       }
-      .font(.caption)
-      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      .padding(.horizontal, 16)
-      .frame(minHeight: 48)
-      .background(rowBackground)
-      .contentShape(Rectangle())
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      HStack(spacing: 8) {
+        ZStack(alignment: .trailing) {
+          Text(
+            "\(entry.byteCountText) · \(entry.createdAt.formatted(.dateTime.month(.abbreviated).day()))"
+          )
+          .font(.system(size: 12).monospacedDigit())
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .lineLimit(1)
+          .opacity(showsHoverActions ? 0 : 1)
+          .allowsHitTesting(false)
+
+          HStack(spacing: 4) {
+            Button("Export", action: onExport)
+              .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+              .disabled(isWorking)
+
+            Menu {
+              menuItems()
+            } label: {
+              MacIconMenuLabel(systemImage: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("File actions")
+          }
+          .opacity(showsHoverActions ? 1 : 0)
+          .allowsHitTesting(showsHoverActions)
+        }
+        .frame(minWidth: 144, alignment: .trailing)
+
+        if !isMultiSelecting {
+          Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(
+              isHovered
+                ? MacDesignTokens.Colors.textPrimary.opacity(0.75)
+                : MacDesignTokens.Colors.textMuted.opacity(0.5)
+            )
+        }
+      }
     }
-    .buttonStyle(.plain)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .frame(minHeight: 52)
+    .background(rowBackground)
+    .contentShape(Rectangle())
+    .onTapGesture(perform: onClick)
     .onHover { isHovered = $0 }
     .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .help(entry.filename)
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
   }
 
@@ -2191,7 +2215,7 @@ enum MacLibraryRenameValidation {
   }
 }
 
-private struct MacLibraryRenameSheet: View {
+private struct MacLibraryRenamePopover: View {
   let entry: LibraryEntry
   let save: (String) async -> String?
 
@@ -2215,9 +2239,10 @@ private struct MacLibraryRenameSheet: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Rename Library Item")
-        .font(.headline)
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Rename File")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
 
       if let saveError {
         HStack(spacing: 8) {
@@ -2265,20 +2290,20 @@ private struct MacLibraryRenameSheet: View {
         Button("Cancel") {
           dismiss()
         }
-        .buttonStyle(MacActionButtonStyle(.secondary))
+        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
         .keyboardShortcut(.cancelAction)
         .disabled(isSaving)
 
         Button("Rename") {
           commit()
         }
-        .buttonStyle(MacActionButtonStyle(.primary))
+        .buttonStyle(MacActionButtonStyle(.primary, size: .small))
         .keyboardShortcut(.defaultAction)
         .disabled(!validation.canSave || isSaving)
       }
     }
-    .padding(20)
-    .frame(width: 420)
+    .padding(14)
+    .frame(width: 320)
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       isFilenameFocused = true
@@ -2295,9 +2320,9 @@ private struct MacLibraryRenameSheet: View {
     isSaving = true
     saveError = nil
     Task { @MainActor in
+      defer { isSaving = false }
       if let error = await save(evaluation.trimmedName) {
         saveError = error
-        isSaving = false
       } else {
         dismiss()
       }
