@@ -109,7 +109,7 @@ struct MacCommands: Commands {
 
     CommandGroup(after: .help) {
       Divider()
-      Button("BYOKchat Website") {
+      Button("BYOK Chat Website") {
         NSWorkspace.shared.open(MacPurchaseStore.websiteURL)
       }
       Button("Contact Support") {
@@ -122,7 +122,7 @@ struct MacCommands: Commands {
         NSWorkspace.shared.open(MacPurchaseStore.termsURL)
       }
       Divider()
-      Button("Reveal BYOKchat Data in Finder") {
+      Button("Reveal BYOK Chat Data in Finder") {
         model.revealDataDirectory()
       }
     }

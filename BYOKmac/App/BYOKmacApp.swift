@@ -6,9 +6,6 @@ import SwiftUI
 enum BYOKmacWindowID {
   static let main = "main"
   static let onboarding = "byokchat.onboarding"
-  #if DEBUG
-  static let developerTools = "byokchat.developer-tools"
-  #endif
 }
 
 @MainActor
@@ -68,7 +65,7 @@ struct BYOKmacApp: App {
   private let analytics = MacAppAnalytics.client
 
   var body: some Scene {
-    Window("BYOKchat", id: BYOKmacWindowID.main) {
+    Window("BYOK Chat", id: BYOKmacWindowID.main) {
       MacStartupView(model: model)
         .frame(minWidth: 760, minHeight: 520)
         .ignoresSafeArea(edges: .top)
@@ -102,13 +99,9 @@ struct BYOKmacApp: App {
       #if DEBUG
       CommandMenu("Developer") {
         Button("Open Developer Tools…") {
-          openWindow(id: BYOKmacWindowID.developerTools)
-        }
-        .keyboardShortcut("d", modifiers: [.command, .option])
-
-        Button("Foundation Developer Tools…") {
           openWindow(id: MacAppFoundationDeveloperTools.windowID)
         }
+        .keyboardShortcut("d", modifiers: [.command, .option])
 
         Divider()
 
@@ -116,32 +109,12 @@ struct BYOKmacApp: App {
           onboarding.restart()
           openWindow(id: BYOKmacWindowID.onboarding)
         }
-
-        Divider()
-
-        Button("Use Simulated Purchases") {
-          UserDefaults.standard.set(true, forKey: MacPurchaseStore.simulatedModeKey)
-          Task { await purchases.setSimulatedPurchasesEnabled(true) }
-        }
-
-        Button("Use StoreKit") {
-          UserDefaults.standard.set(false, forKey: MacPurchaseStore.simulatedModeKey)
-          Task { await purchases.setSimulatedPurchasesEnabled(false) }
-        }
-
-        Button("Reset Simulated Purchases", role: .destructive) {
-          UserDefaults.standard.set(true, forKey: MacPurchaseStore.simulatedModeKey)
-          Task {
-            await purchases.setSimulatedPurchasesEnabled(true)
-            await purchases.resetSimulatedPurchases()
-          }
-        }
       }
       #endif
     }
 
     OnboardingWindow(
-      "Welcome to BYOKchat",
+      "Welcome to BYOK Chat",
       id: BYOKmacWindowID.onboarding,
       state: onboarding,
       defaultWidth: 720,
@@ -172,29 +145,24 @@ struct BYOKmacApp: App {
     .windowResizability(.contentSize)
 
     #if DEBUG
-    Window("Developer Tools", id: BYOKmacWindowID.developerTools) {
-      MacDeveloperToolsView(
-        model: model,
-        purchases: purchases,
-        onboarding: onboarding
-      )
-      .macAppTheme(model.themeStore, purchaseManager: purchases)
-      .environment(purchases)
-      .environment(proGateCenter)
-      .managesAnalytics(analytics)
-    }
-    .defaultSize(width: 920, height: 680)
-
     Window(
       MacAppFoundationDeveloperTools.windowTitle,
       id: MacAppFoundationDeveloperTools.windowID
     ) {
       FoundationDeveloperView(
         purchaseManager: purchases,
-        configuration: MacPurchaseStore.developerConfiguration
+        configuration: MacDeveloperTools.configuration(
+          model: model,
+          purchases: purchases,
+          replayOnboarding: {
+            onboarding.restart()
+            openWindow(id: BYOKmacWindowID.onboarding)
+          }
+        )
       )
       .macAppTheme(model.themeStore, purchaseManager: purchases)
       .environment(purchases)
+      .environment(proGateCenter)
       .managesAnalytics(analytics)
     }
     .defaultSize(
@@ -461,7 +429,7 @@ private struct MacBYOKOnboardingView: View {
           OnboardingFeature(
             symbol: "key.fill",
             title: "Credentials stay in Keychain",
-            detail: "BYOKchat stores provider secrets using macOS Keychain."
+            detail: "BYOK Chat stores provider secrets using macOS Keychain."
           ),
           OnboardingFeature(
             symbol: "slider.horizontal.3",

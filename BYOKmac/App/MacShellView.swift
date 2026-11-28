@@ -33,7 +33,7 @@ struct MacShellView: View {
         ContentUnavailableView(
           "Chat Runtime Unavailable",
           systemImage: "exclamationmark.triangle",
-          description: Text("Restart BYOKchat to reload the shared runtime.")
+          description: Text("Restart BYOK Chat to reload the shared runtime.")
         )
       }
     }
@@ -1183,7 +1183,7 @@ private struct MacSidebarView: View {
           .interpolation(.high)
           .scaledToFit()
           .frame(height: 22)
-          .accessibilityLabel("BYOKchat")
+          .accessibilityLabel("BYOK Chat")
 
         Button(action: newChat) {
           Label("New Chat", systemImage: "square.and.pencil")

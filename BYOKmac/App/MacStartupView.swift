@@ -33,7 +33,7 @@ struct MacStartupView: View {
     VStack(spacing: 14) {
       ProgressView()
         .controlSize(.large)
-      Text("BYOKchat")
+      Text("BYOK Chat")
         .font(.title2.weight(.semibold))
         .foregroundStyle(MacDesignTokens.Colors.textPrimary)
       Text(stage.rawValue)

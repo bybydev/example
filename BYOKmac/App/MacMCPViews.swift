@@ -1268,7 +1268,7 @@ struct MacMCPServerSettingsView: View {
           headers: $additionalHeaders,
           policy: headerValidationPolicy,
           footerText:
-            "Optional non-secret headers. Authentication and MCP protocol headers are managed by BYOKchat.",
+            "Optional non-secret headers. Authentication and MCP protocol headers are managed by BYOK Chat.",
           editorTarget: $headerEditorTarget
         )
         .padding(14)
@@ -2876,7 +2876,7 @@ private struct MacMCPElicitationCard: View {
       case .url:
         if let url = request.url {
           VStack(alignment: .leading, spacing: 8) {
-            Text("Complete the requested step in your browser, then return to BYOKchat.")
+            Text("Complete the requested step in your browser, then return to BYOK Chat.")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
             Text(url.host ?? url.absoluteString)

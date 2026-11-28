@@ -111,7 +111,7 @@ struct MacSecondarySurfacesView: View {
       ContentUnavailableView(
         "Workspace Unavailable",
         systemImage: "externaldrive.badge.exclamationmark",
-        description: Text("Restart BYOKchat to reload Projects, Library, and Tools.")
+        description: Text("Restart BYOK Chat to reload Projects, Library, and Tools.")
       )
     }
   }
@@ -305,7 +305,7 @@ private struct MacUtilitySheetPresenterHost: View {
     ContentUnavailableView(
       "\(title) Unavailable",
       systemImage: systemImage,
-      description: Text("Restart BYOKchat to reload this workspace surface.")
+      description: Text("Restart BYOK Chat to reload this workspace surface.")
     )
   }
 }

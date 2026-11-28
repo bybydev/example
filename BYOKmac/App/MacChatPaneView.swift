@@ -2266,7 +2266,7 @@ private struct MacTranscriptModalHost: View {
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("The provider may have completed the previous request even though BYOKchat could not confirm it. Regenerating can create another billable response.")
+        Text("The provider may have completed the previous request even though BYOK Chat could not confirm it. Regenerating can create another billable response.")
       }
   }
 

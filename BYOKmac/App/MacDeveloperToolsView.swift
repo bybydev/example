@@ -5,57 +5,104 @@ import MacAppFoundation
 import SwiftUI
 
 @MainActor
-struct MacDeveloperToolsView: View {
-  let model: MacAppModel
-  let purchases: PurchaseManager
-  let onboarding: OnboardingState
+enum MacDeveloperTools {
+  static func configuration(
+    model: MacAppModel,
+    purchases: PurchaseManager,
+    replayOnboarding: @escaping @MainActor () -> Void
+  ) -> FoundationDeveloperConfiguration {
+    var replays = MacPurchaseStore.developerConfiguration.replays
+    for feature in MacProFeature.allCases {
+      replays.append(
+        FoundationDeveloperReplay(
+          id: "upsell-\(feature.rawValue)",
+          title: "Upsell · \(feature.title)",
+          systemImage: featureSymbol(feature)
+        ) { _ in
+          MacProUpsellSheet(feature: feature)
+        }
+      )
+    }
 
-  private enum Tab: String, Hashable {
-    case catalog
-    case fts5
-    case seed
-    case providers
-    case upsells
+    let sections: [FoundationDeveloperSection] = [
+      FoundationDeveloperSection(
+        id: "byok-chat-tools",
+        title: "BYOK Chat",
+        items: [
+          .destination(
+            FoundationDeveloperDestination(
+              id: "model-catalog",
+              title: "Model Catalog",
+              systemImage: "square.stack.3d.up"
+            ) {
+              MacCatalogInspectorTab(model: model)
+                .padding(16)
+                .background(MacDesignTokens.Colors.canvas)
+            }
+          ),
+          .destination(
+            FoundationDeveloperDestination(
+              id: "fts5-search",
+              title: "FTS5 Search",
+              systemImage: "magnifyingglass"
+            ) {
+              MacFTS5InspectorTab(model: model, purchases: purchases)
+                .padding(16)
+                .background(MacDesignTokens.Colors.canvas)
+            }
+          ),
+          .destination(
+            FoundationDeveloperDestination(
+              id: "seed-data",
+              title: "Seed Data",
+              systemImage: "tray.and.arrow.down.fill"
+            ) {
+              MacSeedDataTab(model: model)
+                .padding(16)
+                .background(MacDesignTokens.Colors.canvas)
+            }
+          ),
+          .destination(
+            FoundationDeveloperDestination(
+              id: "provider-console",
+              title: "Provider Console",
+              systemImage: "terminal"
+            ) {
+              MacProviderConsoleTab(model: model)
+                .padding(16)
+                .background(MacDesignTokens.Colors.canvas)
+            }
+          ),
+          .action(
+            FoundationDeveloperAction(
+              id: "replay-onboarding",
+              title: "Replay Onboarding",
+              systemImage: "rectangle.stack.fill"
+            ) {
+              await MainActor.run {
+                replayOnboarding()
+              }
+            }
+          ),
+        ]
+      )
+    ]
+
+    return FoundationDeveloperConfiguration(
+      replays: replays,
+      additionalSections: sections
+    )
   }
 
-  @State private var selectedTab: Tab = .catalog
-
-  var body: some View {
-    TabView(selection: $selectedTab) {
-      MacCatalogInspectorTab(model: model)
-        .tabItem {
-          Label("Model Catalog", systemImage: "square.stack.3d.up")
-        }
-        .tag(Tab.catalog)
-
-      MacFTS5InspectorTab(model: model, purchases: purchases)
-        .tabItem {
-          Label("FTS5 Search", systemImage: "magnifyingglass")
-        }
-        .tag(Tab.fts5)
-
-      MacSeedDataTab(model: model)
-        .tabItem {
-          Label("Seed Data", systemImage: "tray.and.arrow.down.fill")
-        }
-        .tag(Tab.seed)
-
-      MacProviderConsoleTab(model: model)
-        .tabItem {
-          Label("Provider Console", systemImage: "terminal")
-        }
-        .tag(Tab.providers)
-
-      MacUpsellReplaysTab(purchases: purchases, onboarding: onboarding)
-        .tabItem {
-          Label("Pro & Upsells", systemImage: "crown")
-        }
-        .tag(Tab.upsells)
+  private static func featureSymbol(_ feature: MacProFeature) -> String {
+    switch feature {
+    case .providerAccounts: "key.horizontal.fill"
+    case .projects: "folder.fill"
+    case .mcpServers: "shippingbox.fill"
+    case .analytics: "chart.bar.xaxis"
+    case .themes: "paintpalette.fill"
+    case .chatSearch: "magnifyingglass"
     }
-    .padding(16)
-    .frame(minWidth: 780, minHeight: 560)
-    .background(MacDesignTokens.Colors.canvas)
-    .macProUpsellPresenter()
   }
 }
 
@@ -2292,115 +2339,4 @@ private struct MacProviderConsoleTab: View {
 
 // MARK: - Upsell Replays & Simulated Pro
 
-@MainActor
-private struct MacUpsellReplaysTab: View {
-  let purchases: PurchaseManager
-  let onboarding: OnboardingState
-
-  @Environment(\.openWindow) private var openWindow
-
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        GroupBox("Pro Upsell Replays") {
-          VStack(alignment: .leading, spacing: 10) {
-            LabeledContent("Current Entitlement", value: purchases.hasPro ? "BYOK Pro Active" : "Free")
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 10)], spacing: 10) {
-              ForEach(MacProFeature.allCases, id: \.rawValue) { feature in
-                Button {
-                  MacProGateCenter.shared.request(feature)
-                } label: {
-                  Label(featureTitle(feature), systemImage: featureSymbol(feature))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(MacActionButtonStyle(.secondary))
-              }
-            }
-
-            Divider()
-
-            HStack(spacing: 10) {
-              Button("Open Pro Paywall", systemImage: "crown.fill") {
-                openWindow(id: MacWindowID.proPaywall)
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary))
-
-              Button("Replay Onboarding", systemImage: "rectangle.stack.fill") {
-                onboarding.restart()
-                openWindow(id: BYOKmacWindowID.onboarding)
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary))
-
-              Spacer()
-            }
-          }
-          .padding(8)
-        }
-
-        GroupBox("Simulated Entitlement Controls") {
-          VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-              Button("Use Simulated Purchases", systemImage: "wrench.and.screwdriver") {
-                UserDefaults.standard.set(true, forKey: MacPurchaseStore.simulatedModeKey)
-                Task { await purchases.setSimulatedPurchasesEnabled(true) }
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary))
-
-              Button("Use StoreKit", systemImage: "bag") {
-                UserDefaults.standard.set(false, forKey: MacPurchaseStore.simulatedModeKey)
-                Task { await purchases.setSimulatedPurchasesEnabled(false) }
-              }
-              .buttonStyle(MacActionButtonStyle(.secondary))
-
-              Button("Reset Simulated Purchases", systemImage: "arrow.counterclockwise", role: .destructive) {
-                UserDefaults.standard.set(true, forKey: MacPurchaseStore.simulatedModeKey)
-                Task {
-                  await purchases.setSimulatedPurchasesEnabled(true)
-                  await purchases.resetSimulatedPurchases()
-                }
-              }
-              .buttonStyle(MacActionButtonStyle(.destructive))
-              Spacer()
-            }
-
-            Divider()
-
-            FoundationDeveloperView(
-              purchaseManager: purchases,
-              configuration: MacPurchaseStore.developerConfiguration
-            )
-            .frame(minHeight: 260)
-          }
-          .padding(8)
-        }
-      }
-      .padding(4)
-    }
-  }
-
-  private func featureTitle(_ feature: MacProFeature) -> String {
-    switch feature.rawValue {
-    case "providerAccounts": "Provider Connections"
-    case "projects": "Projects"
-    case "mcpServers": "MCP Servers"
-    case "analytics": "Analytics History"
-    case "themes": "Themes"
-    case "chatSearch": "Full-Text Chat Search"
-    default: feature.rawValue
-    }
-  }
-
-  private func featureSymbol(_ feature: MacProFeature) -> String {
-    switch feature.rawValue {
-    case "providerAccounts": "key.horizontal.fill"
-    case "projects": "folder.fill"
-    case "mcpServers": "shippingbox.fill"
-    case "analytics": "chart.bar.xaxis"
-    case "themes": "paintpalette.fill"
-    case "chatSearch": "magnifyingglass"
-    default: "crown"
-    }
-  }
-}
 #endif

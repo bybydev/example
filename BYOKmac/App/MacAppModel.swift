@@ -42,10 +42,10 @@ struct MacStartupFailure: Sendable, Equatable {
   var title: String {
     switch stage {
     case .preparingStorage, .composingServices, .preparingFiles, .recovering:
-      "Couldn't Prepare BYOKchat"
+      "Couldn't Prepare BYOK Chat"
     case .loadingWorkspace, .loadingProviders, .loadingProjects, .loadingTools, .loadingChats,
       .loadingLibrary, .reconciling, .maintenance:
-      "Couldn't Start BYOKchat"
+      "Couldn't Start BYOK Chat"
     }
   }
 
@@ -53,7 +53,7 @@ struct MacStartupFailure: Sendable, Equatable {
     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     return """
-    BYOKchat macOS startup failure
+    BYOK Chat macOS startup failure
     App version: \(version) (\(build))
     Stage: \(stage.rawValue)
     Date: \(occurredAt.ISO8601Format())

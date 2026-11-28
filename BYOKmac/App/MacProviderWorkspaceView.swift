@@ -998,7 +998,7 @@ struct MacSupportedProvidersCatalogView: View {
           VStack(alignment: .leading, spacing: 2) {
             Text("Supported Providers")
               .font(.headline)
-            Text("Cloud, local, and OpenAI-compatible providers supported by BYOKchat.")
+            Text("Cloud, local, and OpenAI-compatible providers supported by BYOK Chat.")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
           }
@@ -1014,7 +1014,7 @@ struct MacSupportedProvidersCatalogView: View {
           VStack(alignment: .leading, spacing: 3) {
             Text("Supported Providers")
               .font(.title3.weight(.semibold))
-            Text("Cloud, local, and OpenAI-compatible providers supported by BYOKchat.")
+            Text("Cloud, local, and OpenAI-compatible providers supported by BYOK Chat.")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
           }

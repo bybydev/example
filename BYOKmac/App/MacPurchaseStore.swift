@@ -179,7 +179,7 @@ enum MacPurchaseStore {
     showsRedeemCode: true
   )
 
-  static let planConfiguration = ProPlanPaneConfiguration(appName: "BYOKchat")
+  static let planConfiguration = ProPlanPaneConfiguration(appName: "BYOK Chat")
 
   #if DEBUG
   static var developerConfiguration: FoundationDeveloperConfiguration {

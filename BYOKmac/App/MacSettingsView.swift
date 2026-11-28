@@ -339,7 +339,7 @@ private struct MacGeneralSettingsView: View {
                 .toggleStyle(.switch)
             }
 
-            Text("Sends anonymous product usage counters to help improve BYOKchat. Messages, prompts, and file names are never collected.")
+            Text("Sends anonymous product usage counters to help improve BYOK Chat. Messages, prompts, and file names are never collected.")
               .font(.caption)
               .foregroundStyle(theme.textSecondary)
               .fixedSize(horizontal: false, vertical: true)
@@ -461,7 +461,7 @@ private struct MacAboutSettingsView: View {
 
         MacSettingsCard {
           HStack {
-            Text("Rate BYOKchat")
+            Text("Rate BYOK Chat")
               .foregroundStyle(theme.textPrimary)
             Spacer()
             Button("Write a Review") {

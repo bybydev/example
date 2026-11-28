@@ -138,7 +138,7 @@ struct MacDataManagementView: View {
       Text("Connections and MCP servers remain configured, but every API key and MCP credential must be entered again.")
     }
     .confirmationDialog(
-      "Reset all BYOKchat data?",
+      "Reset all BYOK Chat data?",
       isPresented: $confirmResetApplication,
       titleVisibility: .visible
     ) {
