@@ -642,4 +642,172 @@ struct MacTranscriptRendererSupportTests {
     #expect((firstPara?.headIndent ?? 0) == (tenthPara?.headIndent ?? -1))
     #expect((firstPara?.firstLineHeadIndent ?? 0) > (tenthPara?.firstLineHeadIndent ?? 999))
   }
+
+  @Test("O(1) LRU cache promotes accessed entries, tracks cost deltas, and ignores oversized items")
+  @MainActor
+  func lruCachePromotionAndCostEviction() {
+    let cache = MacLRUCache<String, Int>(countLimit: 3, costLimit: 10)
+    cache.insert(1, for: "a", cost: 4)
+    cache.insert(2, for: "b", cost: 4)
+    #expect(cache.count == 2)
+    #expect(cache.totalCost == 8)
+
+    // Promote "a" so "b" becomes least-recently-used.
+    #expect(cache.value(for: "a") == 1)
+
+    // Inserting "c" (cost 4) pushes totalCost to 12 > 10, evicting "b" instead of "a".
+    let evicted = cache.insert(3, for: "c", cost: 4)
+    #expect(evicted == [2])
+    #expect(cache.value(for: "a") == 1)
+    #expect(cache.value(for: "b") == nil)
+    #expect(cache.value(for: "c") == 3)
+    #expect(cache.totalCost == 8)
+
+    // Updating an existing key adjusts totalCost in place without duplicating nodes.
+    cache.insert(30, for: "c", cost: 2)
+    #expect(cache.count == 2)
+    #expect(cache.totalCost == 6)
+    #expect(cache.value(for: "c") == 30)
+
+    // Oversized item (> costLimit) is rejected without evicting existing entries.
+    let oversizedEvicted = cache.insert(99, for: "huge", cost: 25)
+    #expect(oversizedEvicted.isEmpty)
+    #expect(cache.value(for: "huge") == nil)
+    #expect(cache.value(for: "a") == 1)
+    #expect(cache.value(for: "c") == 30)
+  }
+
+  @Test("Selectable Markdown render cache uses LRU eviction for rendered entries and heights")
+  @MainActor
+  func selectableMarkdownRenderCacheLRU() {
+    let cache = MacSelectableMarkdownRenderCache(
+      entryLimit: 2,
+      entryCharacterLimit: 40,
+      heightLimit: 2
+    )
+    let entryA = MacSelectableMarkdownRenderCache.makeEntry(
+      from: NSAttributedString(string: "Alpha paragraph")
+    )
+    let entryB = MacSelectableMarkdownRenderCache.makeEntry(
+      from: NSAttributedString(string: "Beta paragraph")
+    )
+    let entryC = MacSelectableMarkdownRenderCache.makeEntry(
+      from: NSAttributedString(string: "Gamma paragraph")
+    )
+
+    cache.store(entryA, for: AnyHashable("a"))
+    cache.store(entryB, for: AnyHashable("b"))
+    // Touch "a" so "b" is evicted when "c" arrives.
+    #expect(cache.entry(for: AnyHashable("a")) != nil)
+    cache.store(entryC, for: AnyHashable("c"))
+    #expect(cache.entry(for: AnyHashable("a")) != nil)
+    #expect(cache.entry(for: AnyHashable("b")) == nil)
+    #expect(cache.entry(for: AnyHashable("c")) != nil)
+
+    cache.storeHeight(42, for: AnyHashable("a"), widthHalfPoints: 1_200)
+    cache.storeHeight(64, for: AnyHashable("b"), widthHalfPoints: 1_200)
+    #expect(cache.height(for: AnyHashable("a"), widthHalfPoints: 1_200) == 42)
+    cache.storeHeight(88, for: AnyHashable("c"), widthHalfPoints: 1_200)
+    #expect(cache.height(for: AnyHashable("a"), widthHalfPoints: 1_200) == 42)
+    #expect(cache.height(for: AnyHashable("b"), widthHalfPoints: 1_200) == nil)
+    #expect(cache.height(for: AnyHashable("c"), widthHalfPoints: 1_200) == 88)
+  }
+
+  @Test("Selectable text container pool reuses laid-out views by key, defers attached releases, and cleans state")
+  @MainActor
+  func selectableTextContainerPoolLifecycle() {
+    final class DummyDelegate: NSObject, NSTextViewDelegate {}
+
+    let pool = MacSelectableTextContainerPool(
+      countLimit: 2,
+      characterCostLimit: 10_000,
+      maxSingleContainerCharacters: 500,
+      spareLimit: 2
+    )
+    let style = MacSelectableMarkdownBuilder.Style(
+      textSize: 15,
+      muted: false,
+      isDark: false,
+      themeID: .githubLight,
+      textColor: .labelColor,
+      mutedColor: .secondaryLabelColor,
+      accentColor: .controlAccentColor,
+      codeBackgroundColor: .quaternaryLabelColor,
+      codeBlockBackgroundColor: .textBackgroundColor,
+      separatorColor: .separatorColor,
+      findQuery: "",
+      activeFindOccurrence: nil
+    )
+
+    let keyA = AnyHashable("prose-a")
+    let containerA = pool.acquire(forKey: keyA)
+    let entryA = MacSelectableMarkdownRenderCache.makeEntry(
+      from: MacSelectableMarkdownBuilder.attributedString(
+        for: "Hello **world** with `code`.",
+        includeStructuredBlocks: false,
+        style: style
+      )
+    )
+    let delegate = DummyDelegate()
+    containerA.lastRenderKey = keyA
+    containerA.textView.delegate = delegate
+    containerA.setRenderedEntry(entryA, style: style)
+    containerA.frame = NSRect(x: 12, y: 8, width: 640, height: 32)
+    containerA.layoutSubtreeIfNeeded()
+    containerA.textView.setSelectedRange(NSRange(location: 0, length: 5))
+    #expect(containerA.lastLayoutWidth == 640)
+
+    // While containerA is still mounted, a second acquire for keyA must return a distinct instance.
+    let host = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 100))
+    host.addSubview(containerA)
+    let concurrentSameKey = pool.acquire(forKey: keyA)
+    #expect(concurrentSameKey !== containerA)
+
+    // Releasing while still attached to a superview defers pooling until detached.
+    pool.release(containerA)
+    #expect(containerA.textView.delegate == nil)
+    #expect(containerA.textView.selectedRange().length == 0)
+    #expect(pool.pendingCount == 1)
+    #expect(pool.keyedCount == 0)
+
+    // Once SwiftUI detaches the view from its host, it transitions into the keyed pool automatically.
+    containerA.removeFromSuperview()
+    #expect(pool.pendingCount == 0)
+    #expect(pool.keyedCount == 1)
+
+    // Scrolling back into view reuses the exact laid-out container without resetting layout width.
+    let remountedA = pool.acquire(forKey: keyA)
+    #expect(remountedA === containerA)
+    #expect(remountedA.lastRenderKey == keyA)
+    #expect(remountedA.lastLayoutWidth == 640)
+    #expect(pool.keyedCount == 0)
+
+    // Return A, then insert B and C while promoting A so LRU eviction moves B into cleared spares.
+    pool.release(remountedA)
+    let keyB = AnyHashable("prose-b")
+    let containerB = pool.acquire(forKey: keyB)
+    containerB.lastRenderKey = keyB
+    containerB.setRenderedEntry(entryA, style: style)
+    pool.release(containerB)
+
+    // Promote A so B is LRU, then release C to evict B into spareContainers.
+    let touchedA = pool.acquire(forKey: keyA)
+    #expect(touchedA === containerA)
+    pool.release(touchedA)
+
+    let keyC = AnyHashable("prose-c")
+    let containerC = concurrentSameKey
+    containerC.lastRenderKey = keyC
+    containerC.setRenderedEntry(entryA, style: style)
+    pool.release(containerC)
+
+    #expect(pool.keyedCount == 2)
+    #expect(pool.spareCount == 1)
+    #expect(containerB.characterCost == 0)
+    #expect(containerB.lastRenderKey == nil)
+
+    // A brand-new key reuses the evicted spare instead of allocating a fresh TextKit stack.
+    let reusedFromSpare = pool.acquire(forKey: AnyHashable("prose-d"))
+    #expect(reusedFromSpare === containerB)
+  }
 }

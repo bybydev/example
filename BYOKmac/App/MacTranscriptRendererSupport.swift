@@ -1757,9 +1757,140 @@ enum MacSelectableMarkdownBuilder {
 }
 
 @MainActor
-private final class MacSelectableMarkdownRenderCache {
+final class MacLRUCache<Key: Hashable, Value> {
+  private final class Node {
+    let key: Key
+    var value: Value
+    var cost: Int
+    weak var prev: Node?
+    var next: Node?
+
+    init(key: Key, value: Value, cost: Int) {
+      self.key = key
+      self.value = value
+      self.cost = cost
+    }
+  }
+
+  private var nodes: [Key: Node] = [:]
+  private var head: Node?
+  private weak var tail: Node?
+  private(set) var totalCost: Int = 0
+
+  let countLimit: Int
+  let costLimit: Int?
+
+  init(countLimit: Int, costLimit: Int? = nil) {
+    self.countLimit = max(1, countLimit)
+    self.costLimit = costLimit.map { max(1, $0) }
+  }
+
+  var count: Int { nodes.count }
+
+  func contains(_ key: Key) -> Bool {
+    nodes[key] != nil
+  }
+
+  func value(for key: Key) -> Value? {
+    guard let node = nodes[key] else { return nil }
+    if head !== node {
+      detach(node)
+      attachAtHead(node)
+    }
+    return node.value
+  }
+
+  @discardableResult
+  func insert(_ value: Value, for key: Key, cost: Int = 1) -> [Value] {
+    let safeCost = max(0, cost)
+    if let costLimit, safeCost > costLimit {
+      if let removed = removeValue(forKey: key) {
+        return [removed]
+      }
+      return []
+    }
+
+    if let existing = nodes[key] {
+      totalCost += safeCost - existing.cost
+      existing.value = value
+      existing.cost = safeCost
+      if head !== existing {
+        detach(existing)
+        attachAtHead(existing)
+      }
+    } else {
+      let node = Node(key: key, value: value, cost: safeCost)
+      nodes[key] = node
+      totalCost += safeCost
+      attachAtHead(node)
+    }
+
+    var evicted: [Value] = []
+    while nodes.count > countLimit || (costLimit != nil && totalCost > costLimit!) {
+      guard let oldest = popLeastRecentlyUsed() else { break }
+      evicted.append(oldest.value)
+    }
+    return evicted
+  }
+
+  @discardableResult
+  func removeValue(forKey key: Key) -> Value? {
+    guard let node = nodes.removeValue(forKey: key) else { return nil }
+    detach(node)
+    totalCost -= node.cost
+    return node.value
+  }
+
+  @discardableResult
+  func popLeastRecentlyUsed() -> (key: Key, value: Value, cost: Int)? {
+    guard let oldest = tail else { return nil }
+    nodes.removeValue(forKey: oldest.key)
+    detach(oldest)
+    totalCost -= oldest.cost
+    return (oldest.key, oldest.value, oldest.cost)
+  }
+
+  func removeAll() {
+    nodes.removeAll()
+    head = nil
+    tail = nil
+    totalCost = 0
+  }
+
+  private func detach(_ node: Node) {
+    let prev = node.prev
+    let next = node.next
+    if let prev {
+      prev.next = next
+    } else {
+      head = next
+    }
+    if let next {
+      next.prev = prev
+    } else {
+      tail = prev
+    }
+    node.prev = nil
+    node.next = nil
+  }
+
+  private func attachAtHead(_ node: Node) {
+    node.prev = nil
+    node.next = head
+    if let currentHead = head {
+      currentHead.prev = node
+    } else {
+      tail = node
+    }
+    head = node
+  }
+}
+
+@MainActor
+final class MacSelectableMarkdownRenderCache {
   struct RenderedEntry {
     let attributed: NSAttributedString
+    let characterCost: Int
     let startsWithBlockquote: Bool
     let endsWithBlockquote: Bool
     let hasBlockquotes: Bool
@@ -1774,13 +1905,8 @@ private final class MacSelectableMarkdownRenderCache {
 
   static let shared = MacSelectableMarkdownRenderCache()
 
-  private var entries: [AnyHashable: RenderedEntry] = [:]
-  private var entryOrder: [AnyHashable] = []
-  private let entryLimit = 256
-
-  private var heights: [HeightKey: CGFloat] = [:]
-  private var heightOrder: [HeightKey] = []
-  private let heightLimit = 512
+  private let entries: MacLRUCache<AnyHashable, RenderedEntry>
+  private let heights: MacLRUCache<HeightKey, CGFloat>
 
   private let scratchStorage = NSTextStorage()
   private let scratchLayoutManager = NSLayoutManager()
@@ -1788,39 +1914,36 @@ private final class MacSelectableMarkdownRenderCache {
     size: NSSize(width: 640, height: CGFloat.greatestFiniteMagnitude)
   )
 
-  private init() {
+  init(
+    entryLimit: Int = 512,
+    entryCharacterLimit: Int = 2_000_000,
+    heightLimit: Int = 1_536
+  ) {
+    entries = MacLRUCache(countLimit: entryLimit, costLimit: entryCharacterLimit)
+    heights = MacLRUCache(countLimit: heightLimit)
     scratchTextContainer.lineFragmentPadding = 0
     scratchLayoutManager.addTextContainer(scratchTextContainer)
     scratchStorage.addLayoutManager(scratchLayoutManager)
   }
 
+  var entryCount: Int { entries.count }
+  var heightCount: Int { heights.count }
+
   func entry(for key: AnyHashable) -> RenderedEntry? {
-    entries[key]
+    entries.value(for: key)
   }
 
   func store(_ entry: RenderedEntry, for key: AnyHashable) {
-    if entries[key] == nil {
-      entryOrder.append(key)
-    }
-    entries[key] = entry
-    if entryOrder.count > entryLimit {
-      entries.removeValue(forKey: entryOrder.removeFirst())
-    }
+    entries.insert(entry, for: key, cost: entry.characterCost)
   }
 
   func height(for renderKey: AnyHashable, widthHalfPoints: Int) -> CGFloat? {
-    heights[HeightKey(renderKey: renderKey, widthHalfPoints: widthHalfPoints)]
+    heights.value(for: HeightKey(renderKey: renderKey, widthHalfPoints: widthHalfPoints))
   }
 
   func storeHeight(_ height: CGFloat, for renderKey: AnyHashable, widthHalfPoints: Int) {
     let key = HeightKey(renderKey: renderKey, widthHalfPoints: widthHalfPoints)
-    if heights[key] == nil {
-      heightOrder.append(key)
-    }
-    heights[key] = height
-    if heightOrder.count > heightLimit {
-      heights.removeValue(forKey: heightOrder.removeFirst())
-    }
+    heights.insert(height, for: key)
   }
 
   func measureHeight(
@@ -1843,6 +1966,7 @@ private final class MacSelectableMarkdownRenderCache {
     guard length > 0 else {
       return RenderedEntry(
         attributed: attributed,
+        characterCost: 1,
         startsWithBlockquote: false,
         endsWithBlockquote: false,
         hasBlockquotes: false,
@@ -1896,12 +2020,188 @@ private final class MacSelectableMarkdownRenderCache {
 
     return RenderedEntry(
       attributed: attributed,
+      characterCost: max(1, length),
       startsWithBlockquote: startsWithBlockquote,
       endsWithBlockquote: endsWithBlockquote,
       hasBlockquotes: hasBlockquotes,
       hasThematicBreaks: hasThematicBreaks,
       hasInlineCode: hasInlineCode
     )
+  }
+}
+
+/// Reuses detached `MacPassthroughSelectableTextContainer` instances across
+/// `List` row virtualization. Keyed hits preserve the container's populated
+/// `NSTextStorage` and laid-out `NSLayoutManager` glyphs so scrolling back into
+/// view avoids rebuilding TextKit state on the main thread.
+@MainActor
+final class MacSelectableTextContainerPool {
+  static let shared = MacSelectableTextContainerPool()
+
+  private let keyedContainers: MacLRUCache<AnyHashable, MacPassthroughSelectableTextContainer>
+  private var spareContainers: [MacPassthroughSelectableTextContainer] = []
+  private var pendingContainers: [ObjectIdentifier: MacPassthroughSelectableTextContainer] = [:]
+  private var pendingOrder: [ObjectIdentifier] = []
+  private var drainScheduled = false
+
+  let maxSingleContainerCharacters: Int
+  let spareLimit: Int
+  private let pendingLimit = 64
+
+  init(
+    countLimit: Int = 64,
+    characterCostLimit: Int = 256_000,
+    maxSingleContainerCharacters: Int = 24_000,
+    spareLimit: Int = 8
+  ) {
+    keyedContainers = MacLRUCache(countLimit: countLimit, costLimit: characterCostLimit)
+    self.maxSingleContainerCharacters = max(1, maxSingleContainerCharacters)
+    self.spareLimit = max(0, spareLimit)
+  }
+
+  var keyedCount: Int { keyedContainers.count }
+  var spareCount: Int { spareContainers.count }
+  var pendingCount: Int { pendingContainers.count }
+
+  func acquire(forKey key: AnyHashable) -> MacPassthroughSelectableTextContainer {
+    if !pendingContainers.isEmpty {
+      drainDetachedPending()
+    }
+
+    if let hit = keyedContainers.removeValue(forKey: key) {
+      hit.isInPool = false
+      hit.owningPool = nil
+      if hit.superview == nil, hit.window == nil {
+        hit.needsLayout = true
+        return hit
+      }
+    }
+
+    while let spare = spareContainers.popLast() {
+      spare.isInPool = false
+      spare.owningPool = nil
+      if spare.superview == nil, spare.window == nil {
+        return spare
+      }
+    }
+
+    if keyedContainers.count >= keyedContainers.countLimit,
+      let oldest = keyedContainers.popLeastRecentlyUsed()?.value
+    {
+      oldest.isInPool = false
+      oldest.owningPool = nil
+      if oldest.superview == nil, oldest.window == nil {
+        oldest.clearContentForSparePool()
+        return oldest
+      }
+    }
+
+    return MacPassthroughSelectableTextContainer()
+  }
+
+  func release(_ container: MacPassthroughSelectableTextContainer) {
+    guard !container.isInPool, !container.pendingPoolReturn else { return }
+    if let window = container.window, window.firstResponder === container.textView {
+      window.makeFirstResponder(nil)
+    }
+    container.prepareForPoolRelease()
+
+    if container.superview == nil, container.window == nil {
+      checkinDetached(container)
+      return
+    }
+
+    let id = ObjectIdentifier(container)
+    container.owningPool = self
+    container.pendingPoolReturn = true
+    pendingContainers[id] = container
+    pendingOrder.append(id)
+    while pendingOrder.count > pendingLimit {
+      let droppedID = pendingOrder.removeFirst()
+      if let dropped = pendingContainers.removeValue(forKey: droppedID) {
+        dropped.pendingPoolReturn = false
+        dropped.owningPool = nil
+      }
+    }
+    schedulePendingDrainIfNeeded()
+  }
+
+  fileprivate func completePendingDetachmentIfReady(_ container: MacPassthroughSelectableTextContainer) {
+    guard container.pendingPoolReturn, container.superview == nil, container.window == nil else { return }
+    let id = ObjectIdentifier(container)
+    container.pendingPoolReturn = false
+    container.owningPool = nil
+    if pendingContainers.removeValue(forKey: id) != nil {
+      pendingOrder.removeAll { $0 == id }
+    }
+    checkinDetached(container)
+  }
+
+  private func schedulePendingDrainIfNeeded() {
+    guard !drainScheduled, !pendingContainers.isEmpty else { return }
+    drainScheduled = true
+    Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self else { return }
+      self.drainScheduled = false
+      self.drainDetachedPending()
+    }
+  }
+
+  private func drainDetachedPending() {
+    guard !pendingContainers.isEmpty else { return }
+    var remainingOrder: [ObjectIdentifier] = []
+    remainingOrder.reserveCapacity(pendingOrder.count)
+    var ready: [MacPassthroughSelectableTextContainer] = []
+
+    for id in pendingOrder {
+      guard let container = pendingContainers[id] else { continue }
+      if container.superview == nil, container.window == nil {
+        container.pendingPoolReturn = false
+        container.owningPool = nil
+        pendingContainers.removeValue(forKey: id)
+        ready.append(container)
+      } else {
+        remainingOrder.append(id)
+      }
+    }
+    pendingOrder = remainingOrder
+    for container in ready {
+      checkinDetached(container)
+    }
+  }
+
+  private func checkinDetached(_ container: MacPassthroughSelectableTextContainer) {
+    guard !container.isInPool, container.superview == nil, container.window == nil else { return }
+    let cost = container.characterCost
+    if let key = container.lastRenderKey,
+      cost > 0,
+      cost <= maxSingleContainerCharacters
+    {
+      if keyedContainers.contains(key) {
+        _ = keyedContainers.value(for: key)
+        storeSpareIfPossible(container)
+      } else {
+        container.isInPool = true
+        container.owningPool = self
+        let evicted = keyedContainers.insert(container, for: key, cost: cost)
+        for old in evicted {
+          old.isInPool = false
+          old.owningPool = nil
+          storeSpareIfPossible(old)
+        }
+      }
+    } else {
+      storeSpareIfPossible(container)
+    }
+  }
+
+  private func storeSpareIfPossible(_ container: MacPassthroughSelectableTextContainer) {
+    guard spareContainers.count < spareLimit else { return }
+    container.clearContentForSparePool()
+    container.isInPool = true
+    container.owningPool = self
+    spareContainers.append(container)
   }
 }
 
@@ -1921,7 +2221,7 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
     RenderKey(
       source: source,
       includeStructuredBlocks: includeStructuredBlocks,
-      textSize: Int(textSize.rounded()),
+      fontSizeTenths: Int((textSize * 10).rounded()),
       muted: muted,
       isDark: colorScheme == .dark,
       themeID: MacThemeFoundation.store.effectiveThemeID(hasPro: MacPurchaseStore.manager.hasPro),
@@ -1933,7 +2233,7 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
   private struct RenderKey: Hashable {
     let source: String
     let includeStructuredBlocks: Bool
-    let textSize: Int
+    let fontSizeTenths: Int
     let muted: Bool
     let isDark: Bool
     let themeID: MacAppThemeID
@@ -1946,15 +2246,26 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
   }
 
   func makeNSView(context: Context) -> MacPassthroughSelectableTextContainer {
-    let container = MacPassthroughSelectableTextContainer()
+    let key = renderKey
+    let wrappedKey = AnyHashable(key)
+    let container = MacSelectableTextContainerPool.shared.acquire(forKey: wrappedKey)
     container.textView.delegate = context.coordinator
-    updateContainer(container)
+    updateContainer(container, key: key, wrappedKey: wrappedKey)
     return container
   }
 
   func updateNSView(_ nsView: MacPassthroughSelectableTextContainer, context: Context) {
+    let key = renderKey
+    let wrappedKey = AnyHashable(key)
     nsView.textView.delegate = context.coordinator
-    updateContainer(nsView)
+    updateContainer(nsView, key: key, wrappedKey: wrappedKey)
+  }
+
+  static func dismantleNSView(
+    _ nsView: MacPassthroughSelectableTextContainer,
+    coordinator: Coordinator
+  ) {
+    MacSelectableTextContainerPool.shared.release(nsView)
   }
 
   func sizeThatFits(
@@ -1967,10 +2278,15 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
     return CGSize(width: width, height: max(height, 1))
   }
 
-  private func updateContainer(_ container: MacPassthroughSelectableTextContainer) {
-    let key = renderKey
-    let wrappedKey = AnyHashable(key)
-    guard container.lastRenderKey != wrappedKey else { return }
+  private func updateContainer(
+    _ container: MacPassthroughSelectableTextContainer,
+    key: RenderKey,
+    wrappedKey: AnyHashable
+  ) {
+    if container.lastRenderKey == wrappedKey {
+      _ = MacSelectableMarkdownRenderCache.shared.entry(for: wrappedKey)
+      return
+    }
     container.lastRenderKey = wrappedKey
 
     let style = MacSelectableMarkdownBuilder.Style(
@@ -2024,11 +2340,16 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
 @MainActor
 final class MacPassthroughSelectableTextContainer: NSView {
   let textView: MacSelectableTextView
-  fileprivate var lastRenderKey: AnyHashable?
+  var lastRenderKey: AnyHashable?
+  fileprivate var isInPool = false
+  fileprivate var pendingPoolReturn = false
+  fileprivate weak var owningPool: MacSelectableTextContainerPool?
   private var attributedStorage = NSAttributedString()
   private var topInset: CGFloat = 0
   private var bottomInset: CGFloat = 0
-  private var lastLayoutWidth: CGFloat = 0
+  private(set) var lastLayoutWidth: CGFloat = 0
+
+  var characterCost: Int { attributedStorage.length }
 
   override var isFlipped: Bool { true }
 
@@ -2063,7 +2384,21 @@ final class MacPassthroughSelectableTextContainer: NSView {
     fatalError("init(coder:) has not been implemented")
   }
 
-  fileprivate func setRenderedEntry(
+  override func viewDidMoveToSuperview() {
+    super.viewDidMoveToSuperview()
+    if pendingPoolReturn, superview == nil, window == nil {
+      owningPool?.completePendingDetachmentIfReady(self)
+    }
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    if pendingPoolReturn, superview == nil, window == nil {
+      owningPool?.completePendingDetachmentIfReady(self)
+    }
+  }
+
+  func setRenderedEntry(
     _ entry: MacSelectableMarkdownRenderCache.RenderedEntry,
     style: MacSelectableMarkdownBuilder.Style
   ) {
@@ -2090,6 +2425,33 @@ final class MacPassthroughSelectableTextContainer: NSView {
     textView.textStorage?.setAttributedString(entry.attributed)
     textView.needsDisplay = true
     needsLayout = true
+  }
+
+  fileprivate func prepareForPoolRelease() {
+    textView.delegate = nil
+    if textView.selectedRange().length > 0 {
+      textView.setSelectedRange(NSRange(location: 0, length: 0))
+    }
+    isHidden = false
+    alphaValue = 1
+    if frame.origin != .zero {
+      setFrameOrigin(.zero)
+    }
+  }
+
+  fileprivate func clearContentForSparePool() {
+    lastRenderKey = nil
+    attributedStorage = NSAttributedString()
+    topInset = 0
+    bottomInset = 0
+    lastLayoutWidth = 0
+    textView.topContentInset = 0
+    textView.hasBlockquotes = false
+    textView.hasThematicBreaks = false
+    textView.hasInlineCode = false
+    textView.textStorage?.setAttributedString(NSAttributedString())
+    frame = .zero
+    textView.frame = .zero
   }
 
   func measureHeight(forWidth width: CGFloat) -> CGFloat {
