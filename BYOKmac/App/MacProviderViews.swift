@@ -2028,13 +2028,21 @@ struct MacConnectionEditorView: View {
     let headerName: String
   }
 
+  private enum PendingUnsavedAction {
+    case back
+    case openModels
+  }
+
   @Bindable var model: MacProviderModel
   let route: MacConnectionEditorRoute
   let backTitle: String?
   let onCancel: (() -> Void)?
+  let onOpenModels: (() -> Void)?
+  let onRequestDelete: (() -> Void)?
   let onFinished: (ProviderAccountID?) -> Void
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.macToastCenter) private var toastCenter
 
   private var isEmbedded: Bool { onCancel != nil }
 
@@ -2047,6 +2055,7 @@ struct MacConnectionEditorView: View {
   @State private var didEditLabel = false
   @State private var showingProviderPicker = false
   @State private var credential = ""
+  @State private var isReplacingCredential = false
   @State private var baseURL: String
   @State private var chatPath: String
   @State private var modelsPath: String
@@ -2064,6 +2073,7 @@ struct MacConnectionEditorView: View {
   @State private var httpReferer: String
   @State private var isEnabled: Bool
   @State private var isSaving = false
+  @State private var isRefreshingModels = false
   @State private var saveError: String?
   @State private var isRevealing = false
   @State private var revealedStoredCredential: String?
@@ -2073,6 +2083,8 @@ struct MacConnectionEditorView: View {
   @State private var showingAdvanced = false
   @State private var showingModelPicker = false
   @State private var showingDiscardAlert = false
+  @State private var pendingAction: PendingUnsavedAction? = nil
+  @State private var isModelsRowHovered = false
 
   @State private var discoveryTask: Task<Void, Never>?
   @State private var discoveryID: UUID?
@@ -2099,12 +2111,16 @@ struct MacConnectionEditorView: View {
     route: MacConnectionEditorRoute,
     backTitle: String? = nil,
     onCancel: (() -> Void)? = nil,
+    onOpenModels: (() -> Void)? = nil,
+    onRequestDelete: (() -> Void)? = nil,
     onFinished: @escaping (ProviderAccountID?) -> Void
   ) {
     self.model = model
     self.route = route
     self.backTitle = backTitle
     self.onCancel = onCancel
+    self.onOpenModels = onOpenModels
+    self.onRequestDelete = onRequestDelete
     self.onFinished = onFinished
 
     let account: ProviderAccount?
@@ -2153,7 +2169,7 @@ struct MacConnectionEditorView: View {
     _appTitle = State(initialValue: account?.metadata["appTitle"] ?? "")
     _httpReferer = State(initialValue: account?.metadata["httpReferer"] ?? "")
     _isEnabled = State(initialValue: account?.isEnabled ?? true)
-    _showingAdvanced = State(initialValue: kind == .openAICompatible || account?.baseURLOverride != nil)
+    _showingAdvanced = State(initialValue: false)
   }
 
   private var isCreate: Bool {
@@ -2198,17 +2214,6 @@ struct MacConnectionEditorView: View {
     case .ollama: "http://localhost:11434/v1"
     case .lmStudio: "http://localhost:1234/v1"
     default: "http://localhost:11434/v1"
-    }
-  }
-
-  private var localServerHint: String {
-    switch kind {
-    case .ollama:
-      "Use http://localhost:11434/v1 on this Mac, or your LAN IP with 'Expose Ollama to the network' enabled. /v1 is added automatically if omitted."
-    case .lmStudio:
-      "Use http://localhost:1234/v1 on this Mac, or your LAN IP with 'Serve on Local Network' enabled. /v1 is added automatically if omitted."
-    default:
-      "HTTP and HTTPS endpoints are accepted for local and LAN hosts."
     }
   }
 
@@ -2345,39 +2350,6 @@ struct MacConnectionEditorView: View {
       }
   }
 
-  private var manualOnlyRecords: [AccountModelRecord] {
-    let seedIDs = isCustom ? Set(parseSeedModels(seedModelsText).map(ModelID.init(rawValue:))) : []
-    return modelRecords.filter { $0.isManual && !seedIDs.contains($0.model.id) }
-  }
-
-  private var selectedModelRecord: AccountModelRecord? {
-    let typed = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !typed.isEmpty {
-      let id = ModelID(rawValue: typed)
-      return modelRecords.first { $0.model.id == id }
-        ?? AccountModelRecord(
-          accountID: existing?.id ?? "",
-          model: ProviderModel(
-            providerID: existing?.providerID ?? kind.defaultProviderID ?? "custom",
-            id: id,
-            displayName: typed
-          ),
-          isManual: true
-        )
-    }
-    if let selectedModelID, let match = modelRecords.first(where: { $0.model.id == selectedModelID }) {
-      return match
-    }
-    if let selectedModelID, let existing,
-      let hidden = model.models(for: existing.id, includeHidden: true).first(where: {
-        $0.model.id == selectedModelID
-      })
-    {
-      return hidden
-    }
-    return nil
-  }
-
   private var selectedModelTitle: String {
     let typed = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
     if !typed.isEmpty { return typed }
@@ -2486,46 +2458,42 @@ struct MacConnectionEditorView: View {
     return hasNonEnabledUnsavedChanges
   }
 
+  private var presentationState: MacProviderPresentationState? {
+    guard let existing else { return nil }
+    return macProviderPresentationState(model: model, account: existing)
+  }
+
+  private var isDefaultConnection: Bool {
+    guard let existing, presentationState == .ready else { return false }
+    return model.defaultAccountID == existing.id
+  }
+
+  private var isTestingConnection: Bool {
+    connectionTestState == .testing
+  }
+
+  private var modelsSummaryText: String {
+    guard let existing else { return "" }
+    let all = model.models(for: existing.id, includeHidden: true)
+    let availableCount = all.filter { $0.isAvailable && !$0.isHidden }.count
+    let favoriteCount = all.filter { $0.isFavorite && !$0.isHidden }.count
+    if availableCount == 0 {
+      return "Add or discover models"
+    }
+    let base = "\(availableCount) model\(availableCount == 1 ? "" : "s")"
+    if favoriteCount > 0 {
+      return "\(base) · \(favoriteCount) ★"
+    }
+    return base
+  }
+
+  private var showsBottomActionBar: Bool {
+    isCreate || hasUnsavedChanges || isSaving
+  }
+
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 12) {
-        if isEmbedded {
-          Button(action: requestDismiss) {
-            Label(backTitle ?? "Back", systemImage: "chevron.left")
-              .foregroundStyle(MacDesignTokens.Colors.accent)
-          }
-          .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
-          .disabled(isSaving)
-          Divider().frame(height: 24)
-        }
-        Group {
-          if let existing {
-            MacProviderMark(account: existing, size: 36, isReady: true)
-          } else {
-            MacProviderMark(kind: kind, size: 36, isReady: true)
-          }
-        }
-        VStack(alignment: .leading, spacing: 2) {
-          Text(isCreate ? "Connect \(providerDisplayName(kind))" : "Edit Connection")
-            .font(.title3.weight(.semibold))
-          Text(isCreate ? "Configure the connection BYOKchat will use." : providerDisplayName(kind))
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-        Spacer()
-        Button("Cancel") { requestDismiss() }
-          .buttonStyle(MacActionButtonStyle(.secondary))
-          .keyboardShortcut(.cancelAction)
-          .disabled(isSaving)
-        Button(isCreate ? "Connect" : "Save") { save() }
-          .buttonStyle(MacActionButtonStyle(.primary))
-          .keyboardShortcut(.defaultAction)
-          .disabled(!canSave || isSaving)
-      }
-      .padding(.horizontal, isEmbedded ? 18 : 16)
-      .frame(height: isEmbedded ? 66 : nil)
-      .padding(.vertical, isEmbedded ? 0 : 16)
-      .background(isEmbedded ? MacDesignTokens.Colors.surface.opacity(0.45) : Color.clear)
+      headerBar
 
       Divider()
 
@@ -2550,377 +2518,66 @@ struct MacConnectionEditorView: View {
           .accessibilityLabel("Dismiss error")
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.red.opacity(0.09))
 
         Divider()
       }
 
-      ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-          editorCard("Connection", systemImage: "link") {
-            VStack(alignment: .leading, spacing: 10) {
-              if isCreate {
-                Button {
-                  showingProviderPicker = true
-                } label: {
-                  HStack(spacing: 10) {
-                    MacProviderMark(kind: selectedKind, size: 28, isReady: true)
-                    VStack(alignment: .leading, spacing: 1) {
-                      Text(selectedKind.macPickerTitle)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                      Text(selectedKind.macPickerDescription)
-                        .font(.caption)
-                        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                    }
-                    Spacer()
-                    Text("Change")
-                      .font(.caption.weight(.medium))
-                      .foregroundStyle(MacDesignTokens.Colors.accent)
-                    Image(systemName: "chevron.right")
-                      .font(.caption2.weight(.semibold))
-                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  }
-                  .padding(.horizontal, 10)
-                  .padding(.vertical, 8)
-                }
-                .buttonStyle(
-                  MacCardButtonStyle(
-                    cornerRadius: 8,
-                    surfaceColor: MacDesignTokens.Colors.canvas.opacity(0.65)
-                  )
-                )
-                .popover(isPresented: $showingProviderPicker, arrowEdge: .bottom) {
-                  MacProviderKindPickerSheet(
-                    currentSelection: selectedKind,
-                    presentation: .popover
-                  ) { newKind in
-                    switchKind(to: newKind)
-                  }
-                }
-                .accessibilityLabel("Provider")
-                .accessibilityValue(selectedKind.macPickerTitle)
-              } else {
-                LabeledContent("Provider", value: providerDisplayName(kind))
-              }
-              labeledField("Connection Name") {
-                TextField("Connection Name", text: $label, prompt: Text("e.g. OpenAI"))
-                  .textFieldStyle(.roundedBorder)
-                  .onChange(of: label) { _, newValue in
-                    if newValue != suggestedLabel {
-                      didEditLabel = true
-                    }
-                  }
-              }
-              if !isCreate {
-                Divider()
-                HStack(alignment: .center, spacing: 12) {
-                  VStack(alignment: .leading, spacing: 2) {
-                    Text("Enabled")
-                      .font(.system(size: 13, weight: .medium))
-                    Text("Disabled connections won't appear in model pickers or new chats.")
-                      .font(.caption)
-                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  }
-                  Spacer()
-                  Toggle("Enabled", isOn: $isEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                }
-              }
-            }
+      if connectionTestState != .idle {
+        HStack(spacing: 8) {
+          if isDiscoveryRunning {
+            ProgressView()
+              .controlSize(.mini)
           }
-
-          editorCard(
-            showsCredentialField && !requiresCredential ? "Authentication (Optional)" : "Authentication",
-            systemImage: "key"
-          ) {
-            VStack(alignment: .leading, spacing: 10) {
-              if isCustom {
-                Picker("Authentication", selection: $authMode) {
-                  Text("Bearer Token").tag("bearer")
-                  Text("Custom Header").tag("header")
-                  Text("None").tag("none")
-                }
-                if authMode == "header" {
-                  labeledField("Header Name") {
-                    TextField("Header Name", text: $customHeaderName, prompt: Text("e.g. X-API-Key"))
-                      .textFieldStyle(.roundedBorder)
-                      .font(.system(size: 13, design: .monospaced))
-                  }
-                }
-              }
-
-              if showsCredentialField {
-                if hasStoredCredential && clearCredential {
-                  HStack {
-                    Text("Saved API key will be removed when you click Save.")
-                      .font(.caption)
-                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                    Spacer()
-                    Button("Keep Saved Key") {
-                      clearCredential = false
-                    }
-                    .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                  }
-                } else {
-                  labeledField(isCreate ? "API Key / Token" : "Replace API Key / Token") {
-                    HStack(spacing: 6) {
-                      Group {
-                        if isDraftCredentialVisible {
-                          TextField(credentialPlaceholder, text: $credential)
-                            .font(.system(size: 13, design: .monospaced))
-                        } else {
-                          SecureField(credentialPlaceholder, text: $credential)
-                        }
-                      }
-                      .textFieldStyle(.roundedBorder)
-
-                      Button {
-                        isDraftCredentialVisible.toggle()
-                      } label: {
-                        Image(systemName: isDraftCredentialVisible ? "eye.slash" : "eye")
-                          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                      }
-                      .buttonStyle(MacIconButtonStyle())
-                      .help(isDraftCredentialVisible ? "Hide typed key" : "Show typed key")
-                      .accessibilityLabel(isDraftCredentialVisible ? "Hide typed key" : "Show typed key")
-                    }
-                  }
-                  if hasStoredCredential {
-                    HStack(spacing: 8) {
-                      Label("Credential stored in Keychain", systemImage: "lock.fill")
-                        .font(.caption)
-                        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                      Spacer()
-                      if revealedStoredCredential != nil {
-                        Button("Hide Key") {
-                          hideRevealedCredential()
-                        }
-                        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                      } else {
-                        Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
-                          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                          .disabled(isRevealing)
-                      }
-                      if !requiresCredential {
-                        Button("Remove Key", role: .destructive) {
-                          hideRevealedCredential()
-                          clearCredential = true
-                          credential = ""
-                        }
-                        .buttonStyle(MacActionButtonStyle(.destructive, size: .small))
-                      }
-                    }
-
-                    if let revealed = revealedStoredCredential {
-                      HStack(alignment: .center, spacing: 8) {
-                        Text(revealed)
-                          .font(.system(size: 12, design: .monospaced))
-                          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                          .textSelection(.enabled)
-                          .lineLimit(2)
-                          .truncationMode(.middle)
-                          .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Button(didCopyRevealedCredential ? "Copied" : "Copy") {
-                          NSPasteboard.general.clearContents()
-                          NSPasteboard.general.setString(revealed, forType: .string)
-                          didCopyRevealedCredential = true
-                        }
-                        .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-                      }
-                      .padding(.horizontal, 10)
-                      .padding(.vertical, 8)
-                      .background(
-                        MacDesignTokens.Colors.codeSurface,
-                        in: RoundedRectangle(cornerRadius: 8)
-                      )
-                      .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
-                      }
-                    }
-                  } else {
-                    Text(
-                      requiresCredential
-                        ? "Credentials are stored in Keychain."
-                        : "Optional. Stored in Keychain if provided."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  }
-                }
-              } else {
-                Text("This connection does not require a credential.")
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                if hasStoredCredential {
-                  Text("Saved API key will be removed when you click Save.")
-                    .font(.caption)
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                }
-              }
+          connectionTestStatusRow
+          Spacer(minLength: 6)
+          if !isDiscoveryRunning {
+            Button {
+              connectionTestState = .idle
+            } label: {
+              Image(systemName: "xmark")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
             }
-          }
-
-          if isCustom {
-            editorCard("Endpoint", systemImage: "network") {
-              VStack(alignment: .leading, spacing: 10) {
-                labeledField("Base URL") {
-                  TextField("Base URL", text: $baseURL, prompt: Text("https://example.com/v1"))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13, design: .monospaced))
-                }
-                if let urlError = baseURLValidationError {
-                  Label(urlError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                labeledField("Chat Completions Path") {
-                  TextField("Chat Completions Path", text: $chatPath, prompt: Text("/chat/completions"))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13, design: .monospaced))
-                }
-                labeledField("Models Path (leave blank to disable discovery)") {
-                  TextField("Models Path", text: $modelsPath, prompt: Text("/models"))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13, design: .monospaced))
-                }
-                Text("HTTPS endpoints are accepted anywhere; cleartext HTTP is allowed for localhost and private LAN servers.")
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  .fixedSize(horizontal: false, vertical: true)
-              }
-            }
-          } else if kind.isLocalServer {
-            editorCard("Local Server", systemImage: "network") {
-              VStack(alignment: .leading, spacing: 10) {
-                labeledField("Server URL") {
-                  TextField("Server URL", text: $baseURL, prompt: Text(localServerPlaceholder))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13, design: .monospaced))
-                }
-                if let urlError = baseURLValidationError {
-                  Label(urlError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                Text(localServerHint)
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  .fixedSize(horizontal: false, vertical: true)
-              }
-            }
-          }
-
-          modelsAndDiscoveryCard
-
-          if isCustom {
-            editorCard("Seed Models", systemImage: "list.bullet") {
-              VStack(alignment: .leading, spacing: 8) {
-                TextEditor(text: $seedModelsText)
-                  .font(.system(size: 12.5, design: .monospaced))
-                  .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                  .scrollContentBackground(.hidden)
-                  .frame(minHeight: 76)
-                  .padding(6)
-                  .background(
-                    MacDesignTokens.Colors.codeSurface,
-                    in: RoundedRectangle(cornerRadius: 8)
-                  )
-                  .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                      .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.75)
-                  }
-                Text("Optional model IDs, one per line. Removing a line removes that seed model on Save.")
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              }
-            }
-          } else if !kind.isLocalServer {
-            DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
-              VStack(spacing: 12) {
-                editorCard("Endpoint Override", systemImage: "network") {
-                  VStack(alignment: .leading, spacing: 8) {
-                    labeledField("Base URL Override") {
-                      TextField(
-                        "Base URL Override",
-                        text: $baseURL,
-                        prompt: Text(kind.defaultEndpoint?.absoluteString ?? "https://")
-                      )
-                      .textFieldStyle(.roundedBorder)
-                      .font(.system(size: 13, design: .monospaced))
-                    }
-                    if let urlError = baseURLValidationError {
-                      Label(urlError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Text("Leave unchanged to use the provider default endpoint.")
-                      .font(.caption)
-                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  }
-                }
-              }
-              .padding(.top, 10)
-            }
-            .font(.headline)
-          }
-
-          editorCard("Additional Headers", systemImage: "list.bullet.rectangle") {
-            MacAdditionalHeadersSection(
-              headers: $additionalHeaders,
-              policy: headerValidationPolicy,
-              footerText: "Optional non-secret headers sent with requests. Authentication and transport headers are managed by BYOKchat.",
-              editorTarget: $headerEditorTarget
-            )
-          }
-          .macAdditionalHeaderEditorPopover(
-            target: $headerEditorTarget,
-            headers: $additionalHeaders,
-            policy: headerValidationPolicy
-          )
-
-          if kind == .openRouter {
-            editorCard("OpenRouter", systemImage: "arrow.triangle.branch") {
-              VStack(alignment: .leading, spacing: 10) {
-                labeledField("App Title") {
-                  TextField("App Title", text: $appTitle, prompt: Text("Optional X-Title header"))
-                    .textFieldStyle(.roundedBorder)
-                }
-                labeledField("HTTP Referer") {
-                  TextField("HTTP Referer", text: $httpReferer, prompt: Text("Optional HTTP-Referer URL"))
-                    .textFieldStyle(.roundedBorder)
-                }
-              }
-            }
-          }
-
-          if let existing {
-            editorCard("Details", systemImage: "info.circle") {
-              VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Created") {
-                  Text(existing.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                }
-                LabeledContent("Updated") {
-                  Text(existing.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                }
-              }
-              .font(.callout)
-            }
+            .buttonStyle(MacIconButtonStyle())
+            .accessibilityLabel("Dismiss status")
           }
         }
-        .padding(16)
-        .frame(maxWidth: isEmbedded ? 640 : .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MacDesignTokens.Colors.surface.opacity(0.55))
+
+        Divider()
+      }
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          generalSettingsGroup
+          modelsSettingsGroup
+          credentialsAndConnectionGroup
+          advancedDisclosureSection
+
+          if !isCreate, let onRequestDelete {
+            Button(role: .destructive, action: onRequestDelete) {
+              Text("Delete Connection…")
+                .foregroundStyle(.red)
+            }
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+            .padding(.top, 4)
+          }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: isEmbedded ? 600 : .infinity, alignment: .leading)
         .frame(maxWidth: .infinity)
+      }
+
+      if showsBottomActionBar {
+        Divider()
+        bottomActionBar
       }
     }
     .frame(
@@ -2937,93 +2594,263 @@ struct MacConnectionEditorView: View {
     }
     .alert("Unsaved Changes", isPresented: $showingDiscardAlert) {
       Button("Discard Changes", role: .destructive) {
-        closeEditor()
+        let action = pendingAction ?? .back
+        pendingAction = nil
+        if let existing {
+          syncDraftFromAccount(existing)
+        }
+        performPendingAction(action)
       }
       if canSave {
         Button(isCreate ? "Connect" : "Save") {
-          save()
+          let action = pendingAction ?? .back
+          pendingAction = nil
+          save(then: action)
         }
       }
-      Button("Keep Editing", role: .cancel) {}
+      Button("Keep Editing", role: .cancel) {
+        pendingAction = nil
+      }
     } message: {
       Text(
         canSave
-          ? "You have unsaved changes to this connection. Do you want to save them before closing?"
-          : "You have unsaved changes to this connection that will be lost if you close."
+          ? "You have unsaved changes to this connection. Do you want to save them before leaving?"
+          : "You have unsaved changes to this connection that will be lost if you leave."
       )
     }
   }
 
-  private var modelsAndDiscoveryCard: some View {
-    editorCard("Models & Verification", systemImage: "cube") {
-      VStack(alignment: .leading, spacing: 12) {
-        HStack(spacing: 8) {
-          Button {
-            runPreSaveConnectionTest()
-          } label: {
-            Label("Test Connection", systemImage: "bolt.horizontal.circle")
-          }
-          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-          .disabled(!canTestConnection)
-          .help(
-            previewTargetModelID == nil
-              ? "Fetch models or enter a model ID first to verify chat requests."
-              : "Send a lightweight test request to verify credentials and model access."
-          )
+  private var headerBar: some View {
+    HStack(spacing: 12) {
+      if isEmbedded {
+        Button(action: requestDismiss) {
+          Label(backTitle ?? "AI Providers", systemImage: "chevron.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+        .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
+        .disabled(isSaving)
+        Divider().frame(height: 24)
+      }
 
-          if draftDefinition.modelsPath != nil {
-            Button {
-              fetchModels()
-            } label: {
-              HStack(spacing: 5) {
-                Label("Fetch Models", systemImage: "arrow.clockwise")
-                if let discoveredModels {
-                  Text("(\(discoveredModels.count))")
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      Group {
+        if let existing {
+          MacProviderMark(account: existing, size: 34, isReady: presentationState == .ready)
+        } else {
+          MacProviderMark(kind: kind, size: 34, isReady: true)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 5) {
+          Text(isCreate ? "Connect \(providerDisplayName(kind))" : (existing?.label ?? label))
+            .font(.system(size: 14.5, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .lineLimit(1)
+          if isDefaultConnection {
+            Text("·")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            Text("Default")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(MacDesignTokens.Colors.accent)
+              .fixedSize()
+          }
+        }
+        headerSubtitle
+      }
+
+      Spacer()
+
+      Button(isTestingConnection ? "Testing…" : "Test") {
+        runPreSaveConnectionTest()
+      }
+      .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+      .disabled(!canTestConnection || isSaving)
+      .help(
+        previewTargetModelID == nil
+          ? "Fetch models or enter a model ID first to verify chat requests."
+          : "Test this connection using your current settings."
+      )
+
+      if !isCreate, let existing {
+        Menu {
+          if !isDefaultConnection && presentationState == .ready {
+            Button("Make Default", systemImage: "checkmark.circle") {
+              Task {
+                if await model.setDefaultAccount(existing.id) {
+                  toastCenter?.success("Default connection set to \(existing.label)")
                 }
               }
             }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          }
+          if draftDefinition.modelsPath != nil {
+            Button(
+              isRefreshingModels ? "Refreshing Models…" : "Refresh Models",
+              systemImage: "arrow.clockwise"
+            ) {
+              refreshModelsAction()
+            }
+            .disabled(model.isBusy || isRefreshingModels || !canFetchModels)
+          }
+          if let onRequestDelete {
+            Divider()
+            Button("Delete Connection…", systemImage: "trash", role: .destructive, action: onRequestDelete)
+          }
+        } label: {
+          MacIconMenuLabel(systemImage: "ellipsis")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+      }
+    }
+    .padding(.horizontal, 18)
+    .frame(height: 62)
+    .background(isEmbedded ? MacDesignTokens.Colors.surface.opacity(0.45) : Color.clear)
+  }
+
+  @ViewBuilder
+  private var headerSubtitle: some View {
+    if isCreate {
+      Text("Configure credentials and endpoint settings.")
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    } else if let state = presentationState {
+      let typeName = providerDisplayName(kind)
+      let showsType = existing.map {
+        $0.label.trimmingCharacters(in: .whitespacesAndNewlines)
+          .caseInsensitiveCompare(typeName) != .orderedSame
+      } ?? false
+      HStack(spacing: 6) {
+        if showsType {
+          Text(typeName)
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          Text("·")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.7))
+        }
+        switch state {
+        case .ready:
+          Circle()
+            .fill(MacDesignTokens.Colors.accent)
+            .frame(width: 6, height: 6)
+          Text("Ready")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        case .disabled:
+          Circle()
+            .strokeBorder(MacDesignTokens.Colors.textMuted.opacity(0.65), lineWidth: 1.2)
+            .frame(width: 6, height: 6)
+          Text("Disabled")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        case .credentialRequired:
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 10))
+            .foregroundStyle(.orange)
+          Text("No key")
+            .font(.caption)
+            .foregroundStyle(.orange)
+        case .modelRequired:
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 10))
+            .foregroundStyle(.orange)
+          Text("No model")
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
+      }
+    }
+  }
+
+  private var generalSettingsGroup: some View {
+    settingsGroup {
+      if isCreate {
+        settingsRow("Provider") {
+          Button {
+            showingProviderPicker = true
+          } label: {
+            HStack(spacing: 7) {
+              MacProviderMark(kind: selectedKind, size: 20, isReady: true)
+              Text(selectedKind.macPickerTitle)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+          }
+          .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+          .popover(isPresented: $showingProviderPicker, arrowEdge: .bottom) {
+            MacProviderKindPickerSheet(
+              currentSelection: selectedKind,
+              presentation: .popover
+            ) { newKind in
+              switchKind(to: newKind)
+            }
+          }
+          .accessibilityLabel("Provider")
+          .accessibilityValue(selectedKind.macPickerTitle)
+        }
+        settingsDivider
+      }
+
+      settingsRow("Name") {
+        TextField("Connection Name", text: $label, prompt: Text("e.g. OpenAI"))
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 240)
+          .onChange(of: label) { _, newValue in
+            if newValue != suggestedLabel {
+              didEditLabel = true
+            }
+          }
+      }
+
+      if !isCreate {
+        settingsDivider
+        settingsRow("Enabled") {
+          Toggle("Enabled", isOn: $isEnabled)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+        }
+      }
+    }
+  }
+
+  private var modelsSettingsGroup: some View {
+    settingsGroup {
+      settingsRow("Default Model") {
+        HStack(spacing: 6) {
+          if isCreate && draftDefinition.modelsPath != nil {
+            Button(isDiscoveryRunning ? "Fetching…" : "Fetch") {
+              fetchModels()
+            }
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
             .disabled(!canFetchModels)
           }
 
-          if isDiscoveryRunning {
-            ProgressView()
-              .controlSize(.small)
-          }
-
-          Spacer()
-        }
-
-        connectionTestStatusRow
-
-        Divider()
-
-        HStack(alignment: .center, spacing: 10) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Default Model")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            Text(selectedModelTitle)
-              .font(.system(size: 13.5, weight: .medium))
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-              .lineLimit(1)
-            if let record = selectedModelRecord {
-              MacModelCapabilityBadges(
-                kind: kind,
-                model: record.model,
-                isManual: record.isManual,
-                isHidden: record.isHidden,
-                isAvailable: record.isAvailable
-              )
-            }
-          }
-          Spacer()
           if !modelRecords.isEmpty {
-            Button("Choose Model… (\(modelRecords.count))") {
+            Button {
               showingModelPicker = true
+            } label: {
+              HStack(spacing: 5) {
+                Text(selectedModelTitle)
+                  .font(.system(size: 13))
+                  .foregroundStyle(
+                    selectedModelID != nil
+                      ? MacDesignTokens.Colors.textPrimary
+                      : MacDesignTokens.Colors.textMuted
+                  )
+                  .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                  .font(.system(size: 9.5, weight: .semibold))
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              }
             }
-            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
             .popover(isPresented: $showingModelPicker, arrowEdge: .bottom) {
               MacConnectionModelPickerSheet(
                 kind: kind,
@@ -3039,63 +2866,504 @@ struct MacConnectionEditorView: View {
                 onRemoveManual: stageManualRemoval
               )
             }
-          }
-        }
-
-        labeledField("Add or Override Model ID") {
-          HStack(spacing: 8) {
-            TextField("Or enter a model ID", text: $manualModelID)
-              .textFieldStyle(.roundedBorder)
-              .font(.system(size: 13, design: .monospaced))
-              .onSubmit { selectManualModel() }
-            Button("Use Model ID") { selectManualModel() }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          }
-        }
-
-        if !manualOnlyRecords.isEmpty {
-          VStack(alignment: .leading, spacing: 6) {
-            Text("Custom Models")
-              .font(.caption.weight(.semibold))
+          } else {
+            Text(selectedModelID?.rawValue ?? "None")
+              .font(.system(size: 13))
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            ForEach(manualOnlyRecords) { record in
-              HStack(spacing: 8) {
-                Text(record.model.id.rawValue)
-                  .font(.caption.monospaced())
-                  .lineLimit(1)
-                if selectedModelID == record.model.id {
-                  Text("DEFAULT")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(MacDesignTokens.Colors.accent)
-                }
-                Spacer()
-                Button {
-                  stageManualRemoval(record.model.id)
-                } label: {
-                  Image(systemName: "trash")
-                    .font(.caption)
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                }
-                .buttonStyle(MacIconButtonStyle())
-                .help("Remove custom model")
-                .accessibilityLabel("Remove \(record.model.id.rawValue)")
+              .lineLimit(1)
+          }
+        }
+      }
+
+      if !isCreate, onOpenModels != nil {
+        settingsDivider
+        HStack(spacing: 12) {
+          Text("Manage Models")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          Spacer()
+          Text(modelsSummaryText)
+            .font(.system(size: 12.5))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(
+              isModelsRowHovered
+                ? MacDesignTokens.Colors.textPrimary.opacity(0.75)
+                : MacDesignTokens.Colors.textMuted.opacity(0.55)
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(minHeight: 44)
+        .background(Color.primary.opacity(isModelsRowHovered ? 0.035 : 0))
+        .contentShape(Rectangle())
+        .onTapGesture {
+          requestOpenModels()
+        }
+        .onHover { isModelsRowHovered = $0 }
+        .animation(
+          .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+          value: isModelsRowHovered
+        )
+      } else if isCreate {
+        settingsDivider
+        settingsRow("Model ID") {
+          HStack(spacing: 6) {
+            TextField("Optional manual model ID", text: $manualModelID)
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12.5, design: .monospaced))
+              .frame(width: 210)
+              .onSubmit { selectManualModel() }
+            if !manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              Button("Use") { selectManualModel() }
+                .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            }
+          }
+        }
+      }
+
+      if let warning = discoveryWarning {
+        settingsDivider
+        Label(warning, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.horizontal, 14)
+          .padding(.vertical, 9)
+      }
+    }
+  }
+
+  private var credentialsAndConnectionGroup: some View {
+    settingsGroup {
+      if isCustom {
+        VStack(alignment: .leading, spacing: 6) {
+          settingsRow("Base URL") {
+            TextField("Base URL", text: $baseURL, prompt: Text("https://example.com/v1"))
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12.5, design: .monospaced))
+              .frame(width: 300)
+          }
+          if let urlError = baseURLValidationError {
+            Label(urlError, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .fixedSize(horizontal: false, vertical: true)
+              .padding(.horizontal, 14)
+              .padding(.bottom, 8)
+          }
+        }
+        settingsDivider
+        settingsRow("Authentication") {
+          Picker("Authentication", selection: $authMode) {
+            Text("Bearer Token").tag("bearer")
+            Text("Custom Header").tag("header")
+            Text("None").tag("none")
+          }
+          .labelsHidden()
+          .frame(width: 170)
+        }
+        if authMode == "header" {
+          settingsDivider
+          settingsRow("Header Name") {
+            TextField("Header Name", text: $customHeaderName, prompt: Text("e.g. X-API-Key"))
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12.5, design: .monospaced))
+              .frame(width: 220)
+          }
+        }
+        if showsCredentialField {
+          settingsDivider
+          credentialRow
+        } else if hasStoredCredential {
+          settingsDivider
+          Text("Saved API key will be removed when you click Save.")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+        }
+        settingsDivider
+        settingsRow("Chat Path") {
+          TextField("Chat Path", text: $chatPath, prompt: Text("/chat/completions"))
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 12.5, design: .monospaced))
+            .frame(width: 220)
+        }
+        settingsDivider
+        settingsRow("Models Path") {
+          TextField("Models Path", text: $modelsPath, prompt: Text("/models (blank to disable)"))
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 12.5, design: .monospaced))
+            .frame(width: 220)
+        }
+      } else if kind.isLocalServer {
+        VStack(alignment: .leading, spacing: 6) {
+          settingsRow("Server URL") {
+            TextField("Server URL", text: $baseURL, prompt: Text(localServerPlaceholder))
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12.5, design: .monospaced))
+              .frame(width: 300)
+          }
+          if let urlError = baseURLValidationError {
+            Label(urlError, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .fixedSize(horizontal: false, vertical: true)
+              .padding(.horizontal, 14)
+              .padding(.bottom, 8)
+          }
+        }
+        if showsCredentialField {
+          settingsDivider
+          credentialRow
+        }
+      } else if showsCredentialField {
+        credentialRow
+      } else {
+        settingsRow("Authentication") {
+          Text("Not required")
+            .font(.system(size: 13))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var credentialRow: some View {
+    if hasStoredCredential && clearCredential {
+      settingsRow("API Key") {
+        HStack(spacing: 8) {
+          Text("Will be removed on Save")
+            .font(.caption)
+            .foregroundStyle(.orange)
+          Button("Keep Key") {
+            clearCredential = false
+          }
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+        }
+      }
+    } else if hasStoredCredential && !isReplacingCredential && trimmedCredential.isEmpty {
+      VStack(alignment: .leading, spacing: 0) {
+        settingsRow("API Key") {
+          HStack(spacing: 8) {
+            Label("Stored in Keychain", systemImage: "lock.fill")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            if revealedStoredCredential != nil {
+              Button("Hide") { hideRevealedCredential() }
+                .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+            } else {
+              Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
+                .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+                .disabled(isRevealing)
+            }
+            Button("Replace") {
+              hideRevealedCredential()
+              isReplacingCredential = true
+            }
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            if !requiresCredential {
+              Button(role: .destructive) {
+                hideRevealedCredential()
+                clearCredential = true
+                credential = ""
+              } label: {
+                Text("Remove")
+                  .foregroundStyle(.red)
               }
-              .padding(.horizontal, 9)
-              .padding(.vertical, 6)
-              .background(MacDesignTokens.Colors.canvas.opacity(0.55), in: RoundedRectangle(cornerRadius: 7))
+              .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
             }
           }
         }
 
-        if let warning = discoveryWarning {
-          Label(warning, systemImage: "exclamationmark.triangle.fill")
-            .font(.caption)
-            .foregroundStyle(.orange)
-            .fixedSize(horizontal: false, vertical: true)
+        if let revealed = revealedStoredCredential {
+          HStack(alignment: .center, spacing: 8) {
+            Text(revealed)
+              .font(.system(size: 12, design: .monospaced))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .textSelection(.enabled)
+              .lineLimit(2)
+              .truncationMode(.middle)
+              .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(didCopyRevealedCredential ? "Copied" : "Copy") {
+              NSPasteboard.general.clearContents()
+              NSPasteboard.general.setString(revealed, forType: .string)
+              didCopyRevealedCredential = true
+            }
+            .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 8)
+          .background(
+            MacDesignTokens.Colors.codeSurface,
+            in: RoundedRectangle(cornerRadius: 8)
+          )
+          .overlay {
+            RoundedRectangle(cornerRadius: 8)
+              .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
+          }
+          .padding(.horizontal, 14)
+          .padding(.bottom, 12)
+        }
+      }
+    } else {
+      settingsRow(requiresCredential ? "API Key" : "API Key (Optional)") {
+        HStack(spacing: 6) {
+          Group {
+            if isDraftCredentialVisible {
+              TextField(credentialPlaceholder, text: $credential)
+                .font(.system(size: 12.5, design: .monospaced))
+            } else {
+              SecureField(credentialPlaceholder, text: $credential)
+            }
+          }
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 240)
+
+          Button {
+            isDraftCredentialVisible.toggle()
+          } label: {
+            Image(systemName: isDraftCredentialVisible ? "eye.slash" : "eye")
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .help(isDraftCredentialVisible ? "Hide typed key" : "Show typed key")
+          .accessibilityLabel(isDraftCredentialVisible ? "Hide typed key" : "Show typed key")
+
+          if hasStoredCredential && isReplacingCredential {
+            Button("Cancel") {
+              credential = ""
+              isDraftCredentialVisible = false
+              isReplacingCredential = false
+            }
+            .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+          }
         }
       }
     }
+  }
+
+  private var advancedDisclosureSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Button {
+        withAnimation(.easeOut(duration: 0.16)) {
+          showingAdvanced.toggle()
+        }
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: showingAdvanced ? "chevron.down" : "chevron.right")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .frame(width: 12)
+          Text("Advanced")
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          if !showingAdvanced {
+            Text(advancedSummaryHint)
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.75))
+              .lineLimit(1)
+          }
+          Spacer()
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+
+      if showingAdvanced {
+        settingsGroup {
+          if !isCustom && !kind.isLocalServer {
+            VStack(alignment: .leading, spacing: 6) {
+              settingsRow("Endpoint Override") {
+                TextField(
+                  "Base URL Override",
+                  text: $baseURL,
+                  prompt: Text(kind.defaultEndpoint?.absoluteString ?? "https://")
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12.5, design: .monospaced))
+                .frame(width: 300)
+              }
+              if let urlError = baseURLValidationError {
+                Label(urlError, systemImage: "exclamationmark.triangle.fill")
+                  .font(.caption)
+                  .foregroundStyle(.red)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .padding(.horizontal, 14)
+                  .padding(.bottom, 8)
+              }
+            }
+            settingsDivider
+          }
+
+          if kind == .openRouter {
+            settingsRow("App Title") {
+              TextField("App Title", text: $appTitle, prompt: Text("Optional X-Title header"))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+            }
+            settingsDivider
+            settingsRow("HTTP Referer") {
+              TextField("HTTP Referer", text: $httpReferer, prompt: Text("Optional HTTP-Referer URL"))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+            }
+            settingsDivider
+          }
+
+          if isCustom {
+            VStack(alignment: .leading, spacing: 8) {
+              Text("Seed Models")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              TextEditor(text: $seedModelsText)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 68)
+                .padding(6)
+                .background(
+                  MacDesignTokens.Colors.codeSurface,
+                  in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay {
+                  RoundedRectangle(cornerRadius: 8)
+                    .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.75)
+                }
+              Text("Optional model IDs, one per line.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+            .padding(14)
+            settingsDivider
+          }
+
+          VStack(alignment: .leading, spacing: 10) {
+            Text("Custom Headers")
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            MacAdditionalHeadersSection(
+              headers: $additionalHeaders,
+              policy: headerValidationPolicy,
+              footerText: "Optional non-secret headers sent with requests.",
+              editorTarget: $headerEditorTarget
+            )
+          }
+          .padding(14)
+          .macAdditionalHeaderEditorPopover(
+            target: $headerEditorTarget,
+            headers: $additionalHeaders,
+            policy: headerValidationPolicy
+          )
+
+          if let existing {
+            settingsDivider
+            settingsRow("Created") {
+              Text(existing.createdAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.system(size: 12.5))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+            settingsDivider
+            settingsRow("Updated") {
+              Text(existing.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.system(size: 12.5))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private var advancedSummaryHint: String {
+    var parts: [String] = []
+    if !isCustom && !kind.isLocalServer { parts.append("Endpoint override") }
+    if isCustom { parts.append("Seed models") }
+    if kind == .openRouter { parts.append("OpenRouter headers") }
+    parts.append("custom headers")
+    return "· \(parts.joined(separator: ", "))"
+  }
+
+  private var bottomActionBar: some View {
+    HStack(spacing: 10) {
+      if !isCreate {
+        HStack(spacing: 6) {
+          Circle()
+            .fill(MacDesignTokens.Colors.accent)
+            .frame(width: 6, height: 6)
+          Text("Unsaved changes")
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      }
+      Spacer()
+      if isCreate {
+        Button("Cancel") { requestDismiss() }
+          .buttonStyle(MacActionButtonStyle(.secondary))
+          .disabled(isSaving)
+        Button(isSaving ? "Connecting…" : "Connect") { save() }
+          .buttonStyle(MacActionButtonStyle(.primary))
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canSave || isSaving)
+      } else {
+        Button("Discard") {
+          if let existing {
+            syncDraftFromAccount(existing)
+          }
+        }
+        .buttonStyle(MacActionButtonStyle(.secondary))
+        .disabled(isSaving)
+        Button(isSaving ? "Saving…" : "Save") { save() }
+          .buttonStyle(MacActionButtonStyle(.primary))
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canSave || isSaving)
+      }
+    }
+    .padding(.horizontal, 18)
+    .frame(height: 54)
+    .background(MacDesignTokens.Colors.surface.opacity(0.65))
+  }
+
+  private func settingsGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+    return VStack(alignment: .leading, spacing: 0) {
+      content()
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MacDesignTokens.Colors.surface, in: shape)
+    .clipShape(shape)
+    .overlay {
+      shape.stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+        .allowsHitTesting(false)
+    }
+  }
+
+  private var settingsDivider: some View {
+    Rectangle()
+      .fill(MacDesignTokens.Colors.separator.opacity(0.6))
+      .frame(height: 0.5)
+      .padding(.leading, 14)
+  }
+
+  private func settingsRow<Control: View>(
+    _ title: String,
+    @ViewBuilder control: () -> Control
+  ) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+      Text(title)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      Spacer(minLength: 12)
+      control()
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 9)
+    .frame(minHeight: 44)
   }
 
   @ViewBuilder
@@ -3158,6 +3426,7 @@ struct MacConnectionEditorView: View {
       customHeaderName = "X-API-Key"
     }
     credential = ""
+    isReplacingCredential = false
     clearCredential = false
     hideRevealedCredential()
     isDraftCredentialVisible = false
@@ -3171,7 +3440,7 @@ struct MacConnectionEditorView: View {
     seedModelsText = ""
     appTitle = ""
     httpReferer = ""
-    showingAdvanced = newKind == .openAICompatible
+    showingAdvanced = false
   }
 
   private func selectManualModel() {
@@ -3352,6 +3621,64 @@ struct MacConnectionEditorView: View {
     }
   }
 
+  private func refreshModelsAction() {
+    if !hasUnsavedChanges, let existing {
+      guard !isRefreshingModels else { return }
+      isRefreshingModels = true
+      Task { @MainActor in
+        defer { isRefreshingModels = false }
+        if await model.refreshModels(accountID: existing.id) {
+          let count = model.models(for: existing.id).filter(\.isAvailable).count
+          toastCenter?.success("Refreshed \(count) model\(count == 1 ? "" : "s")")
+        }
+      }
+    } else {
+      fetchModels()
+    }
+  }
+
+  private func syncDraftFromAccount(_ account: ProviderAccount) {
+    cancelDiscovery()
+    hideRevealedCredential()
+    label = account.label
+    suggestedLabel = account.label
+    didEditLabel = true
+    credential = ""
+    isReplacingCredential = false
+    isDraftCredentialVisible = false
+    clearCredential = false
+    baseURL = account.baseURLOverride?.absoluteString
+      ?? (account.kind == .openAICompatible ? "" : account.kind.defaultEndpoint?.absoluteString ?? "")
+    chatPath = account.chatCompletionsPath ?? "/chat/completions"
+    modelsPath = account.modelsPath ?? ""
+    let authentication = account.authChoice ?? account.kind.authSpec.fixedAuthentication ?? .bearer
+    switch authentication {
+    case .bearer:
+      authMode = "bearer"
+      customHeaderName = "X-API-Key"
+    case .header(let name):
+      authMode = "header"
+      customHeaderName = name
+    case .none:
+      authMode = "none"
+      customHeaderName = "X-API-Key"
+    }
+    additionalHeaders = MacAdditionalHeaderItem.items(from: account.additionalHeaders)
+    headerEditorTarget = nil
+    selectedModelID = account.defaultModelID
+    manualModelID = ""
+    discoveredModels = nil
+    manualModels = []
+    removedManualModelIDs = []
+    seedModelsText = (account.seedModelIDs ?? []).joined(separator: "\n")
+    appTitle = account.metadata["appTitle"] ?? ""
+    httpReferer = account.metadata["httpReferer"] ?? ""
+    isEnabled = account.isEnabled
+    saveError = nil
+    discoveryWarning = nil
+    connectionTestState = .idle
+  }
+
   private func closeEditor() {
     if let onCancel {
       onCancel()
@@ -3367,11 +3694,30 @@ struct MacConnectionEditorView: View {
     }
   }
 
+  private func performPendingAction(_ action: PendingUnsavedAction) {
+    switch action {
+    case .back:
+      closeEditor()
+    case .openModels:
+      onOpenModels?()
+    }
+  }
+
   private func requestDismiss() {
     if hasUnsavedChanges {
+      pendingAction = .back
       showingDiscardAlert = true
     } else {
       closeEditor()
+    }
+  }
+
+  private func requestOpenModels() {
+    if hasUnsavedChanges {
+      pendingAction = .openModels
+      showingDiscardAlert = true
+    } else {
+      onOpenModels?()
     }
   }
 
@@ -3395,7 +3741,7 @@ struct MacConnectionEditorView: View {
     return true
   }
 
-  private func save() {
+  private func save(then followUp: PendingUnsavedAction? = nil) {
     guard canSave, !isSaving else { return }
     saveError = nil
     let headers: [String: String]
@@ -3421,7 +3767,11 @@ struct MacConnectionEditorView: View {
     hideRevealedCredential()
 
     if case .edit(let accountID) = route, !hasUnsavedChanges {
-      finishEditor(accountID: accountID)
+      if let followUp {
+        performPendingAction(followUp)
+      } else if !isEmbedded {
+        finishEditor(accountID: accountID)
+      }
       return
     }
 
@@ -3446,6 +3796,7 @@ struct MacConnectionEditorView: View {
           manualModelIDs: manualIDs
         )
         if let id {
+          isSaving = false
           finishEditor(accountID: id)
         } else {
           saveError = model.errorMessage ?? "Unable to create connection."
@@ -3488,12 +3839,22 @@ struct MacConnectionEditorView: View {
             model.errorMessage = priorWarning
           }
         }
+        isSaving = false
         if succeeded {
-          finishEditor(accountID: accountID)
+          if let updated = model.account(accountID) {
+            syncDraftFromAccount(updated)
+            toastCenter?.success("Saved \(updated.label)")
+          } else {
+            toastCenter?.success("Saved changes")
+          }
+          if let followUp {
+            performPendingAction(followUp)
+          } else if !isEmbedded {
+            finishEditor(accountID: accountID)
+          }
         } else {
           saveError = model.errorMessage ?? "Unable to save connection."
           model.errorMessage = nil
-          isSaving = false
         }
       }
     }
@@ -3525,37 +3886,6 @@ struct MacConnectionEditorView: View {
   private func hideRevealedCredential() {
     revealedStoredCredential = nil
     didCopyRevealedCredential = false
-  }
-
-  private func labeledField<Content: View>(
-    _ title: String,
-    @ViewBuilder content: () -> Content
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 5) {
-      Text(title)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      content()
-    }
-  }
-
-  private func editorCard<Content: View>(
-    _ title: String,
-    systemImage: String,
-    @ViewBuilder content: () -> Content
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 11) {
-      Label(title, systemImage: systemImage)
-        .font(.headline)
-      content()
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-    .overlay {
-      RoundedRectangle(cornerRadius: 10)
-        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
-    }
   }
 }
 

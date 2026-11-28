@@ -355,11 +355,14 @@ struct MacProjectsFeatureTests {
 
 @Suite("macOS AI Providers feature")
 struct MacAIProvidersFeatureTests {
-  @Test("Provider workspace separates overview, models, and connection")
-  func providerWorkspaceTabs() {
+  @Test("Provider workspace routes unify inline detail editing with pushed models")
+  func providerWorkspaceRoutes() {
+    let accountID = ProviderAccountID(rawValue: "acc-1")
+    #expect(MacProviderWorkspaceRoute.list != .detail(accountID))
+    #expect(MacProviderWorkspaceRoute.detail(accountID) != .models(accountID))
     #expect(
-      MacProviderDetailTab.allCases.map(\.rawValue)
-        == ["Overview", "Models", "Connection"]
+      MacProviderWorkspaceRoute.create(.openai, returnTo: .pickProvider)
+        != .create(.anthropic, returnTo: .pickProvider)
     )
   }
 
