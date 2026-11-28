@@ -409,9 +409,14 @@ struct MacMCPToolsFeatureTests {
     #expect(project.guidance.contains("project defaults"))
   }
 
-  @Test("Server detail keeps management concerns separated")
-  func serverDetailTabs() {
-    #expect(MacMCPServerDetailTab.allCases.map(\.rawValue) == ["Overview", "Tools", "Connection"])
+  @Test("MCP workspace routes unify inline server settings with pushed tools")
+  func mcpWorkspaceRoutes() {
+    let serverID = MCPServerID(rawValue: "mcp-1")
+    #expect(MacMCPWorkspaceRoute.list.activeServerID == nil)
+    #expect(MacMCPWorkspaceRoute.addServer.activeServerID == nil)
+    #expect(MacMCPWorkspaceRoute.server(serverID).activeServerID == serverID)
+    #expect(MacMCPWorkspaceRoute.serverTools(serverID).activeServerID == serverID)
+    #expect(MacMCPWorkspaceRoute.server(serverID) != .serverTools(serverID))
   }
 
   @Test("Server presentation distinguishes disabled, undiscovered, and discovered states")

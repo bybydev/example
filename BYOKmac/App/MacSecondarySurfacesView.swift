@@ -83,6 +83,7 @@ struct MacMCPServerListView: View {
       idealHeight: MacDesignTokens.Sheet.workspaceIdealHeight
     )
     .background(MacDesignTokens.Colors.canvas)
+    .environment(\.macToastCenter, toastCenter)
     .macToastOverlay(toastCenter)
     .onChange(of: mcp.statusMessage) { _, message in
       guard let message else { return }
