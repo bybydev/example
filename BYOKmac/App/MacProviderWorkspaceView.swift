@@ -223,14 +223,10 @@ struct MacProviderManagementView: View {
         Divider()
 
         ScrollView {
-          VStack(alignment: .leading, spacing: 12) {
+          VStack(alignment: .leading, spacing: 16) {
             if showsFreeLimitBanner {
               freeLimitBanner
             }
-
-            Text("\(visibleAccounts.count) connection\(visibleAccounts.count == 1 ? "" : "s")")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
             if visibleAccounts.isEmpty {
               ContentUnavailableView.search(text: searchText)
@@ -238,34 +234,21 @@ struct MacProviderManagementView: View {
                 .padding(.top, 80)
             } else {
               let partition = MacActiveDisabledPartition(visibleAccounts, isEnabled: \.isEnabled)
-              let columns = [
-                GridItem(.flexible(), spacing: 12),
-                GridItem(.flexible(), spacing: 12),
-              ]
 
               if !partition.active.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                   if partition.showsSectionHeaders {
                     providerSectionHeader("Active", count: partition.active.count)
                   }
-                  LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(partition.active) { account in
-                      providerCard(account)
-                    }
-                  }
+                  providerRowsGroup(partition.active)
                 }
               }
 
               if !partition.disabled.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                   providerSectionHeader("Disabled", count: partition.disabled.count)
-                  LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(partition.disabled) { account in
-                      providerCard(account)
-                    }
-                  }
+                  providerRowsGroup(partition.disabled)
                 }
-                .padding(.top, partition.active.isEmpty ? 0 : 6)
               }
             }
           }
@@ -334,88 +317,56 @@ struct MacProviderManagementView: View {
     }
   }
 
-  private func providerCard(_ account: ProviderAccount) -> some View {
+  private func providerRowsGroup(_ accounts: [ProviderAccount]) -> some View {
+    MacProviderInsetGroup {
+      ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+        if index > 0 {
+          Rectangle()
+            .fill(MacDesignTokens.Colors.separator.opacity(0.65))
+            .frame(height: 0.5)
+            .padding(.leading, 55)
+        }
+        providerRow(account)
+      }
+    }
+  }
+
+  private func providerRow(_ account: ProviderAccount) -> some View {
     let state = macProviderPresentationState(model: model, account: account)
     let visibleRecords = model.models(for: account.id)
     let availableCount = visibleRecords.filter(\.isAvailable).count
     let hiddenCount = model.models(for: account.id, includeHidden: true).count - visibleRecords.count
     let isDefault = model.defaultAccountID == account.id && state == .ready
     let isTesting = testingAccountID == account.id
+    let rowTestResult: Bool? = testResultAccountID == account.id ? testSucceeded : nil
+    let typeName = providerTypeName(account)
+    let customTypeSubtitle: String? =
+      account.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        .caseInsensitiveCompare(typeName) == .orderedSame
+      ? nil
+      : typeName
+    let countText: String? =
+      (availableCount > 0 || hiddenCount > 0)
+      ? modelCountSummary(available: availableCount, hidden: hiddenCount)
+      : nil
 
-    return MacProviderAccountCard(onOpen: { selectedAccountID = account.id }) {
-      VStack(alignment: .leading, spacing: 12) {
-        HStack(alignment: .top, spacing: 11) {
-          MacProviderMark(account: account, size: 40, isReady: state == .ready)
-          VStack(alignment: .leading, spacing: 2) {
-            Text(account.label)
-              .font(.system(size: 14, weight: .semibold))
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-              .lineLimit(1)
-            Text(providerTypeName(account))
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-          Spacer()
-          Menu {
-            providerCardMenuItems(for: account, state: state, isDefault: isDefault)
-          } label: {
-            MacIconMenuLabel(systemImage: "ellipsis")
-          }
-          .menuStyle(.borderlessButton)
-          .menuIndicator(.hidden)
-          .fixedSize()
-        }
-
-        HStack(spacing: 8) {
-          MacProviderStateLabel(state: state)
-          if isDefault {
-            Text("DEFAULT")
-              .font(.caption2.weight(.semibold))
-              .foregroundStyle(MacDesignTokens.Colors.accent)
-              .padding(.horizontal, 7)
-              .padding(.vertical, 3)
-              .background(MacDesignTokens.Colors.accent.opacity(0.10), in: Capsule())
-          }
-        }
-
-        VStack(alignment: .leading, spacing: 3) {
-          Text(defaultModelSummary(account))
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-            .lineLimit(1)
-          Text(modelCountSummary(available: availableCount, hidden: hiddenCount))
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-
-        if testResultAccountID == account.id, let testSucceeded {
-          Label(
-            testSucceeded ? "Connection succeeded" : "Connection failed",
-            systemImage: testSucceeded ? "checkmark.circle" : "exclamationmark.triangle"
-          )
-          .font(.caption)
-          .foregroundStyle(testSucceeded ? MacDesignTokens.Colors.textMuted : Color.orange)
-        }
-
-        HStack {
-          if state == .ready {
-            Button(isTesting ? "Testing…" : "Test") { testConnection(account) }
-              .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
-              .disabled(isTesting || model.isBusy)
-          }
-          Spacer()
-          Button(state == .ready ? "Manage" : "Configure") {
-            selectedAccountID = account.id
-          }
-          .buttonStyle(
-            MacActionButtonStyle(
-              state == .ready ? .secondary : .primary,
-              size: .small
-            )
-          )
-        }
+    return MacProviderAccountRow(
+      account: account,
+      typeSubtitle: customTypeSubtitle,
+      state: state,
+      isDefault: isDefault,
+      defaultModelName: defaultModelSummary(account),
+      hasDefaultModel: account.defaultModelID != nil,
+      modelCountText: countText,
+      isTesting: isTesting,
+      isBusy: model.isBusy,
+      testResult: rowTestResult,
+      onOpen: { selectedAccountID = account.id },
+      onTest: { testConnection(account) },
+      menuItems: {
+        providerCardMenuItems(for: account, state: state, isDefault: isDefault)
       }
-    }
+    )
     .contextMenu {
       providerCardMenuItems(for: account, state: state, isDefault: isDefault)
     }
@@ -1448,38 +1399,219 @@ private struct MacProviderAddModelSheet: View {
   }
 }
 
-private struct MacProviderAccountCard<Content: View>: View {
-  let onOpen: () -> Void
+private struct MacProviderInsetGroup<Content: View>: View {
   @ViewBuilder let content: Content
-
-  @State private var isHovered = false
 
   var body: some View {
     let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
-    content
-      .padding(14)
-      .frame(maxWidth: .infinity, minHeight: 185, alignment: .topLeading)
-      .background(MacDesignTokens.Colors.surface, in: shape)
-      .overlay {
-        shape.fill(Color.primary.opacity(isHovered ? 0.03 : 0))
-          .allowsHitTesting(false)
-      }
-      .overlay {
-        shape.stroke(
-          isHovered
-            ? MacDesignTokens.Colors.accent.opacity(0.45)
-            : MacDesignTokens.Colors.separator.opacity(0.75),
-          lineWidth: isHovered ? 0.85 : 0.5
-        )
+    VStack(spacing: 0) {
+      content
+    }
+    .background(MacDesignTokens.Colors.surface, in: shape)
+    .clipShape(shape)
+    .overlay {
+      shape.stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
         .allowsHitTesting(false)
+    }
+  }
+}
+
+private struct MacProviderAccountRow<MenuContent: View>: View {
+  let account: ProviderAccount
+  let typeSubtitle: String?
+  let state: MacProviderPresentationState
+  let isDefault: Bool
+  let defaultModelName: String
+  let hasDefaultModel: Bool
+  let modelCountText: String?
+  let isTesting: Bool
+  let isBusy: Bool
+  let testResult: Bool?
+  let onOpen: () -> Void
+  let onTest: () -> Void
+  @ViewBuilder let menuItems: MenuContent
+
+  @State private var isHovered = false
+  @State private var suppressHoverActionsUntilExit = false
+
+  private var showsHoverActions: Bool {
+    isHovered && !isTesting && !suppressHoverActionsUntilExit
+  }
+
+  var body: some View {
+    HStack(spacing: 14) {
+      HStack(spacing: 11) {
+        MacProviderMark(account: account, size: 30, isReady: state == .ready)
+        VStack(alignment: .leading, spacing: 1) {
+          HStack(spacing: 5) {
+            Text(account.label)
+              .font(.system(size: 13.5, weight: .semibold))
+              .foregroundStyle(
+                state == .disabled
+                  ? MacDesignTokens.Colors.textMuted
+                  : MacDesignTokens.Colors.textPrimary
+              )
+              .lineLimit(1)
+            if isDefault {
+              Text("·")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              Text("Default")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MacDesignTokens.Colors.accent)
+                .fixedSize()
+            }
+          }
+          if let typeSubtitle {
+            Text(typeSubtitle)
+              .font(.system(size: 11))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(1)
+          }
+        }
       }
-      .contentShape(shape)
-      .onTapGesture(perform: onOpen)
-      .onHover { isHovered = $0 }
-      .animation(
-        .easeOut(duration: MacDesignTokens.Control.interactionDuration),
-        value: isHovered
-      )
+      .frame(width: 244, alignment: .leading)
+
+      HStack(spacing: 5) {
+        Text(defaultModelName)
+          .font(.system(size: 13))
+          .foregroundStyle(
+            hasDefaultModel && state != .disabled
+              ? MacDesignTokens.Colors.textPrimary.opacity(0.85)
+              : MacDesignTokens.Colors.textMuted
+          )
+          .lineLimit(1)
+          .truncationMode(.tail)
+        if let modelCountText {
+          Text("·")
+            .font(.system(size: 12.5))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.7))
+          Text(modelCountText)
+            .font(.system(size: 12.5))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .fixedSize()
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      HStack(spacing: 8) {
+        ZStack(alignment: .trailing) {
+          statusIndicator
+            .opacity(showsHoverActions ? 0 : 1)
+            .allowsHitTesting(false)
+
+          HStack(spacing: 4) {
+            if state == .ready {
+              Button("Test", action: onTest)
+                .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+                .disabled(isTesting || isBusy)
+            }
+            Menu {
+              menuItems
+            } label: {
+              MacIconMenuLabel(systemImage: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+          }
+          .opacity(showsHoverActions ? 1 : 0)
+          .allowsHitTesting(showsHoverActions)
+        }
+        .frame(minWidth: 108, alignment: .trailing)
+
+        Image(systemName: "chevron.right")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(
+            isHovered
+              ? MacDesignTokens.Colors.textPrimary.opacity(0.75)
+              : MacDesignTokens.Colors.textMuted.opacity(0.5)
+          )
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .frame(minHeight: 52)
+    .background(Color.primary.opacity(isHovered ? 0.035 : 0))
+    .contentShape(Rectangle())
+    .onTapGesture(perform: onOpen)
+    .onHover { hovering in
+      isHovered = hovering
+      if !hovering {
+        suppressHoverActionsUntilExit = false
+      }
+    }
+    .onChange(of: isTesting) { _, testing in
+      if testing {
+        suppressHoverActionsUntilExit = true
+      }
+    }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: showsHoverActions
+    )
+  }
+
+  @ViewBuilder
+  private var statusIndicator: some View {
+    if isTesting {
+      HStack(spacing: 6) {
+        ProgressView()
+          .controlSize(.mini)
+        Text("Testing…")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+    } else if let testResult {
+      HStack(spacing: 5) {
+        Image(systemName: testResult ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+          .font(.system(size: 11))
+        Text(testResult ? "Connected" : "Failed")
+          .font(.system(size: 12, weight: .medium))
+      }
+      .foregroundStyle(testResult ? MacDesignTokens.Colors.accent : Color.orange)
+    } else {
+      switch state {
+      case .ready:
+        HStack(spacing: 6) {
+          Circle()
+            .fill(MacDesignTokens.Colors.accent)
+            .frame(width: 6, height: 6)
+          Text("Ready")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      case .disabled:
+        HStack(spacing: 6) {
+          Circle()
+            .strokeBorder(MacDesignTokens.Colors.textMuted.opacity(0.65), lineWidth: 1.2)
+            .frame(width: 6, height: 6)
+          Text("Disabled")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      case .credentialRequired:
+        HStack(spacing: 5) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 10.5))
+          Text("No key")
+            .font(.system(size: 12, weight: .medium))
+        }
+        .foregroundStyle(Color.orange)
+      case .modelRequired:
+        HStack(spacing: 5) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 10.5))
+          Text("No model")
+            .font(.system(size: 12, weight: .medium))
+        }
+        .foregroundStyle(Color.orange)
+      }
+    }
   }
 }
 
