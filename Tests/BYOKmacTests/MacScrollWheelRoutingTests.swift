@@ -387,4 +387,36 @@ final class MacScrollWheelRoutingTests: XCTestCase {
     XCTAssertEqual(decision, .passthrough)
     XCTAssertNil(axis)
   }
+
+  @MainActor
+  func testDisablingContentHitTestingInterceptsNestedScrollViews() {
+    let nestedScrollContent = ScrollView(.horizontal) {
+      Color.clear.frame(width: 900, height: 80)
+    }
+
+    let interactiveView = MacShiftHorizontalClipView(
+      rootView: nestedScrollContent,
+      allowsContentHitTesting: true
+    )
+    interactiveView.frame = NSRect(x: 10, y: 20, width: 320, height: 80)
+    interactiveView.layoutSubtreeIfNeeded()
+    let interactiveHit = interactiveView.hitTest(NSPoint(x: 60, y: 50))
+    XCTAssertNotNil(interactiveHit)
+    XCTAssertFalse(interactiveHit === interactiveView)
+
+    let passthroughView = MacShiftHorizontalClipView(
+      rootView: nestedScrollContent,
+      allowsContentHitTesting: false
+    )
+    passthroughView.frame = NSRect(x: 10, y: 20, width: 320, height: 80)
+    passthroughView.layoutSubtreeIfNeeded()
+    // Points inside frame resolve directly to MacShiftHorizontalClipView instead
+    // of descending into nested NSScrollView instances (e.g. LaTeXSwiftUI blockViews).
+    XCTAssertTrue(passthroughView.hitTest(NSPoint(x: 60, y: 50)) === passthroughView)
+    // Points outside frame and hidden states still return nil.
+    XCTAssertNil(passthroughView.hitTest(NSPoint(x: 5, y: 50)))
+    XCTAssertNil(passthroughView.hitTest(NSPoint(x: 400, y: 50)))
+    passthroughView.isHidden = true
+    XCTAssertNil(passthroughView.hitTest(NSPoint(x: 60, y: 50)))
+  }
 }

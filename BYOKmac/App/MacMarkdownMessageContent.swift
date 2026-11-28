@@ -241,7 +241,7 @@ struct MacMarkdownMessageContent: View {
       LaTeX(segment.text)
         .font(NSFont.systemFont(ofSize: textSize))
         .parsingMode(.onlyEquations)
-        .blockMode(.blockViews)
+        .blockMode(.blockText)
         .processEscapes()
         .renderingStyle(.redactedOriginal)
         .errorMode(.original)
@@ -1061,7 +1061,7 @@ private struct MacMarkdownTableCellView: View {
       LaTeX(text)
         .font(NSFont.systemFont(ofSize: fontSize, weight: isHeader ? .semibold : .regular))
         .parsingMode(.onlyEquations)
-        .blockMode(.blockViews)
+        .blockMode(.blockText)
         .processEscapes()
         .renderingStyle(.redactedOriginal)
         .errorMode(.original)
@@ -3278,6 +3278,7 @@ struct MacMathAnswerView: View {
 
     MacHorizontalPassthroughScrollView(
       showsHorizontalIndicator: true,
+      allowsContentHitTesting: false,
       contentKey: contentKey
     ) {
       LaTeX(Self.renderedDisplayInput(for: expression))

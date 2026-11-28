@@ -126,15 +126,18 @@ enum MacScrollWheelRouting {
 @MainActor
 struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
   private let showsHorizontalIndicator: Bool
+  private let allowsContentHitTesting: Bool
   private let contentKey: AnyHashable?
   private let content: Content
 
   init(
     showsHorizontalIndicator: Bool = false,
+    allowsContentHitTesting: Bool = true,
     contentKey: AnyHashable? = nil,
     @ViewBuilder content: () -> Content
   ) {
     self.showsHorizontalIndicator = showsHorizontalIndicator
+    self.allowsContentHitTesting = allowsContentHitTesting
     self.contentKey = contentKey
     self.content = content()
   }
@@ -143,6 +146,7 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
     MacShiftHorizontalClipView(
       rootView: content,
       showsHorizontalIndicator: showsHorizontalIndicator,
+      allowsContentHitTesting: allowsContentHitTesting,
       contentKey: contentKey
     )
   }
@@ -152,6 +156,7 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
     context: Context
   ) {
     nsView.showsHorizontalIndicator = showsHorizontalIndicator
+    nsView.allowsContentHitTesting = allowsContentHitTesting
     nsView.updateRootView(content, contentKey: contentKey)
   }
 
@@ -202,14 +207,18 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     }
   }
 
+  var allowsContentHitTesting: Bool
+
   override var isFlipped: Bool { true }
 
   init(
     rootView: Content,
     showsHorizontalIndicator: Bool = false,
+    allowsContentHitTesting: Bool = true,
     contentKey: AnyHashable? = nil
   ) {
     self.showsHorizontalIndicator = showsHorizontalIndicator
+    self.allowsContentHitTesting = allowsContentHitTesting
     self.lastContentKey = contentKey
     hostingView = MacPassthroughHostingView(rootView: rootView)
     super.init(frame: .zero)
@@ -328,6 +337,15 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
       hostingView.frame = frame
     }
     updateIndicatorLayer()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    if !allowsContentHitTesting {
+      guard !isHiddenOrHasHiddenAncestor, alphaValue > 0.01 else { return nil }
+      let isInside = superview?.mouse(point, in: frame) ?? frame.contains(point)
+      return isInside ? self : nil
+    }
+    return super.hitTest(point)
   }
 
   override func scrollWheel(with event: NSEvent) {
