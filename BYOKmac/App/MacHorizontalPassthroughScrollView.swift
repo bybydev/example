@@ -126,20 +126,24 @@ enum MacScrollWheelRouting {
 @MainActor
 struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
   private let showsHorizontalIndicator: Bool
+  private let contentKey: AnyHashable?
   private let content: Content
 
   init(
     showsHorizontalIndicator: Bool = false,
+    contentKey: AnyHashable? = nil,
     @ViewBuilder content: () -> Content
   ) {
     self.showsHorizontalIndicator = showsHorizontalIndicator
+    self.contentKey = contentKey
     self.content = content()
   }
 
   func makeNSView(context: Context) -> MacShiftHorizontalClipView<Content> {
     MacShiftHorizontalClipView(
       rootView: content,
-      showsHorizontalIndicator: showsHorizontalIndicator
+      showsHorizontalIndicator: showsHorizontalIndicator,
+      contentKey: contentKey
     )
   }
 
@@ -148,7 +152,7 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
     context: Context
   ) {
     nsView.showsHorizontalIndicator = showsHorizontalIndicator
-    nsView.updateRootView(content)
+    nsView.updateRootView(content, contentKey: contentKey)
   }
 
   func sizeThatFits(
@@ -174,6 +178,8 @@ private final class MacPassthroughHostingView<Content: View>: NSHostingView<Cont
 final class MacShiftHorizontalClipView<Content: View>: NSView {
   private let hostingView: MacPassthroughHostingView<Content>
   private let indicatorLayer = CALayer()
+  private var lastContentKey: AnyHashable?
+  private var cachedIdealSize: CGSize?
   private var documentWidth: CGFloat = 1
   private var horizontalOffset: CGFloat = 0
   private var lockedGestureAxis: MacScrollWheelRouting.Axis?
@@ -190,8 +196,13 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
 
   override var isFlipped: Bool { true }
 
-  init(rootView: Content, showsHorizontalIndicator: Bool = false) {
+  init(
+    rootView: Content,
+    showsHorizontalIndicator: Bool = false,
+    contentKey: AnyHashable? = nil
+  ) {
     self.showsHorizontalIndicator = showsHorizontalIndicator
+    self.lastContentKey = contentKey
     hostingView = MacPassthroughHostingView(rootView: rootView)
     super.init(frame: .zero)
 
@@ -200,6 +211,7 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     hostingView.translatesAutoresizingMaskIntoConstraints = true
     hostingView.onIntrinsicContentSizeInvalidated = { [weak self] in
       guard let self, !self.isUpdatingRootView else { return }
+      self.cachedIdealSize = nil
       self.needsLayout = true
       self.invalidateIntrinsicContentSize()
     }
@@ -230,7 +242,12 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     updateIndicatorColor()
   }
 
-  func updateRootView(_ rootView: Content) {
+  func updateRootView(_ rootView: Content, contentKey: AnyHashable? = nil) {
+    if let contentKey, let lastContentKey, contentKey == lastContentKey {
+      return
+    }
+    lastContentKey = contentKey
+    cachedIdealSize = nil
     isUpdatingRootView = true
     defer { isUpdatingRootView = false }
     hostingView.rootView = rootView
@@ -238,11 +255,20 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     needsLayout = true
   }
 
+  private func resolvedIdealSize() -> CGSize {
+    if let cachedIdealSize {
+      return cachedIdealSize
+    }
+    let ideal = hostingView.fittingSize
+    cachedIdealSize = ideal
+    return ideal
+  }
+
   func sizeThatFits(proposedWidth: CGFloat?) -> CGSize {
     // SwiftUI can probe several widths while its layout graph is updating.
     // Only measure here: changing the hosting view's frame or forcing layout
     // reenters that graph and can abort inside AttributeGraph on macOS 15.
-    let ideal = hostingView.fittingSize
+    let ideal = resolvedIdealSize()
     let viewportWidth = max(proposedWidth ?? ideal.width, 1)
     return CGSize(width: viewportWidth, height: max(ideal.height, 1))
   }
@@ -250,15 +276,18 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
   override func layout() {
     super.layout()
     // Apply geometry only after the parent has assigned the actual viewport.
-    let ideal = hostingView.fittingSize
+    let ideal = resolvedIdealSize()
     documentWidth = max(bounds.width, ideal.width, 1)
     horizontalOffset = min(horizontalOffset, max(documentWidth - bounds.width, 0))
-    hostingView.frame = NSRect(
+    let targetFrame = NSRect(
       x: -horizontalOffset,
       y: 0,
       width: documentWidth,
       height: max(ideal.height, bounds.height, 1)
     )
+    if hostingView.frame != targetFrame {
+      hostingView.frame = targetFrame
+    }
     updateIndicatorLayer()
   }
 

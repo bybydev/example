@@ -1299,10 +1299,8 @@ private struct MacTranscriptView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(MacWorkspaceModel.self) private var workspace
   @Environment(\.macToastCenter) private var toastCenter
-  @State private var isNearBottom = true
-  @State private var followsLatest = true
-  @State private var isUserDraggingTimeline = false
-  @State private var showJumpToLatest = false
+  @State private var scrollState = MacTranscriptScrollState()
+  @State private var transcriptContentWidth: CGFloat = 0
   @State private var hasCompletedInitialScroll = false
   @State private var hasRevealedInitialLayout: Bool
   @State private var pendingSourceMessageID: ChatMessageID?
@@ -1510,17 +1508,20 @@ private struct MacTranscriptView: View {
               let log = OSLog(subsystem: "pro.byok.BYOKchat", category: "ChatSwitch")
               os_signpost(.event, log: log, name: "Transcript Geometry Ready")
             }
-            isNearBottom = current.isNearBottom
-            isUserDraggingTimeline = current.isUserScrolling
-            showJumpToLatest = MacTranscriptScrollPolicy.shouldShowJumpToLatest(
+            scrollState.isNearBottom = current.isNearBottom
+            scrollState.isUserDraggingTimeline = current.isUserScrolling
+            let shouldShow = MacTranscriptScrollPolicy.shouldShowJumpToLatest(
               isNearBottom: current.isNearBottom,
               hasCompletedInitialScroll: hasCompletedInitialScroll
             )
+            if scrollState.showJumpToLatest != shouldShow {
+              scrollState.showJumpToLatest = shouldShow
+            }
 
             if current.isNearBottom {
-              followsLatest = true
+              scrollState.followsLatest = true
             } else if current.userDidScroll {
-              followsLatest = false
+              scrollState.followsLatest = false
             }
 
             if let previous,
@@ -1528,7 +1529,7 @@ private struct MacTranscriptView: View {
               !current.userDidScroll,
               MacTranscriptScrollPolicy.shouldFollowContentGrowth(
                 hasCompletedInitialScroll: hasCompletedInitialScroll,
-                followsLatest: followsLatest,
+                followsLatest: scrollState.followsLatest,
                 isUserDraggingTimeline: current.isUserScrolling,
                 isGenerating: chats.isGenerating(conversationID)
               )
@@ -1549,18 +1550,18 @@ private struct MacTranscriptView: View {
         .onChange(of: messages.count) { _, _ in
           guard isActive else { return }
           if scrollToPendingSourceMessageIfAvailable(proxy) { return }
-          guard followsLatest, !isUserDraggingTimeline else {
-            showJumpToLatest = !isNearBottom
+          guard scrollState.followsLatest, !scrollState.isUserDraggingTimeline else {
+            scrollState.showJumpToLatest = !scrollState.isNearBottom
             return
           }
           scrollToBottom(proxy, animated: true)
         }
         .onChange(of: isActive ? mcp.pendingApprovals.count : 0) { _, _ in
-          guard isActive, followsLatest, !isUserDraggingTimeline else { return }
+          guard isActive, scrollState.followsLatest, !scrollState.isUserDraggingTimeline else { return }
           scrollToBottom(proxy, animated: true)
         }
         .onChange(of: isActive ? mcp.pendingElicitations.count : 0) { _, _ in
-          guard isActive, followsLatest, !isUserDraggingTimeline else { return }
+          guard isActive, scrollState.followsLatest, !scrollState.isUserDraggingTimeline else { return }
           scrollToBottom(proxy, animated: true)
         }
         .onChange(of: GenerationState(
@@ -1571,16 +1572,16 @@ private struct MacTranscriptView: View {
           // position, rather than treating activation as a new generation.
           guard previous.isActive, current.isActive else { return }
           if current.isGenerating {
-            followsLatest = true
-            isUserDraggingTimeline = false
-            showJumpToLatest = false
-          } else if followsLatest {
+            scrollState.followsLatest = true
+            scrollState.isUserDraggingTimeline = false
+            scrollState.showJumpToLatest = false
+          } else if scrollState.followsLatest {
             // The live row can change height when its completed representation
             // replaces it. Re-anchor explicitly rather than restoring a
             // persistent scroll position into List's recycled rows.
             scrollToBottom(proxy, animated: false)
-          } else if !isNearBottom {
-            showJumpToLatest = true
+          } else if !scrollState.isNearBottom {
+            scrollState.showJumpToLatest = true
           }
         }
         .onChange(of: navigationTarget, initial: true) { _, target in
@@ -1595,7 +1596,7 @@ private struct MacTranscriptView: View {
         }
         .onChange(of: findScrollTarget) { _, target in
           guard isActive, let target else { return }
-          followsLatest = false
+          scrollState.followsLatest = false
           pendingScrollTarget = PendingScrollTarget(messageID: target.messageID)
         }
         .task(id: pendingEarlierAnchorID) {
@@ -1624,16 +1625,16 @@ private struct MacTranscriptView: View {
             hasCompletedInitialScroll = true
             hasRevealedInitialLayout = true
             onInitialLayoutReady()
-            showJumpToLatest = !isNearBottom
+            scrollState.showJumpToLatest = !scrollState.isNearBottom
           }
           pendingScrollTarget = nil
         }
         .task(id: isActive) {
           guard isActive else { return }
-          isUserDraggingTimeline = false
+          scrollState.isUserDraggingTimeline = false
           await Task.yield()
           guard !Task.isCancelled else { return }
-          if !scrollToPendingSourceMessageIfAvailable(proxy), followsLatest {
+          if !scrollToPendingSourceMessageIfAvailable(proxy), scrollState.followsLatest {
             scrollToBottom(proxy, animated: false)
           }
           // If navigating to an older message required expanding the visible
@@ -1646,32 +1647,31 @@ private struct MacTranscriptView: View {
             hasRevealedInitialLayout = true
           }
           onInitialLayoutReady()
-          showJumpToLatest = !isNearBottom
+          scrollState.showJumpToLatest = !scrollState.isNearBottom
         }
 
-        if isActive, conversationID != nil, !messages.isEmpty, showJumpToLatest {
-          Button {
-            followsLatest = true
-            isUserDraggingTimeline = false
-            showJumpToLatest = false
+        if isActive, conversationID != nil, !messages.isEmpty {
+          MacTranscriptJumpToLatestButton(
+            scrollState: scrollState,
+            bottomSpace: bottomSpace
+          ) {
+            scrollState.followsLatest = true
+            scrollState.isUserDraggingTimeline = false
+            scrollState.showJumpToLatest = false
             pendingSourceMessageID = nil
             pendingScrollTarget = nil
             scrollToBottom(proxy, animated: true)
-          } label: {
-            Image(systemName: "arrow.down")
-              .font(.system(size: 13, weight: .semibold))
-              .foregroundStyle(.secondary)
-              .frame(width: 32, height: 32)
-              .background(.ultraThinMaterial, in: Circle())
-              .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-              .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
-              .frame(width: 44, height: 44)
-              .contentShape(Rectangle())
           }
-          .buttonStyle(.plain)
-          .padding(.bottom, bottomSpace)
-          .help("Scroll to bottom of chat")
-          .accessibilityLabel("Scroll to bottom of chat")
+        }
+      }
+      .environment(\.macTranscriptContentWidth, transcriptContentWidth)
+      .onGeometryChange(for: CGFloat.self) { proxy in
+        let available = max(proxy.size.width - MacDesignTokens.Spacing.large * 2, 0)
+        let clamped = min(available, MacDesignTokens.Layout.transcriptMaximumWidth)
+        return (clamped / 2).rounded() * 2
+      } action: { newWidth in
+        if newWidth > 1, abs(newWidth - transcriptContentWidth) > 1 {
+          transcriptContentWidth = newWidth
         }
       }
       .background {
@@ -2143,9 +2143,9 @@ private struct MacTranscriptView: View {
     }
 
     pendingSourceMessageID = nil
-    followsLatest = false
-    isUserDraggingTimeline = false
-    showJumpToLatest = true
+    scrollState.followsLatest = false
+    scrollState.isUserDraggingTimeline = false
+    scrollState.showJumpToLatest = true
 
     if needsExpansion {
       pendingScrollTarget = PendingScrollTarget(messageID: messageID)
@@ -3426,7 +3426,6 @@ private struct MacTranscriptMessageRow: View {
 
   @Environment(\.macTranscriptFind) private var findContext
   @Environment(\.macAppTheme) private var theme
-  @State private var isHovered = false
   @State private var isUnifiedSelectionMode = false
 
   private var isActiveFindMessage: Bool {
@@ -3434,46 +3433,55 @@ private struct MacTranscriptMessageRow: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: message.role == .user ? 4 : 8) {
-      MacRichMessageView(
-        providers: providers,
-        chats: chats,
-        mcp: mcp,
-        conversationID: conversationID,
-        message: message,
-        failureContext: failureContext,
-        isLatestAssistant: isLatestAssistant,
-        isUnifiedSelectionMode: isUnifiedSelectionMode,
-        onExitUnifiedSelection: { isUnifiedSelectionMode = false },
-        onShowDetails: onShowDetails,
-        onEditMessage: onEditMessage,
-        onPreviewAttachment: onPreviewAttachment,
-        onRequestRegenerate: onRequestRegenerate
-      )
-
+    Group {
       if message.role == .user {
-        MacUserMessageActions(
+        MacUserMessageRowContainer(
+          providers: providers,
           chats: chats,
+          mcp: mcp,
           conversationID: conversationID,
           message: message,
-          isRowHovered: isHovered,
-          onEditMessage: { onEditMessage(message) },
-          onShowDetails: { onShowDetails(message) }
-        )
-      } else if message.status != .pending, message.status != .streaming {
-        MacAssistantMessageActions(
-          chats: chats,
-          conversationID: conversationID,
-          message: message,
+          failureContext: failureContext,
           isLatestAssistant: isLatestAssistant,
-          includeRetry: true,
-          hideEmptyContentActions: message.status == .failed,
-          isUnifiedSelectionMode: isUnifiedSelectionMode,
-          onToggleUnifiedSelection: { isUnifiedSelectionMode.toggle() },
-          onShowDetails: { onShowDetails(message) },
-          onSaveImages: onSaveImages,
+          onShowDetails: onShowDetails,
+          onEditMessage: onEditMessage,
+          onPreviewAttachment: onPreviewAttachment,
           onRequestRegenerate: onRequestRegenerate
         )
+      } else {
+        VStack(alignment: .leading, spacing: 8) {
+          MacRichMessageView(
+            providers: providers,
+            chats: chats,
+            mcp: mcp,
+            conversationID: conversationID,
+            message: message,
+            failureContext: failureContext,
+            isLatestAssistant: isLatestAssistant,
+            isUnifiedSelectionMode: isUnifiedSelectionMode,
+            onExitUnifiedSelection: { isUnifiedSelectionMode = false },
+            onShowDetails: onShowDetails,
+            onEditMessage: onEditMessage,
+            onPreviewAttachment: onPreviewAttachment,
+            onRequestRegenerate: onRequestRegenerate
+          )
+
+          if message.status != .pending, message.status != .streaming {
+            MacAssistantMessageActions(
+              chats: chats,
+              conversationID: conversationID,
+              message: message,
+              isLatestAssistant: isLatestAssistant,
+              includeRetry: true,
+              hideEmptyContentActions: message.status == .failed,
+              isUnifiedSelectionMode: isUnifiedSelectionMode,
+              onToggleUnifiedSelection: { isUnifiedSelectionMode.toggle() },
+              onShowDetails: { onShowDetails(message) },
+              onSaveImages: onSaveImages,
+              onRequestRegenerate: onRequestRegenerate
+            )
+          }
+        }
       }
     }
     .padding(.leading, isActiveFindMessage ? 10 : 0)
@@ -3485,9 +3493,89 @@ private struct MacTranscriptMessageRow: View {
           .padding(.vertical, 2)
       }
     }
-    .onHover { isHovered = $0 }
     .onChange(of: message.id) { _, _ in
       isUnifiedSelectionMode = false
+    }
+  }
+}
+
+/// Isolates hover state to user messages so moving the cursor over assistant
+/// messages during scroll never re-evaluates math/table blocks.
+private struct MacUserMessageRowContainer: View {
+  @Bindable var providers: MacProviderModel
+  @Bindable var chats: MacChatSessionModel
+  @Bindable var mcp: MacMCPModel
+  let conversationID: ConversationID?
+  let message: ChatMessage
+  let failureContext: String?
+  let isLatestAssistant: Bool
+  let onShowDetails: (ChatMessage) -> Void
+  let onEditMessage: (ChatMessage) -> Void
+  let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
+  let onRequestRegenerate: () -> Void
+
+  @State private var isHovered = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      MacRichMessageView(
+        providers: providers,
+        chats: chats,
+        mcp: mcp,
+        conversationID: conversationID,
+        message: message,
+        failureContext: failureContext,
+        isLatestAssistant: isLatestAssistant,
+        onShowDetails: onShowDetails,
+        onEditMessage: onEditMessage,
+        onPreviewAttachment: onPreviewAttachment,
+        onRequestRegenerate: onRequestRegenerate
+      )
+
+      MacUserMessageActions(
+        chats: chats,
+        conversationID: conversationID,
+        message: message,
+        isRowHovered: isHovered,
+        onEditMessage: { onEditMessage(message) },
+        onShowDetails: { onShowDetails(message) }
+      )
+    }
+    .onHover { isHovered = $0 }
+  }
+}
+
+@Observable
+@MainActor
+private final class MacTranscriptScrollState {
+  @ObservationIgnored var isNearBottom = true
+  @ObservationIgnored var followsLatest = true
+  @ObservationIgnored var isUserDraggingTimeline = false
+  var showJumpToLatest = false
+}
+
+private struct MacTranscriptJumpToLatestButton: View {
+  let scrollState: MacTranscriptScrollState
+  let bottomSpace: CGFloat
+  let action: () -> Void
+
+  var body: some View {
+    if scrollState.showJumpToLatest {
+      Button(action: action) {
+        Image(systemName: "arrow.down")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.secondary)
+          .frame(width: 32, height: 32)
+          .background(.ultraThinMaterial, in: Circle())
+          .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+          .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .padding(.bottom, bottomSpace)
+      .help("Scroll to bottom of chat")
+      .accessibilityLabel("Scroll to bottom of chat")
     }
   }
 }
@@ -4269,6 +4357,10 @@ private struct MacPreparedAnswersKey: EnvironmentKey {
   static let defaultValue: [MacAnswerCacheKey: MacPreparedAnswer] = [:]
 }
 
+private struct MacTranscriptContentWidthKey: EnvironmentKey {
+  static let defaultValue: CGFloat = 0
+}
+
 extension EnvironmentValues {
   var macTranscriptIsActive: Bool {
     get { self[MacTranscriptActivityKey.self] }
@@ -4278,6 +4370,11 @@ extension EnvironmentValues {
   var macPreparedAnswers: [MacAnswerCacheKey: MacPreparedAnswer] {
     get { self[MacPreparedAnswersKey.self] }
     set { self[MacPreparedAnswersKey.self] = newValue }
+  }
+
+  var macTranscriptContentWidth: CGFloat {
+    get { self[MacTranscriptContentWidthKey.self] }
+    set { self[MacTranscriptContentWidthKey.self] = newValue }
   }
 }
 

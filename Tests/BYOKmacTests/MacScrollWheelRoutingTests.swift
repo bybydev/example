@@ -95,6 +95,23 @@ final class MacScrollWheelRoutingTests: XCTestCase {
     XCTAssertEqual(host.frame.height, 240, accuracy: 0.5)
   }
 
+  @MainActor
+  func testUpdateRootViewSkipsRedundantWorkWhenContentKeyMatches() throws {
+    let view = MacShiftHorizontalClipView(
+      rootView: Color.clear.frame(width: 800, height: 120),
+      contentKey: "v1"
+    )
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 120, accuracy: 0.5)
+
+    // Matching contentKey skips replacing rootView and re-measuring fittingSize.
+    view.updateRootView(Color.clear.frame(width: 800, height: 300), contentKey: "v1")
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 120, accuracy: 0.5)
+
+    // A new contentKey invalidates the cached ideal size and updates content.
+    view.updateRootView(Color.clear.frame(width: 800, height: 300), contentKey: "v2")
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 300, accuracy: 0.5)
+  }
+
   func testHorizontalTableScrollRequiresShift() {
     XCTAssertFalse(MacScrollWheelRouting.usesHorizontalTableScroll(modifierFlags: []))
     XCTAssertTrue(MacScrollWheelRouting.usesHorizontalTableScroll(modifierFlags: [.shift]))

@@ -29,6 +29,7 @@ struct MacMarkdownMessageContent: View {
   @Environment(\.macAppTheme) private var appTheme
   @Environment(\.macPreparedAnswers) private var preparedAnswers
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+  @Environment(\.macTranscriptContentWidth) private var transcriptContentWidth
 
   private var textCacheKey: MacAnswerCacheKey {
     MacAnswerCacheKey(source: text)
@@ -225,22 +226,37 @@ struct MacMarkdownMessageContent: View {
   @ViewBuilder
   private func markdownSegmentView(_ segment: MacPreparedAnswer.MarkdownSegment) -> some View {
     if segment.useLaTeX {
+      let widthBucket = transcriptContentWidth > 1 ? Int((transcriptContentWidth / 8).rounded()) : 0
+      let heightKey = MacTranscriptBlockHeightCache.Key.inlineMath(
+        text: segment.text,
+        fontSizeTenths: Int((textSize * 10).rounded()),
+        widthBucket: widthBucket
+      )
+      let cachedHeight: CGFloat? =
+        (!isStreaming && widthBucket > 0)
+        ? MacTranscriptBlockHeightCache.shared.height(for: heightKey)
+        : nil
+
       LaTeX(segment.text)
         .font(NSFont.systemFont(ofSize: textSize))
         .parsingMode(.onlyEquations)
         .blockMode(.blockViews)
         .processEscapes()
         .renderingStyle(.redactedOriginal)
-        .renderingAnimation(.easeOut(duration: 0.18))
         .errorMode(.original)
         .imageRenderingMode(.template)
-        .imageAccessibility(.sre)
         .lineSpacing(textSize * 0.32)
         .foregroundStyle(muted ? appTheme.textMuted : appTheme.textPrimary)
         .tint(appTheme.accent)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: cachedHeight, alignment: .topLeading)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+          proxy.size.height
+        } action: { newHeight in
+          guard !isStreaming, widthBucket > 0, newHeight > 1 else { return }
+          MacTranscriptBlockHeightCache.shared.record(newHeight, for: heightKey)
+        }
     } else if !isStreaming, MacSelectableMarkdownBuilder.canRenderNatively(segment.text) {
       MacSelectableMarkdownTextView(
         source: segment.text,
@@ -579,6 +595,8 @@ struct MacMarkdownMessageContent: View {
 // MARK: - Custom Markdown Tables
 
 private struct MacMarkdownTablePalette: Sendable {
+  let isDark: Bool
+  let themeID: MacAppThemeID
   let cardBackground: Color
   let utilityBarBackground: Color
   let headerRowBackground: Color
@@ -596,14 +614,18 @@ private struct MacMarkdownTablePalette: Sendable {
 
   @MainActor
   init(colorScheme: ColorScheme) {
+    let hasPro = MacPurchaseStore.manager.hasPro
+    let resolvedThemeID = MacThemeFoundation.store.effectiveThemeID(hasPro: hasPro)
     let palette = MacThemeFoundation.store
-      .currentTheme(hasPro: MacPurchaseStore.manager.hasPro)
+      .currentTheme(hasPro: hasPro)
       .palette
     let canvas = palette.canvas
     let surface = palette.surface
     let separator = palette.separator
     let codeSurface = palette.codeSurface
 
+    isDark = colorScheme == .dark
+    themeID = resolvedThemeID
     borderColor = separator
     primaryForeground = palette.textPrimary
     secondaryForeground = palette.textMuted
@@ -638,12 +660,23 @@ private struct MacMarkdownTablePalette: Sendable {
 struct MacMarkdownTableView: View {
   static let collapseRowThreshold = 12
 
+  private struct TableContentKey: Hashable {
+    let rawMarkdown: String
+    let rowLimit: Int?
+    let columnWidthTenths: [Int]
+    let totalWidthTenths: Int
+    let fontSizeTenths: Int
+    let isDark: Bool
+    let themeID: MacAppThemeID
+  }
+
   let table: MacParsedMarkdownTable
   var textSize: CGFloat = 15
   var fillsWidth = true
   var isComplete = true
 
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macTranscriptContentWidth) private var transcriptContentWidth
   @State private var measuredWidth: CGFloat = 0
   @State private var isExpanded = false
   @State private var showFullScreen = false
@@ -659,6 +692,9 @@ struct MacMarkdownTableView: View {
     if measuredWidth > 1 {
       return measuredWidth
     }
+    if fillsWidth, transcriptContentWidth > 1 {
+      return transcriptContentWidth
+    }
     return fillsWidth ? 640 : 320
   }
 
@@ -673,15 +709,34 @@ struct MacMarkdownTableView: View {
 
   var body: some View {
     let palette = MacMarkdownTablePalette(colorScheme: colorScheme)
+    let availableWidth = effectiveAvailableWidth
     let metrics = MacMarkdownTableLayout.compute(
       for: table,
-      availableWidth: effectiveAvailableWidth,
+      availableWidth: availableWidth,
       fontSize: cellFontSize,
       fillsWidth: fillsWidth
     )
 
     let isLongTable = fillsWidth && table.rows.count > Self.collapseRowThreshold
     let rowLimit: Int? = (isLongTable && !isExpanded) ? Self.collapseRowThreshold : nil
+    let fontSizeTenths = Int((cellFontSize * 10).rounded())
+    let tableContentKey = TableContentKey(
+      rawMarkdown: table.rawMarkdown,
+      rowLimit: rowLimit,
+      columnWidthTenths: metrics.columnWidths.map { Int(($0 * 10).rounded()) },
+      totalWidthTenths: Int((metrics.totalWidth * 10).rounded()),
+      fontSizeTenths: fontSizeTenths,
+      isDark: palette.isDark,
+      themeID: palette.themeID
+    )
+    let gridHeightKey = MacTranscriptBlockHeightCache.Key.table(
+      rawMarkdown: table.rawMarkdown,
+      widthBucket: Int((availableWidth / 4).rounded()),
+      fontSizeTenths: fontSizeTenths,
+      rowLimit: rowLimit
+    )
+    let cachedGridHeight: CGFloat? =
+      isComplete ? MacTranscriptBlockHeightCache.shared.height(for: gridHeightKey) : nil
 
     VStack(spacing: 0) {
       if fillsWidth {
@@ -692,7 +747,7 @@ struct MacMarkdownTableView: View {
           .frame(height: 0.5)
       }
 
-      MacHorizontalPassthroughScrollView {
+      MacHorizontalPassthroughScrollView(contentKey: tableContentKey) {
         MacMarkdownTableGrid(
           table: table,
           rowLimit: rowLimit,
@@ -701,6 +756,13 @@ struct MacMarkdownTableView: View {
           fontSize: cellFontSize,
           palette: palette
         )
+      }
+      .frame(minHeight: cachedGridHeight, alignment: .topLeading)
+      .onGeometryChange(for: CGFloat.self) { proxy in
+        proxy.size.height
+      } action: { newHeight in
+        guard isComplete, newHeight > 1 else { return }
+        MacTranscriptBlockHeightCache.shared.record(newHeight, for: gridHeightKey)
       }
       .overlay(alignment: .leading) {
         if metrics.overflowsViewport {
@@ -758,7 +820,7 @@ struct MacMarkdownTableView: View {
     .onGeometryChange(for: CGFloat.self) { proxy in
       proxy.size.width
     } action: { newWidth in
-      if newWidth > 1, abs(newWidth - measuredWidth) > 1 {
+      if newWidth > 1, abs(newWidth - effectiveAvailableWidth) > 2 {
         measuredWidth = newWidth
       }
     }
@@ -1000,16 +1062,16 @@ private struct MacMarkdownTableCellView: View {
         .blockMode(.blockViews)
         .processEscapes()
         .renderingStyle(.redactedOriginal)
-        .renderingAnimation(.easeOut(duration: 0.18))
         .errorMode(.original)
         .imageRenderingMode(.template)
-        .imageAccessibility(.sre)
         .foregroundStyle(palette.primaryForeground)
         .textSelection(.enabled)
     } else if let attributed = MacMarkdownTableCellFormatter.attributedString(
       for: text,
       fontSize: fontSize,
       isHeader: isHeader,
+      isDark: palette.isDark,
+      themeID: palette.themeID,
       accentColor: palette.accentColor,
       codeChipBackground: palette.codeChipBackground
     ) {
@@ -1031,7 +1093,28 @@ private struct MacMarkdownTableCellView: View {
   }
 }
 
+@MainActor
 private enum MacMarkdownTableCellFormatter {
+  private struct CacheKey: Hashable {
+    let text: String
+    let fontSizeTenths: Int
+    let isHeader: Bool
+    let isDark: Bool
+    let themeID: MacAppThemeID
+  }
+
+  private enum CacheValue {
+    case plain
+    case rich(AttributedString)
+  }
+
+  private static var cache: [CacheKey: CacheValue] = [:]
+  private static var cacheOrder: [CacheKey] = []
+  private static let cacheLimit = 512
+  private static let linkDetector = try? NSDataDetector(
+    types: NSTextCheckingResult.CheckingType.link.rawValue
+  )
+
   private static func needsRichFormatting(_ text: String) -> Bool {
     text.contains("*")
       || text.contains("_")
@@ -1048,10 +1131,26 @@ private enum MacMarkdownTableCellFormatter {
     for text: String,
     fontSize: CGFloat,
     isHeader: Bool,
+    isDark: Bool,
+    themeID: MacAppThemeID,
     accentColor: Color,
     codeChipBackground: Color
   ) -> AttributedString? {
     guard needsRichFormatting(text) else { return nil }
+
+    let key = CacheKey(
+      text: text,
+      fontSizeTenths: Int((fontSize * 10).rounded()),
+      isHeader: isHeader,
+      isDark: isDark,
+      themeID: themeID
+    )
+    if let cached = cache[key] {
+      switch cached {
+      case .plain: return nil
+      case .rich(let value): return value
+      }
+    }
 
     var options = AttributedString.MarkdownParsingOptions()
     options.interpretedSyntax = .inlineOnlyPreservingWhitespace
@@ -1077,7 +1176,7 @@ private enum MacMarkdownTableCellFormatter {
 
     let loweredText = text.lowercased()
     if loweredText.contains("http://") || loweredText.contains("https://"),
-      let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+      let detector = linkDetector
     {
       let plain = String(attributed.characters)
       let fullRange = NSRange(plain.startIndex..<plain.endIndex, in: plain)
@@ -1103,6 +1202,11 @@ private enum MacMarkdownTableCellFormatter {
       }
     }
 
+    cache[key] = .rich(attributed)
+    cacheOrder.append(key)
+    if cacheOrder.count > cacheLimit {
+      cache.removeValue(forKey: cacheOrder.removeFirst())
+    }
     return attributed
   }
 }
@@ -3033,10 +3137,52 @@ private struct MacFullScreenCodeView: View {
 
 // MARK: - Math
 
+@MainActor
+private final class MacTranscriptBlockHeightCache {
+  enum Key: Hashable {
+    case displayMath(expression: String, fontSizeTenths: Int)
+    case inlineMath(text: String, fontSizeTenths: Int, widthBucket: Int)
+    case table(rawMarkdown: String, widthBucket: Int, fontSizeTenths: Int, rowLimit: Int?)
+  }
+
+  static let shared = MacTranscriptBlockHeightCache()
+
+  private var values: [Key: CGFloat] = [:]
+  private var order: [Key] = []
+  private let limit = 512
+
+  func height(for key: Key) -> CGFloat? {
+    values[key]
+  }
+
+  func record(_ height: CGFloat, for key: Key) {
+    guard height.isFinite, height > 1 else { return }
+    let rounded = ceil(height)
+    if let existing = values[key], abs(existing - rounded) < 0.5 {
+      return
+    }
+    if values[key] == nil {
+      order.append(key)
+    }
+    values[key] = rounded
+    if order.count > limit {
+      values.removeValue(forKey: order.removeFirst())
+    }
+  }
+}
+
 struct MacMathAnswerView: View {
+  private struct MathContentKey: Hashable {
+    let expression: String
+    let fontSizeTenths: Int
+    let isDark: Bool
+    let themeID: MacAppThemeID
+  }
+
   let expression: String
   var textSize: CGFloat? = nil
 
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.macAppTheme) private var theme
   @Environment(\.macTranscriptFontSize) private var transcriptFontSize
   @State private var isHovered = false
@@ -3047,20 +3193,44 @@ struct MacMathAnswerView: View {
   }
 
   var body: some View {
+    let fontSizeTenths = Int((resolvedFontSize * 10).rounded())
+    let themeID = MacThemeFoundation.store.effectiveThemeID(
+      hasPro: MacPurchaseStore.manager.hasPro
+    )
+    let contentKey = MathContentKey(
+      expression: expression,
+      fontSizeTenths: fontSizeTenths,
+      isDark: colorScheme == .dark,
+      themeID: themeID
+    )
+    let heightKey = MacTranscriptBlockHeightCache.Key.displayMath(
+      expression: expression,
+      fontSizeTenths: fontSizeTenths
+    )
+    let cachedHeight = MacTranscriptBlockHeightCache.shared.height(for: heightKey)
+
     ZStack(alignment: .topTrailing) {
-      MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+      MacHorizontalPassthroughScrollView(
+        showsHorizontalIndicator: true,
+        contentKey: contentKey
+      ) {
         LaTeX("$$\(expression)$$")
           .font(NSFont.systemFont(ofSize: resolvedFontSize * 1.15))
           .blockMode(.blockViews)
           .renderingStyle(.redactedOriginal)
-          .renderingAnimation(.easeOut(duration: 0.18))
           .errorMode(.original)
           .imageRenderingMode(.template)
-          .imageAccessibility(.sre)
           .foregroundStyle(theme.textPrimary)
           .padding(.horizontal, 16)
           .padding(.vertical, 16)
           .frame(maxWidth: .infinity, alignment: .center)
+      }
+      .frame(minHeight: cachedHeight, alignment: .center)
+      .onGeometryChange(for: CGFloat.self) { proxy in
+        proxy.size.height
+      } action: { newHeight in
+        guard newHeight > 1 else { return }
+        MacTranscriptBlockHeightCache.shared.record(newHeight, for: heightKey)
       }
 
       if isHovered || copied {
