@@ -123,7 +123,7 @@ struct MacSecondarySurfacesView: View {
   ) -> some View {
     MacShellView(model: model)
       .id(model.runtimeGeneration)
-      .overlay(alignment: .top) {
+      .overlay(alignment: .topTrailing) {
         MacRootToastOverlayHost(
           workspace: workspace,
           mcp: mcp,

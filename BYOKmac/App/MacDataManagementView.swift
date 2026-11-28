@@ -57,7 +57,7 @@ struct MacDataManagementView: View {
       .frame(maxWidth: .infinity, alignment: .topLeading)
     }
     .background(theme.canvas)
-    .macToastOverlay(toastCenter)
+    .macToastOverlay(toastCenter, topInset: 12)
     .onAppear {
       if let status = data.statusMessage {
         data.statusMessage = nil

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import MacAppFoundation
 import Observation
 import SwiftUI
 
@@ -104,20 +105,25 @@ final class MacToastCenter {
 
 struct MacToastOverlay: View {
   let center: MacToastCenter
+  var topInset: CGFloat = MacDesignTokens.Layout.titlebarHeight + 12
+
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     Group {
       if let toast = center.current {
-        card(for: toast)
-          .frame(maxWidth: 460)
-          .padding(.horizontal, 16)
-          .padding(.top, 12)
-          .transition(
-            reduceMotion
-              ? .opacity
-              : .move(edge: .top).combined(with: .opacity)
-          )
+        MacToastCard(toast: toast) {
+          center.dismiss()
+        }
+        .frame(maxWidth: 380, alignment: .trailing)
+        .padding(.top, topInset)
+        .padding(.trailing, 16)
+        .padding(.leading, 16)
+        .transition(
+          reduceMotion
+            ? .opacity
+            : .move(edge: .top).combined(with: .opacity)
+        )
       }
     }
     .animation(
@@ -125,39 +131,76 @@ struct MacToastOverlay: View {
       value: center.current
     )
   }
+}
 
-  private func card(for toast: MacToastCenter.Message) -> some View {
-    let tint = toast.style == .success ? MacDesignTokens.Colors.accent : toast.style.tint
-    return Button {
-      center.dismiss()
-    } label: {
+private struct MacToastCard: View {
+  let toast: MacToastCenter.Message
+  let dismiss: () -> Void
+
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.macAppTheme) private var theme
+  @State private var isHovered = false
+
+  private var isDark: Bool { colorScheme == .dark }
+
+  var body: some View {
+    let tint = toast.style.tint
+    let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+    Button(action: dismiss) {
       HStack(spacing: 10) {
         Image(systemName: toast.style.systemImage)
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(tint)
-          .frame(width: 26, height: 26)
-          .background(tint.opacity(0.14), in: Circle())
+          .frame(width: 24, height: 24)
+          .background(tint.opacity(isDark ? 0.22 : 0.14), in: Circle())
           .accessibilityHidden(true)
 
         Text(toast.text)
-          .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(theme.textPrimary)
           .multilineTextAlignment(.leading)
           .lineLimit(3)
+          .fixedSize(horizontal: false, vertical: true)
 
-        Spacer(minLength: 0)
+        Image(systemName: "xmark")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(isHovered ? theme.textPrimary : theme.textMuted.opacity(0.75))
+          .padding(.leading, 2)
+          .accessibilityHidden(true)
       }
-      .padding(.leading, 10)
-      .padding(.trailing, 14)
+      .padding(.leading, 13)
+      .padding(.trailing, 12)
       .padding(.vertical, 9)
-      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.9), lineWidth: 0.75)
+      .background {
+        ZStack {
+          theme.surfaceRaised
+          tint.opacity(isDark ? 0.14 : 0.09)
+        }
       }
-      .shadow(color: .black.opacity(0.14), radius: 12, y: 4)
+      .overlay(alignment: .leading) {
+        Rectangle()
+          .fill(tint.opacity(isDark ? 0.90 : 0.85))
+          .frame(width: 3)
+      }
+      .clipShape(shape)
+      .overlay {
+        shape
+          .strokeBorder(
+            tint.opacity(isHovered ? (isDark ? 0.52 : 0.44) : (isDark ? 0.36 : 0.30)),
+            lineWidth: 1
+          )
+      }
+      .shadow(color: .black.opacity(isDark ? 0.42 : 0.14), radius: 14, y: 6)
+      .shadow(color: .black.opacity(isDark ? 0.24 : 0.06), radius: 2, y: 1)
+      .contentShape(shape)
     }
     .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isHovered
+    )
     .accessibilityLabel(toast.text)
     .accessibilityHint("Click to dismiss")
   }
@@ -175,9 +218,12 @@ extension EnvironmentValues {
 }
 
 extension View {
-  func macToastOverlay(_ center: MacToastCenter) -> some View {
-    overlay(alignment: .top) {
-      MacToastOverlay(center: center)
+  func macToastOverlay(
+    _ center: MacToastCenter,
+    topInset: CGFloat = MacDesignTokens.Layout.titlebarHeight + 12
+  ) -> some View {
+    overlay(alignment: .topTrailing) {
+      MacToastOverlay(center: center, topInset: topInset)
     }
     .environment(\.macToastCenter, center)
   }

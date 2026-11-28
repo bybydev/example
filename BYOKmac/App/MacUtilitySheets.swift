@@ -160,7 +160,7 @@ struct MacUtilitySheetContainer<Content: View>: View {
       idealHeight: MacDesignTokens.Sheet.workspaceIdealHeight
     )
     .background(MacDesignTokens.Colors.canvas)
-    .overlay(alignment: .top) {
+    .overlay(alignment: .topTrailing) {
       if let toastCenter {
         MacToastOverlay(center: toastCenter)
       }

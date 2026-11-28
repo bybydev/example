@@ -585,18 +585,9 @@ private struct MacChatHeader: View {
   }
 
   private var overflowMenu: some View {
-    Button {
+    MacChatHeaderOverflowButton(isPresented: showingOverflowPopover) {
       showingOverflowPopover.toggle()
-    } label: {
-      Image(systemName: "ellipsis")
-        .font(.system(size: 13, weight: .medium))
-        .foregroundStyle(
-          showingOverflowPopover
-            ? MacDesignTokens.Colors.textPrimary
-            : MacDesignTokens.Colors.textMuted
-        )
     }
-    .buttonStyle(MacIconButtonStyle())
     .popover(isPresented: $showingOverflowPopover, arrowEdge: .bottom) {
       overflowPopoverContent
         .presentationBackground(MacDesignTokens.Colors.surface)
@@ -606,8 +597,6 @@ private struct MacChatHeader: View {
         showingProjectPicker = false
       }
     }
-    .help("Chat options")
-    .accessibilityLabel("Chat options")
   }
 
   private var overflowPopoverContent: some View {
@@ -787,6 +776,53 @@ private struct MacChatProjectBadgeButton: View {
       .help("Open \(project.name) in Projects")
       .accessibilityLabel("Project \(project.name)")
     }
+  }
+}
+
+private struct MacChatHeaderOverflowButton: View {
+  let isPresented: Bool
+  let action: () -> Void
+
+  @State private var isHovered = false
+
+  private var isActive: Bool { isHovered || isPresented }
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "ellipsis")
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(
+          isActive
+            ? MacDesignTokens.Colors.textPrimary
+            : MacDesignTokens.Colors.textMuted
+        )
+        .frame(
+          width: MacDesignTokens.Control.compactButtonHeight,
+          height: MacDesignTokens.Control.compactButtonHeight
+        )
+        .background(
+          isActive ? MacDesignTokens.Colors.surface : MacDesignTokens.Colors.canvas,
+          in: Circle()
+        )
+        .overlay {
+          Circle()
+            .stroke(
+              isActive
+                ? MacDesignTokens.Colors.accent.opacity(0.45)
+                : MacDesignTokens.Colors.separator.opacity(0.85),
+              lineWidth: 0.75
+            )
+        }
+        .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .animation(
+      .easeOut(duration: MacDesignTokens.Control.interactionDuration),
+      value: isActive
+    )
+    .help("Chat options")
+    .accessibilityLabel("Chat options")
   }
 }
 
