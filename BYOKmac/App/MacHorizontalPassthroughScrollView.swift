@@ -167,10 +167,16 @@ struct MacHorizontalPassthroughScrollView<Content: View>: NSViewRepresentable {
 @MainActor
 private final class MacPassthroughHostingView<Content: View>: NSHostingView<Content> {
   var onIntrinsicContentSizeInvalidated: (() -> Void)?
+  var onDidLayout: (() -> Void)?
 
   override func invalidateIntrinsicContentSize() {
     super.invalidateIntrinsicContentSize()
     onIntrinsicContentSizeInvalidated?()
+  }
+
+  override func layout() {
+    super.layout()
+    onDidLayout?()
   }
 }
 
@@ -179,11 +185,13 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
   private let hostingView: MacPassthroughHostingView<Content>
   private let indicatorLayer = CALayer()
   private var lastContentKey: AnyHashable?
-  private var cachedIdealSize: CGSize?
+  private var lastMeasuredIdealSize: CGSize = .zero
   private var documentWidth: CGFloat = 1
   private var horizontalOffset: CGFloat = 0
   private var lockedGestureAxis: MacScrollWheelRouting.Axis?
   private var isUpdatingRootView = false
+  private var isApplyingLayout = false
+  private var idealSizeSyncTask: Task<Void, Never>?
   private var isIndicatorHighlighted = false
   private var indicatorFadeTask: Task<Void, Never>?
 
@@ -211,9 +219,12 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     hostingView.translatesAutoresizingMaskIntoConstraints = true
     hostingView.onIntrinsicContentSizeInvalidated = { [weak self] in
       guard let self, !self.isUpdatingRootView else { return }
-      self.cachedIdealSize = nil
       self.needsLayout = true
       self.invalidateIntrinsicContentSize()
+    }
+    hostingView.onDidLayout = { [weak self] in
+      guard let self, !self.isUpdatingRootView, !self.isApplyingLayout else { return }
+      self.scheduleIdealSizeSyncIfNeeded()
     }
     addSubview(hostingView)
 
@@ -231,6 +242,8 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
   override func viewWillMove(toWindow newWindow: NSWindow?) {
     super.viewWillMove(toWindow: newWindow)
     if newWindow == nil {
+      idealSizeSyncTask?.cancel()
+      idealSizeSyncTask = nil
       indicatorFadeTask?.cancel()
       indicatorFadeTask = nil
       lockedGestureAxis = nil
@@ -247,7 +260,6 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
       return
     }
     lastContentKey = contentKey
-    cachedIdealSize = nil
     isUpdatingRootView = true
     defer { isUpdatingRootView = false }
     hostingView.rootView = rootView
@@ -255,28 +267,43 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     needsLayout = true
   }
 
-  private func resolvedIdealSize() -> CGSize {
-    if let cachedIdealSize {
-      return cachedIdealSize
-    }
+  private func measureIdealSize() -> CGSize {
     let ideal = hostingView.fittingSize
-    cachedIdealSize = ideal
+    lastMeasuredIdealSize = ideal
     return ideal
+  }
+
+  private func scheduleIdealSizeSyncIfNeeded() {
+    guard idealSizeSyncTask == nil else { return }
+    idealSizeSyncTask = Task { @MainActor [weak self] in
+      guard let self, !Task.isCancelled else { return }
+      self.idealSizeSyncTask = nil
+      let ideal = self.hostingView.fittingSize
+      let changed =
+        abs(ideal.width - self.lastMeasuredIdealSize.width) > 0.5
+        || abs(ideal.height - self.lastMeasuredIdealSize.height) > 0.5
+      guard changed else { return }
+      self.lastMeasuredIdealSize = ideal
+      self.needsLayout = true
+      self.invalidateIntrinsicContentSize()
+    }
   }
 
   func sizeThatFits(proposedWidth: CGFloat?) -> CGSize {
     // SwiftUI can probe several widths while its layout graph is updating.
     // Only measure here: changing the hosting view's frame or forcing layout
     // reenters that graph and can abort inside AttributeGraph on macOS 15.
-    let ideal = resolvedIdealSize()
+    let ideal = measureIdealSize()
     let viewportWidth = max(proposedWidth ?? ideal.width, 1)
     return CGSize(width: viewportWidth, height: max(ideal.height, 1))
   }
 
   override func layout() {
     super.layout()
+    isApplyingLayout = true
+    defer { isApplyingLayout = false }
     // Apply geometry only after the parent has assigned the actual viewport.
-    let ideal = resolvedIdealSize()
+    let ideal = measureIdealSize()
     documentWidth = max(bounds.width, ideal.width, 1)
     horizontalOffset = min(horizontalOffset, max(documentWidth - bounds.width, 0))
     let targetFrame = NSRect(
@@ -287,6 +314,18 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
     )
     if hostingView.frame != targetFrame {
       hostingView.frame = targetFrame
+    }
+    updateIndicatorLayer()
+  }
+
+  private func applyHorizontalOffset() {
+    isApplyingLayout = true
+    defer { isApplyingLayout = false }
+    let targetOrigin = NSPoint(x: -horizontalOffset, y: 0)
+    if hostingView.frame.origin != targetOrigin {
+      var frame = hostingView.frame
+      frame.origin = targetOrigin
+      hostingView.frame = frame
     }
     updateIndicatorLayer()
   }
@@ -316,7 +355,7 @@ final class MacShiftHorizontalClipView<Content: View>: NSView {
       let updatedOffset = min(max(horizontalOffset - delta, 0), maximumOffset)
       if updatedOffset != horizontalOffset {
         horizontalOffset = updatedOffset
-        needsLayout = true
+        applyHorizontalOffset()
       }
       highlightIndicatorTemporarily()
     }

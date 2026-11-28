@@ -1757,6 +1757,155 @@ enum MacSelectableMarkdownBuilder {
 }
 
 @MainActor
+private final class MacSelectableMarkdownRenderCache {
+  struct RenderedEntry {
+    let attributed: NSAttributedString
+    let startsWithBlockquote: Bool
+    let endsWithBlockquote: Bool
+    let hasBlockquotes: Bool
+    let hasThematicBreaks: Bool
+    let hasInlineCode: Bool
+  }
+
+  private struct HeightKey: Hashable {
+    let renderKey: AnyHashable
+    let widthHalfPoints: Int
+  }
+
+  static let shared = MacSelectableMarkdownRenderCache()
+
+  private var entries: [AnyHashable: RenderedEntry] = [:]
+  private var entryOrder: [AnyHashable] = []
+  private let entryLimit = 256
+
+  private var heights: [HeightKey: CGFloat] = [:]
+  private var heightOrder: [HeightKey] = []
+  private let heightLimit = 512
+
+  private let scratchStorage = NSTextStorage()
+  private let scratchLayoutManager = NSLayoutManager()
+  private let scratchTextContainer = NSTextContainer(
+    size: NSSize(width: 640, height: CGFloat.greatestFiniteMagnitude)
+  )
+
+  private init() {
+    scratchTextContainer.lineFragmentPadding = 0
+    scratchLayoutManager.addTextContainer(scratchTextContainer)
+    scratchStorage.addLayoutManager(scratchLayoutManager)
+  }
+
+  func entry(for key: AnyHashable) -> RenderedEntry? {
+    entries[key]
+  }
+
+  func store(_ entry: RenderedEntry, for key: AnyHashable) {
+    if entries[key] == nil {
+      entryOrder.append(key)
+    }
+    entries[key] = entry
+    if entryOrder.count > entryLimit {
+      entries.removeValue(forKey: entryOrder.removeFirst())
+    }
+  }
+
+  func height(for renderKey: AnyHashable, widthHalfPoints: Int) -> CGFloat? {
+    heights[HeightKey(renderKey: renderKey, widthHalfPoints: widthHalfPoints)]
+  }
+
+  func storeHeight(_ height: CGFloat, for renderKey: AnyHashable, widthHalfPoints: Int) {
+    let key = HeightKey(renderKey: renderKey, widthHalfPoints: widthHalfPoints)
+    if heights[key] == nil {
+      heightOrder.append(key)
+    }
+    heights[key] = height
+    if heightOrder.count > heightLimit {
+      heights.removeValue(forKey: heightOrder.removeFirst())
+    }
+  }
+
+  func measureHeight(
+    of attributed: NSAttributedString,
+    width: CGFloat,
+    topInset: CGFloat,
+    bottomInset: CGFloat
+  ) -> CGFloat {
+    // Measure on a detached scratch layout stack so SwiftUI sizeThatFits never
+    // mutates the live NSTextView geometry or allocates a fresh TextKit stack
+    // on every probe.
+    scratchTextContainer.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+    scratchStorage.setAttributedString(attributed)
+    scratchLayoutManager.ensureLayout(for: scratchTextContainer)
+    return ceil(scratchLayoutManager.usedRect(for: scratchTextContainer).height) + topInset + bottomInset
+  }
+
+  static func makeEntry(from attributed: NSAttributedString) -> RenderedEntry {
+    let length = attributed.length
+    guard length > 0 else {
+      return RenderedEntry(
+        attributed: attributed,
+        startsWithBlockquote: false,
+        endsWithBlockquote: false,
+        hasBlockquotes: false,
+        hasThematicBreaks: false,
+        hasInlineCode: false
+      )
+    }
+    let fullRange = NSRange(location: 0, length: length)
+    let startsWithBlockquote =
+      attributed.attribute(MacSelectableMarkdownBuilder.blockquoteAttributeKey, at: 0, effectiveRange: nil) != nil
+    let endsWithBlockquote =
+      attributed.attribute(MacSelectableMarkdownBuilder.blockquoteAttributeKey, at: length - 1, effectiveRange: nil) != nil
+
+    var hasBlockquotes = startsWithBlockquote || endsWithBlockquote
+    if !hasBlockquotes {
+      attributed.enumerateAttribute(
+        MacSelectableMarkdownBuilder.blockquoteAttributeKey,
+        in: fullRange,
+        options: []
+      ) { value, _, stop in
+        if value != nil {
+          hasBlockquotes = true
+          stop.pointee = true
+        }
+      }
+    }
+
+    var hasThematicBreaks = false
+    attributed.enumerateAttribute(
+      MacSelectableMarkdownBuilder.thematicBreakAttributeKey,
+      in: fullRange,
+      options: []
+    ) { value, _, stop in
+      if (value as? Bool) == true {
+        hasThematicBreaks = true
+        stop.pointee = true
+      }
+    }
+
+    var hasInlineCode = false
+    attributed.enumerateAttribute(
+      MacSelectableMarkdownBuilder.inlineCodeAttributeKey,
+      in: fullRange,
+      options: []
+    ) { value, _, stop in
+      if (value as? Bool) == true {
+        hasInlineCode = true
+        stop.pointee = true
+      }
+    }
+
+    return RenderedEntry(
+      attributed: attributed,
+      startsWithBlockquote: startsWithBlockquote,
+      endsWithBlockquote: endsWithBlockquote,
+      hasBlockquotes: hasBlockquotes,
+      hasThematicBreaks: hasThematicBreaks,
+      hasInlineCode: hasInlineCode
+    )
+  }
+}
+
+@MainActor
 struct MacSelectableMarkdownTextView: NSViewRepresentable {
   let source: String
   var includeStructuredBlocks: Bool = false
@@ -1839,12 +1988,19 @@ struct MacSelectableMarkdownTextView: NSViewRepresentable {
       activeFindOccurrence: activeFindOccurrence
     )
 
-    let attributed = MacSelectableMarkdownBuilder.attributedString(
-      for: source,
-      includeStructuredBlocks: includeStructuredBlocks,
-      style: style
-    )
-    container.setAttributedString(attributed, style: style)
+    let entry: MacSelectableMarkdownRenderCache.RenderedEntry
+    if let cached = MacSelectableMarkdownRenderCache.shared.entry(for: wrappedKey) {
+      entry = cached
+    } else {
+      let attributed = MacSelectableMarkdownBuilder.attributedString(
+        for: source,
+        includeStructuredBlocks: includeStructuredBlocks,
+        style: style
+      )
+      entry = MacSelectableMarkdownRenderCache.makeEntry(from: attributed)
+      MacSelectableMarkdownRenderCache.shared.store(entry, for: wrappedKey)
+    }
+    container.setRenderedEntry(entry, style: style)
   }
 
   @MainActor
@@ -1872,6 +2028,7 @@ final class MacPassthroughSelectableTextContainer: NSView {
   private var attributedStorage = NSAttributedString()
   private var topInset: CGFloat = 0
   private var bottomInset: CGFloat = 0
+  private var lastLayoutWidth: CGFloat = 0
 
   override var isFlipped: Bool { true }
 
@@ -1906,18 +2063,21 @@ final class MacPassthroughSelectableTextContainer: NSView {
     fatalError("init(coder:) has not been implemented")
   }
 
-  func setAttributedString(_ value: NSAttributedString, style: MacSelectableMarkdownBuilder.Style) {
-    attributedStorage = value
+  fileprivate func setRenderedEntry(
+    _ entry: MacSelectableMarkdownRenderCache.RenderedEntry,
+    style: MacSelectableMarkdownBuilder.Style
+  ) {
+    attributedStorage = entry.attributed
     let verticalPad = MacSelectableMarkdownBuilder.blockquoteVerticalPadding(for: style.textSize)
-    let startsWithBlockquote = value.length > 0
-      && value.attribute(MacSelectableMarkdownBuilder.blockquoteAttributeKey, at: 0, effectiveRange: nil) != nil
-    let endsWithBlockquote = value.length > 0
-      && value.attribute(MacSelectableMarkdownBuilder.blockquoteAttributeKey, at: value.length - 1, effectiveRange: nil) != nil
-    topInset = startsWithBlockquote ? verticalPad : 0
-    bottomInset = endsWithBlockquote ? verticalPad : 0
+    topInset = entry.startsWithBlockquote ? verticalPad : 0
+    bottomInset = entry.endsWithBlockquote ? verticalPad : 0
+    lastLayoutWidth = 0
 
     textView.topContentInset = topInset
     textView.blockquoteVerticalPadding = verticalPad
+    textView.hasBlockquotes = entry.hasBlockquotes
+    textView.hasThematicBreaks = entry.hasThematicBreaks
+    textView.hasInlineCode = entry.hasInlineCode
     textView.blockquoteBackgroundColor = style.textColor.withAlphaComponent(style.isDark ? 0.05 : 0.035)
     textView.blockquoteAccentColor = style.accentColor.withAlphaComponent(0.72)
     textView.inlineCodeBackgroundColor = style.codeBackgroundColor
@@ -1927,31 +2087,53 @@ final class MacPassthroughSelectableTextContainer: NSView {
       .foregroundColor: style.accentColor,
       .cursor: NSCursor.pointingHand,
     ]
-    textView.textStorage?.setAttributedString(value)
+    textView.textStorage?.setAttributedString(entry.attributed)
     textView.needsDisplay = true
     needsLayout = true
   }
 
   func measureHeight(forWidth width: CGFloat) -> CGFloat {
     guard attributedStorage.length > 0, width > 1 else { return 1 }
-    // Measure on a detached layout stack so SwiftUI sizeThatFits never mutates
-    // the live NSTextView geometry or reenters AttributeGraph.
-    let storage = NSTextStorage(attributedString: attributedStorage)
-    let manager = NSLayoutManager()
-    storage.addLayoutManager(manager)
-    let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
-    container.lineFragmentPadding = 0
-    manager.addTextContainer(container)
-    manager.ensureLayout(for: container)
-    return ceil(manager.usedRect(for: container).height) + topInset + bottomInset
+    let widthHalfPoints = Int((width * 2).rounded())
+    if let key = lastRenderKey,
+      let cached = MacSelectableMarkdownRenderCache.shared.height(
+        for: key,
+        widthHalfPoints: widthHalfPoints
+      )
+    {
+      return cached
+    }
+    let measured = MacSelectableMarkdownRenderCache.shared.measureHeight(
+      of: attributedStorage,
+      width: width,
+      topInset: topInset,
+      bottomInset: bottomInset
+    )
+    if let key = lastRenderKey {
+      MacSelectableMarkdownRenderCache.shared.storeHeight(
+        measured,
+        for: key,
+        widthHalfPoints: widthHalfPoints
+      )
+    }
+    return measured
   }
 
   override func layout() {
     super.layout()
     let width = max(bounds.width, 1)
-    textView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-    textView.frame = bounds
-    textView.needsDisplay = true
+    let widthChanged = abs(lastLayoutWidth - width) > 0.5
+    if widthChanged {
+      lastLayoutWidth = width
+      textView.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+    }
+    let frameChanged = textView.frame != bounds
+    if frameChanged {
+      textView.frame = bounds
+    }
+    if widthChanged || frameChanged {
+      textView.needsDisplay = true
+    }
   }
 }
 
@@ -1959,6 +2141,9 @@ final class MacPassthroughSelectableTextContainer: NSView {
 final class MacSelectableTextView: NSTextView {
   var topContentInset: CGFloat = 0
   var blockquoteVerticalPadding: CGFloat = 8
+  var hasBlockquotes = false
+  var hasThematicBreaks = false
+  var hasInlineCode = false
   var blockquoteBackgroundColor: NSColor = NSColor.labelColor.withAlphaComponent(0.035)
   var blockquoteAccentColor: NSColor = NSColor.controlAccentColor.withAlphaComponent(0.72)
   var inlineCodeBackgroundColor: NSColor = NSColor.quaternaryLabelColor
@@ -1975,6 +2160,7 @@ final class MacSelectableTextView: NSTextView {
   }
 
   private func drawCustomDecorations(in rect: NSRect) {
+    guard hasBlockquotes || hasThematicBreaks || hasInlineCode else { return }
     guard let layoutManager = self.layoutManager,
       let textContainer = self.textContainer,
       let storage = self.textStorage,
@@ -1992,107 +2178,113 @@ final class MacSelectableTextView: NSTextView {
     let fullDocRange = NSRange(location: 0, length: storage.length)
 
     // 1. Blockquote rounded cards + full-height accent bar
-    var drawnBlockquoteIDs = Set<Int>()
-    storage.enumerateAttribute(
-      MacSelectableMarkdownBuilder.blockquoteAttributeKey,
-      in: visibleCharRange,
-      options: []
-    ) { value, effectiveRange, _ in
-      guard let quoteID = value as? Int, drawnBlockquoteIDs.insert(quoteID).inserted else { return }
-      var fullBlockRange = NSRange(location: 0, length: 0)
-      _ = storage.attribute(
+    if hasBlockquotes {
+      var drawnBlockquoteIDs = Set<Int>()
+      storage.enumerateAttribute(
         MacSelectableMarkdownBuilder.blockquoteAttributeKey,
-        at: effectiveRange.location,
-        longestEffectiveRange: &fullBlockRange,
-        in: fullDocRange
-      )
-      let glyphRange = layoutManager.glyphRange(forCharacterRange: fullBlockRange, actualCharacterRange: nil)
-      guard glyphRange.length > 0 else { return }
+        in: visibleCharRange,
+        options: []
+      ) { value, effectiveRange, _ in
+        guard let quoteID = value as? Int, drawnBlockquoteIDs.insert(quoteID).inserted else { return }
+        var fullBlockRange = NSRange(location: 0, length: 0)
+        _ = storage.attribute(
+          MacSelectableMarkdownBuilder.blockquoteAttributeKey,
+          at: effectiveRange.location,
+          longestEffectiveRange: &fullBlockRange,
+          in: fullDocRange
+        )
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: fullBlockRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return }
 
-      var unionRect = NSRect.null
-      layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, _, _ in
-        unionRect = unionRect.isNull ? usedRect : unionRect.union(usedRect)
+        var unionRect = NSRect.null
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, _, _ in
+          unionRect = unionRect.isNull ? usedRect : unionRect.union(usedRect)
+        }
+        guard !unionRect.isNull else { return }
+
+        let cardRect = NSRect(
+          x: origin.x,
+          y: unionRect.minY + origin.y - blockquoteVerticalPadding,
+          width: max(viewWidth, 1),
+          height: unionRect.height + blockquoteVerticalPadding * 2
+        )
+
+        NSGraphicsContext.saveGraphicsState()
+        let cardPath = NSBezierPath(roundedRect: cardRect, xRadius: 9, yRadius: 9)
+        cardPath.addClip()
+        blockquoteBackgroundColor.setFill()
+        cardPath.fill()
+
+        let accentBarRect = NSRect(
+          x: cardRect.minX,
+          y: cardRect.minY,
+          width: 3,
+          height: cardRect.height
+        )
+        blockquoteAccentColor.setFill()
+        accentBarRect.fill()
+        NSGraphicsContext.restoreGraphicsState()
       }
-      guard !unionRect.isNull else { return }
-
-      let cardRect = NSRect(
-        x: origin.x,
-        y: unionRect.minY + origin.y - blockquoteVerticalPadding,
-        width: max(viewWidth, 1),
-        height: unionRect.height + blockquoteVerticalPadding * 2
-      )
-
-      NSGraphicsContext.saveGraphicsState()
-      let cardPath = NSBezierPath(roundedRect: cardRect, xRadius: 9, yRadius: 9)
-      cardPath.addClip()
-      blockquoteBackgroundColor.setFill()
-      cardPath.fill()
-
-      let accentBarRect = NSRect(
-        x: cardRect.minX,
-        y: cardRect.minY,
-        width: 3,
-        height: cardRect.height
-      )
-      blockquoteAccentColor.setFill()
-      accentBarRect.fill()
-      NSGraphicsContext.restoreGraphicsState()
     }
 
     // 2. Full-width thematic breaks
-    storage.enumerateAttribute(
-      MacSelectableMarkdownBuilder.thematicBreakAttributeKey,
-      in: visibleCharRange,
-      options: []
-    ) { value, effectiveRange, _ in
-      guard (value as? Bool) == true else { return }
-      let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
-      guard glyphRange.length > 0 else { return }
-      let usedRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
-      let ruleY = floor(usedRect.midY + origin.y)
-      let ruleRect = NSRect(x: origin.x, y: ruleY, width: max(viewWidth, 1), height: 1)
-      thematicBreakColor.setFill()
-      ruleRect.fill()
+    if hasThematicBreaks {
+      storage.enumerateAttribute(
+        MacSelectableMarkdownBuilder.thematicBreakAttributeKey,
+        in: visibleCharRange,
+        options: []
+      ) { value, effectiveRange, _ in
+        guard (value as? Bool) == true else { return }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return }
+        let usedRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+        let ruleY = floor(usedRect.midY + origin.y)
+        let ruleRect = NSRect(x: origin.x, y: ruleY, width: max(viewWidth, 1), height: 1)
+        thematicBreakColor.setFill()
+        ruleRect.fill()
+      }
     }
 
     // 3. Rounded inline code pills
-    let pillFillColor = inlineCodeBackgroundColor
-    let pillBorderColor = inlineCodeBorderColor
-    storage.enumerateAttribute(
-      MacSelectableMarkdownBuilder.inlineCodeAttributeKey,
-      in: visibleCharRange,
-      options: []
-    ) { value, effectiveRange, _ in
-      guard (value as? Bool) == true else { return }
-      let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
-      guard glyphRange.length > 0 else { return }
-      let runFont = storage.attribute(.font, at: effectiveRange.location, effectiveRange: nil) as? NSFont
-      let targetPillHeight = runFont.map { ceil($0.ascender - $0.descender + 2.5) }
-      layoutManager.enumerateEnclosingRects(
-        forGlyphRange: glyphRange,
-        withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
-        in: textContainer
-      ) { enclosingRect, _ in
-        var pillRect = enclosingRect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -3.0, dy: -0.5)
-        if let targetPillHeight, pillRect.height > targetPillHeight + 1.5 {
-          let excess = pillRect.height - targetPillHeight
-          pillRect.origin.y += floor(excess / 2)
-          pillRect.size.height = targetPillHeight
-        }
-        let minX = max(0, pillRect.minX)
-        let maxX = min(viewWidth, pillRect.maxX)
-        pillRect.origin.x = minX
-        pillRect.size.width = max(0, maxX - minX)
-        guard pillRect.width > 0, pillRect.height > 0 else { return }
-        let path = NSBezierPath(roundedRect: pillRect, xRadius: 4.5, yRadius: 4.5)
-        pillFillColor.setFill()
-        path.fill()
-        let borderRect = pillRect.insetBy(dx: 0.25, dy: 0.25)
-        if borderRect.width > 0, borderRect.height > 0 {
-          let borderPath = NSBezierPath(roundedRect: borderRect, xRadius: 4.25, yRadius: 4.25)
-          borderPath.lineWidth = 0.5
-          pillBorderColor.setStroke()
-          borderPath.stroke()
+    if hasInlineCode {
+      let pillFillColor = inlineCodeBackgroundColor
+      let pillBorderColor = inlineCodeBorderColor
+      storage.enumerateAttribute(
+        MacSelectableMarkdownBuilder.inlineCodeAttributeKey,
+        in: visibleCharRange,
+        options: []
+      ) { value, effectiveRange, _ in
+        guard (value as? Bool) == true else { return }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: effectiveRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return }
+        let runFont = storage.attribute(.font, at: effectiveRange.location, effectiveRange: nil) as? NSFont
+        let targetPillHeight = runFont.map { ceil($0.ascender - $0.descender + 2.5) }
+        layoutManager.enumerateEnclosingRects(
+          forGlyphRange: glyphRange,
+          withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+          in: textContainer
+        ) { enclosingRect, _ in
+          var pillRect = enclosingRect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -3.0, dy: -0.5)
+          if let targetPillHeight, pillRect.height > targetPillHeight + 1.5 {
+            let excess = pillRect.height - targetPillHeight
+            pillRect.origin.y += floor(excess / 2)
+            pillRect.size.height = targetPillHeight
+          }
+          let minX = max(0, pillRect.minX)
+          let maxX = min(viewWidth, pillRect.maxX)
+          pillRect.origin.x = minX
+          pillRect.size.width = max(0, maxX - minX)
+          guard pillRect.width > 0, pillRect.height > 0 else { return }
+          let path = NSBezierPath(roundedRect: pillRect, xRadius: 4.5, yRadius: 4.5)
+          pillFillColor.setFill()
+          path.fill()
+          let borderRect = pillRect.insetBy(dx: 0.25, dy: 0.25)
+          if borderRect.width > 0, borderRect.height > 0 {
+            let borderPath = NSBezierPath(roundedRect: borderRect, xRadius: 4.25, yRadius: 4.25)
+            borderPath.lineWidth = 0.5
+            pillBorderColor.setStroke()
+            borderPath.stroke()
+          }
         }
       }
     }

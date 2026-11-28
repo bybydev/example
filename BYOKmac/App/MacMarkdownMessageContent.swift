@@ -7,6 +7,7 @@ import ImageIO
 import LaTeXSwiftUI
 import MacAppFoundation
 import MarkdownUI
+import Observation
 import os
 import SwiftUI
 import UniformTypeIdentifiers
@@ -250,13 +251,14 @@ struct MacMarkdownMessageContent: View {
         .tint(appTheme.accent)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, minHeight: cachedHeight, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .onGeometryChange(for: CGFloat.self) { proxy in
           proxy.size.height
         } action: { newHeight in
           guard !isStreaming, widthBucket > 0, newHeight > 1 else { return }
           MacTranscriptBlockHeightCache.shared.record(newHeight, for: heightKey)
         }
+        .frame(minHeight: cachedHeight, alignment: .topLeading)
     } else if !isStreaming, MacSelectableMarkdownBuilder.canRenderNatively(segment.text) {
       MacSelectableMarkdownTextView(
         source: segment.text,
@@ -757,13 +759,13 @@ struct MacMarkdownTableView: View {
           palette: palette
         )
       }
-      .frame(minHeight: cachedGridHeight, alignment: .topLeading)
       .onGeometryChange(for: CGFloat.self) { proxy in
         proxy.size.height
       } action: { newHeight in
         guard isComplete, newHeight > 1 else { return }
         MacTranscriptBlockHeightCache.shared.record(newHeight, for: gridHeightKey)
       }
+      .frame(minHeight: cachedGridHeight, alignment: .topLeading)
       .overlay(alignment: .leading) {
         if metrics.overflowsViewport {
           LinearGradient(
@@ -2457,9 +2459,35 @@ struct MacHighlightedCodeBlock: View {
     return value.isEmpty ? "CODE" : value.uppercased()
   }
 
+  private struct CodeContentKey: Hashable {
+    let displayedContent: String
+    let language: String?
+    let isStreaming: Bool
+    let fontSizeTenths: Int
+    let displayLineNumbers: Bool
+    let isDark: Bool
+    let themeID: MacAppThemeID
+    let findQuery: String
+    let activeFindOccurrence: Int?
+  }
+
   var body: some View {
     let preview = Self.preview(for: content, isExpanded: isExpanded, isStreaming: isStreaming)
     let displayLineNumbers = showLineNumbers && preview.lineCount >= 2
+    let themeID = MacThemeFoundation.store.effectiveThemeID(
+      hasPro: MacPurchaseStore.manager.hasPro
+    )
+    let codeContentKey = CodeContentKey(
+      displayedContent: preview.displayedContent,
+      language: language,
+      isStreaming: isStreaming,
+      fontSizeTenths: Int((codeFontSize * 10).rounded()),
+      displayLineNumbers: displayLineNumbers,
+      isDark: colorScheme == .dark,
+      themeID: themeID,
+      findQuery: findQuery,
+      activeFindOccurrence: activeFindOccurrence
+    )
 
     VStack(spacing: 0) {
       HStack(spacing: 6) {
@@ -2556,7 +2584,10 @@ struct MacHighlightedCodeBlock: View {
         codeBody(preview: preview, displayLineNumbers: displayLineNumbers, wrapped: true)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
-        MacHorizontalPassthroughScrollView(showsHorizontalIndicator: true) {
+        MacHorizontalPassthroughScrollView(
+          showsHorizontalIndicator: true,
+          contentKey: codeContentKey
+        ) {
           codeBody(preview: preview, displayLineNumbers: displayLineNumbers, wrapped: false)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -3185,11 +3216,47 @@ struct MacMathAnswerView: View {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.macAppTheme) private var theme
   @Environment(\.macTranscriptFontSize) private var transcriptFontSize
-  @State private var isHovered = false
-  @State private var copied = false
+  @State private var hoverState = MacMathHoverState()
 
   private var resolvedFontSize: CGFloat {
     textSize ?? transcriptFontSize
+  }
+
+  /// Collapses line breaks inside multi-line display blocks (such as
+  /// `\begin{aligned} ... \end{aligned}`) into spaces when there are no
+  /// unescaped TeX `%` line comments, so `LaTeXSwiftUI`'s `$$...$$` parser
+  /// matches the full block reliably while `copyExpression()` keeps the
+  /// original multi-line LaTeX intact.
+  nonisolated static func renderedDisplayInput(for expression: String) -> String {
+    guard expression.contains("\n") || expression.contains("\r") else {
+      return "$$\(expression)$$"
+    }
+    let hasUnescapedComment = hasUnescapedTeXComment(in: expression)
+    guard !hasUnescapedComment else {
+      return "$$\(expression)$$"
+    }
+    let normalized = expression
+      .split(whereSeparator: \.isNewline)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+    return "$$\(normalized)$$"
+  }
+
+  private nonisolated static func hasUnescapedTeXComment(in text: String) -> Bool {
+    var escaped = false
+    for character in text {
+      if escaped {
+        escaped = false
+        continue
+      }
+      if character == "\\" {
+        escaped = true
+      } else if character == "%" {
+        return true
+      }
+    }
+    return false
   }
 
   var body: some View {
@@ -3209,57 +3276,76 @@ struct MacMathAnswerView: View {
     )
     let cachedHeight = MacTranscriptBlockHeightCache.shared.height(for: heightKey)
 
-    ZStack(alignment: .topTrailing) {
-      MacHorizontalPassthroughScrollView(
-        showsHorizontalIndicator: true,
-        contentKey: contentKey
-      ) {
-        LaTeX("$$\(expression)$$")
-          .font(NSFont.systemFont(ofSize: resolvedFontSize * 1.15))
-          .blockMode(.blockViews)
-          .renderingStyle(.redactedOriginal)
-          .errorMode(.original)
-          .imageRenderingMode(.template)
-          .foregroundStyle(theme.textPrimary)
-          .padding(.horizontal, 16)
-          .padding(.vertical, 16)
-          .frame(maxWidth: .infinity, alignment: .center)
-      }
-      .frame(minHeight: cachedHeight, alignment: .center)
-      .onGeometryChange(for: CGFloat.self) { proxy in
-        proxy.size.height
-      } action: { newHeight in
-        guard newHeight > 1 else { return }
-        MacTranscriptBlockHeightCache.shared.record(newHeight, for: heightKey)
-      }
-
-      if isHovered || copied {
-        Button {
-          copyExpression()
-        } label: {
-          Image(systemName: copied ? "checkmark" : "doc.on.doc")
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(copied ? theme.accent : theme.textMuted)
-            .frame(width: 24, height: 24)
-            .background(theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay {
-              RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(theme.separator.opacity(0.75), lineWidth: 0.6)
-            }
-        }
-        .buttonStyle(.plain)
-        .padding(7)
-        .help(copied ? "Copied LaTeX" : "Copy LaTeX")
-        .accessibilityLabel(copied ? "LaTeX copied" : "Copy LaTeX")
-      }
+    MacHorizontalPassthroughScrollView(
+      showsHorizontalIndicator: true,
+      contentKey: contentKey
+    ) {
+      LaTeX(Self.renderedDisplayInput(for: expression))
+        .font(NSFont.systemFont(ofSize: resolvedFontSize * 1.15))
+        .blockMode(.blockViews)
+        .renderingStyle(.redactedOriginal)
+        .errorMode(.original)
+        .imageRenderingMode(.template)
+        .foregroundStyle(theme.textPrimary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+    .onGeometryChange(for: CGFloat.self) { proxy in
+      proxy.size.height
+    } action: { newHeight in
+      guard newHeight > 1 else { return }
+      MacTranscriptBlockHeightCache.shared.record(newHeight, for: heightKey)
+    }
+    .frame(minHeight: cachedHeight, alignment: .center)
+    .overlay(alignment: .topTrailing) {
+      MacMathCopyOverlayButton(expression: expression, hoverState: hoverState)
     }
     .background(theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 10, style: .continuous)
         .stroke(theme.separator, lineWidth: 0.85)
     }
-    .onHover { isHovered = $0 }
-    .animation(.easeOut(duration: MacDesignTokens.Control.interactionDuration), value: isHovered)
+    .onHover { hoverState.isHovered = $0 }
+  }
+}
+
+@Observable
+@MainActor
+private final class MacMathHoverState {
+  var isHovered = false
+}
+
+/// Isolates hover and copy feedback from `MacMathAnswerView` so moving the
+/// pointer across math cards while scrolling never re-evaluates `LaTeX`,
+/// without placing a full-card hit-testing layer over horizontal scroll.
+private struct MacMathCopyOverlayButton: View {
+  let expression: String
+  let hoverState: MacMathHoverState
+
+  @Environment(\.macAppTheme) private var theme
+  @State private var copied = false
+
+  var body: some View {
+    if hoverState.isHovered || copied {
+      Button {
+        copyExpression()
+      } label: {
+        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(copied ? theme.accent : theme.textMuted)
+          .frame(width: 24, height: 24)
+          .background(theme.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .stroke(theme.separator.opacity(0.75), lineWidth: 0.6)
+          }
+      }
+      .buttonStyle(.plain)
+      .padding(7)
+      .help(copied ? "Copied LaTeX" : "Copy LaTeX")
+      .accessibilityLabel(copied ? "LaTeX copied" : "Copy LaTeX")
+    }
   }
 
   private func copyExpression() {
@@ -4013,14 +4099,21 @@ struct MacMermaidAnswerView: View {
 
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.displayScale) private var displayScale
+  @Environment(\.macTranscriptContentWidth) private var transcriptContentWidth
   @State private var parseError: Error?
   @State private var renderedDiagram: MacCachedMermaidRender?
   @State private var renderedCacheKey: String?
-  @State private var cardWidth: CGFloat = 560
+  @State private var measuredCardWidth: CGFloat = 0
   @State private var showFullScreen = false
   @State private var showSource = false
   @State private var isSourceExpanded = false
   @State private var copied = false
+
+  private var effectiveCardWidth: CGFloat {
+    if measuredCardWidth > 1 { return measuredCardWidth }
+    if transcriptContentWidth > 1 { return transcriptContentWidth }
+    return 560
+  }
 
   private let collapsedLineLimit = 14
   private let collapsedCharacterLimit = 1_800
@@ -4053,7 +4146,7 @@ struct MacMermaidAnswerView: View {
       && !analysis.isEmpty
       && analysis.unsupportedKindName == nil
       && parseError == nil
-    let availableDiagramWidth = max(160, cardWidth - 16)
+    let availableDiagramWidth = max(160, effectiveCardWidth - 16)
     let diagramBounds = resolvedRender.map {
       CGRect(origin: .zero, size: $0.intrinsicSize)
     } ?? .zero
@@ -4144,8 +4237,8 @@ struct MacMermaidAnswerView: View {
     .onGeometryChange(for: CGFloat.self) { proxy in
       proxy.size.width
     } action: { newWidth in
-      if newWidth > 1, abs(newWidth - cardWidth) > 1 {
-        cardWidth = newWidth
+      if newWidth > 1, abs(newWidth - effectiveCardWidth) > 1 {
+        measuredCardWidth = newWidth
       }
     }
     .task(id: taskKey) {

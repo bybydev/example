@@ -3514,8 +3514,14 @@ private struct MacTranscriptMessageRow: View {
   }
 }
 
-/// Isolates hover state to user messages so moving the cursor over assistant
-/// messages during scroll never re-evaluates math/table blocks.
+@Observable
+@MainActor
+private final class MacRowHoverState {
+  var isHovered = false
+}
+
+/// Isolates hover state to user messages so moving the cursor over messages
+/// during scroll never re-evaluates message bodies.
 private struct MacUserMessageRowContainer: View {
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
@@ -3529,7 +3535,7 @@ private struct MacUserMessageRowContainer: View {
   let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
   let onRequestRegenerate: () -> Void
 
-  @State private var isHovered = false
+  @State private var hoverState = MacRowHoverState()
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -3551,12 +3557,12 @@ private struct MacUserMessageRowContainer: View {
         chats: chats,
         conversationID: conversationID,
         message: message,
-        isRowHovered: isHovered,
+        hoverState: hoverState,
         onEditMessage: { onEditMessage(message) },
         onShowDetails: { onShowDetails(message) }
       )
     }
-    .onHover { isHovered = $0 }
+    .onHover { hoverState.isHovered = $0 }
   }
 }
 
@@ -3602,7 +3608,7 @@ private struct MacUserMessageActions: View {
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID?
   let message: ChatMessage
-  let isRowHovered: Bool
+  let hoverState: MacRowHoverState
   let onEditMessage: () -> Void
   let onShowDetails: () -> Void
 
@@ -3624,7 +3630,7 @@ private struct MacUserMessageActions: View {
   }
 
   private var isVisible: Bool {
-    isRowHovered || showingMorePopover || copied
+    hoverState.isHovered || showingMorePopover || copied
   }
 
   var body: some View {

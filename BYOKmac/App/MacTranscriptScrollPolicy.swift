@@ -87,6 +87,7 @@ final class MacTranscriptScrollObservationView: NSView {
         previous = nil
         isUserScrolling = false
         userDidScroll = false
+        hasReportedUserScrollAway = false
       }
     }
   }
@@ -95,6 +96,7 @@ final class MacTranscriptScrollObservationView: NSView {
   private var updateScheduled = false
   private var isUserScrolling = false
   private var userDidScroll = false
+  private var hasReportedUserScrollAway = false
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
@@ -197,6 +199,7 @@ final class MacTranscriptScrollObservationView: NSView {
     previous = nil
     isUserScrolling = false
     userDidScroll = false
+    hasReportedUserScrollAway = false
   }
 
   @objc private func scrollChanged(_ notification: Notification) {
@@ -209,21 +212,26 @@ final class MacTranscriptScrollObservationView: NSView {
       // Legacy mouse wheels can send didLiveScroll without a start/end pair.
       userDidScroll = true
     }
+    guard needsSnapshotUpdate() else {
+      userDidScroll = false
+      return
+    }
     scheduleUpdate()
   }
 
   @objc private func geometryChanged(_ notification: Notification) {
+    guard needsSnapshotUpdate() else { return }
     scheduleUpdate()
   }
 
-  private func publishSnapshot() {
-    guard let scrollView, let documentView else { return }
+  private func currentSnapshot(userDidScroll: Bool) -> MacTranscriptScrollSnapshot? {
+    guard let scrollView, let documentView else { return nil }
     let visible = scrollView.documentVisibleRect
     let distanceToBottom = documentView.isFlipped
       ? documentView.bounds.maxY - visible.maxY
       : visible.minY - documentView.bounds.minY
     let height = documentView.bounds.height
-    let current = MacTranscriptScrollSnapshot(
+    return MacTranscriptScrollSnapshot(
       isNearBottom: MacTranscriptScrollPolicy.isNearBottom(
         visibleMaxY: height - distanceToBottom, contentHeight: height
       ),
@@ -231,8 +239,36 @@ final class MacTranscriptScrollObservationView: NSView {
       isUserScrolling: isUserScrolling,
       userDidScroll: userDidScroll
     )
+  }
+
+  private func shouldPublish(_ current: MacTranscriptScrollSnapshot) -> Bool {
+    guard let previous else { return true }
+    if current.isNearBottom != previous.isNearBottom { return true }
+    if abs(current.contentHeight - previous.contentHeight) > 0.5 { return true }
+    if current.isUserScrolling != previous.isUserScrolling { return true }
+    if current.userDidScroll && !current.isNearBottom && !hasReportedUserScrollAway {
+      return true
+    }
+    return false
+  }
+
+  private func needsSnapshotUpdate() -> Bool {
+    guard isEnabled, !updateScheduled else { return false }
+    guard let current = currentSnapshot(userDidScroll: userDidScroll) else { return true }
+    return shouldPublish(current)
+  }
+
+  private func publishSnapshot() {
+    let didScroll = userDidScroll
     userDidScroll = false
-    guard current != previous || current.userDidScroll else { return }
+    guard let current = currentSnapshot(userDidScroll: didScroll) else { return }
+    if current.isNearBottom {
+      hasReportedUserScrollAway = false
+    }
+    guard shouldPublish(current) else { return }
+    if !current.isNearBottom && current.userDidScroll {
+      hasReportedUserScrollAway = true
+    }
     let old = previous
     previous = current
     onChange?(old, current)

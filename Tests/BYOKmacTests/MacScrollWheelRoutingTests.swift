@@ -1,7 +1,22 @@
 import AppKit
+import Observation
 import SwiftUI
 import XCTest
 @testable import BYOKmac
+
+@MainActor
+@Observable
+private final class AsyncSizedModel {
+  var width: CGFloat = 900
+  var height: CGFloat = 54
+}
+
+private struct AsyncSizedView: View {
+  let model: AsyncSizedModel
+  var body: some View {
+    Color.clear.frame(width: model.width, height: model.height)
+  }
+}
 
 final class MacScrollWheelRoutingTests: XCTestCase {
   @MainActor
@@ -50,6 +65,49 @@ final class MacScrollWheelRoutingTests: XCTestCase {
     observer.isEnabled = true
     await drainMainQueue()
     XCTAssertFalse(try XCTUnwrap(snapshots.last).isNearBottom)
+  }
+
+  @MainActor
+  func testLiveScrollWhileAwayFromBottomCoalescesRedundantCallbacks() async throws {
+    let frame = NSRect(x: 0, y: 0, width: 300, height: 200)
+    let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    let container = NSView(frame: frame)
+    let scroll = NSScrollView(frame: frame)
+    scroll.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 2_000))
+    let observer = MacTranscriptScrollObservationView(frame: frame)
+    var snapshots: [MacTranscriptScrollSnapshot] = []
+    observer.onChange = { _, current in snapshots.append(current) }
+    container.addSubview(scroll)
+    container.addSubview(observer)
+    window.contentView = container
+    observer.observe(scroll)
+    defer {
+      observer.stopObserving()
+      window.close()
+    }
+
+    // Move away from the bottom once.
+    NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 400))
+    NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+    await drainMainQueue()
+    let countAfterLeavingBottom = snapshots.count
+    XCTAssertFalse(try XCTUnwrap(snapshots.last).isNearBottom)
+
+    // Subsequent live-scroll frames while still away from bottom should not emit redundant snapshots.
+    for step in 1...15 {
+      scroll.contentView.scroll(to: NSPoint(x: 0, y: CGFloat(400 + step * 30)))
+      NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+      await drainMainQueue()
+    }
+    XCTAssertEqual(snapshots.count, countAfterLeavingBottom)
+
+    // Ending live scroll publishes once to clear isUserScrolling.
+    NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+    await drainMainQueue()
+    XCTAssertEqual(snapshots.count, countAfterLeavingBottom + 1)
+    XCTAssertFalse(try XCTUnwrap(snapshots.last).isUserScrolling)
   }
 
   @MainActor
@@ -110,6 +168,58 @@ final class MacScrollWheelRoutingTests: XCTestCase {
     // A new contentKey invalidates the cached ideal size and updates content.
     view.updateRootView(Color.clear.frame(width: 800, height: 300), contentKey: "v2")
     XCTAssertEqual(view.sizeThatFits(proposedWidth: 300).height, 300, accuracy: 0.5)
+  }
+
+  @MainActor
+  func testAsyncHostedContentResizeUpdatesSizeWithoutReplacingRootView() async throws {
+    let model = AsyncSizedModel()
+    let view = MacShiftHorizontalClipView(
+      rootView: AsyncSizedView(model: model),
+      contentKey: "equation-1"
+    )
+    XCTAssertEqual(view.sizeThatFits(proposedWidth: 600).height, 54, accuracy: 0.5)
+    view.frame = NSRect(x: 0, y: 0, width: 600, height: 54)
+    view.layoutSubtreeIfNeeded()
+    let host = try XCTUnwrap(view.subviews.first)
+    XCTAssertEqual(host.frame.width, 900, accuracy: 0.5)
+
+    // Simulate async LaTeX completion shrinking width and growing height while contentKey stays fixed.
+    model.width = 220
+    model.height = 110
+    await drainMainQueue()
+    view.layoutSubtreeIfNeeded()
+
+    let updated = view.sizeThatFits(proposedWidth: 600)
+    XCTAssertEqual(updated.height, 110, accuracy: 0.5)
+    view.frame = NSRect(x: 0, y: 0, width: 600, height: 110)
+    view.layoutSubtreeIfNeeded()
+    XCTAssertEqual(host.frame.width, 600, accuracy: 0.5)
+    XCTAssertEqual(host.frame.height, 110, accuracy: 0.5)
+  }
+
+  func testDisplayMathInputCollapsesMultiLineAlignedBlocksAndPreservesComments() {
+    let aligned = """
+      \\begin{aligned}
+      \\text{Attention}(Q, K, V) &= \\text{softmax}\\!\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right) V \\\\
+      \\mathcal{L}_{\\text{CE}} &= -\\frac{1}{N} \\sum_{i=1}^{N} \\log p_\\theta(y_i \\mid x_i)
+      \\end{aligned}
+      """
+    let rendered = MacMathAnswerView.renderedDisplayInput(for: aligned)
+    XCTAssertTrue(rendered.hasPrefix("$$\\begin{aligned} "))
+    XCTAssertTrue(rendered.hasSuffix(" \\end{aligned}$$"))
+    XCTAssertFalse(rendered.contains("\n"))
+
+    let escapedPercent = "50\\% \\\\\n100\\%"
+    XCTAssertEqual(
+      MacMathAnswerView.renderedDisplayInput(for: escapedPercent),
+      "$$50\\% \\\\ 100\\%$$"
+    )
+
+    let withComment = "x = 1 % comment\ny = 2"
+    XCTAssertEqual(
+      MacMathAnswerView.renderedDisplayInput(for: withComment),
+      "$$x = 1 % comment\ny = 2$$"
+    )
   }
 
   func testHorizontalTableScrollRequiresShift() {
