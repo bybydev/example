@@ -58,17 +58,29 @@ func macProviderPresentationState(
   return .ready
 }
 
+private enum MacProviderWorkspaceRoute: Equatable {
+  case list
+  case detail(ProviderAccountID)
+  case pickProvider
+  case supportedProviders
+  case editor(MacConnectionEditorRoute, returnTo: EditorReturnDestination)
+
+  enum EditorReturnDestination: Equatable {
+    case list
+    case detail(ProviderAccountID)
+    case pickProvider
+    case supportedProviders
+  }
+}
+
 struct MacProviderManagementView: View {
   @Bindable var model: MacProviderModel
   let showsCloseButton: Bool
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.macToastCenter) private var toastCenter
-  @State private var selectedAccountID: ProviderAccountID?
+  @State private var route: MacProviderWorkspaceRoute = .list
   @State private var searchText = ""
-  @State private var showingProviderPicker = false
-  @State private var showingSupportedProviders = false
-  @State private var editorRoute: MacConnectionEditorRoute?
   @State private var deleteAccount: ProviderAccount?
   @State private var testingAccountID: ProviderAccountID?
   @State private var refreshingAccountID: ProviderAccountID?
@@ -78,10 +90,6 @@ struct MacProviderManagementView: View {
   init(model: MacProviderModel, showsCloseButton: Bool = true) {
     self.model = model
     self.showsCloseButton = showsCloseButton
-  }
-
-  private var selectedAccount: ProviderAccount? {
-    model.account(selectedAccountID)
   }
 
   private var visibleAccounts: [ProviderAccount] {
@@ -104,8 +112,20 @@ struct MacProviderManagementView: View {
           Text("AI Providers")
             .font(.headline)
           Spacer()
-          MacSheetCloseButton(accessibilityLabel: "Close AI Providers") {
-            dismiss()
+          if route == .list {
+            MacSheetCloseButton(accessibilityLabel: "Close AI Providers") {
+              dismiss()
+            }
+          } else {
+            Button {
+              dismiss()
+            } label: {
+              Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(MacSheetCloseButtonStyle())
+            .help("Close")
+            .accessibilityLabel("Close AI Providers")
           }
         }
         .padding(.horizontal, 16)
@@ -116,17 +136,55 @@ struct MacProviderManagementView: View {
       }
 
       Group {
-        if let account = selectedAccount {
-          MacProviderWorkspaceDetailView(
-            model: model,
-            account: account,
-            back: { selectedAccountID = nil },
-            edit: { editorRoute = .edit(account.id) },
-            requestDelete: { deleteAccount = account }
-          )
-          .id(account.id.rawValue)
-        } else {
+        switch route {
+        case .list:
           providersHome
+        case .detail(let accountID):
+          if let account = model.account(accountID) {
+            MacProviderWorkspaceDetailView(
+              model: model,
+              account: account,
+              back: { route = .list },
+              edit: {
+                route = .editor(.edit(account.id), returnTo: .detail(account.id))
+              },
+              requestDelete: { deleteAccount = account }
+            )
+            .id(account.id.rawValue)
+          } else {
+            providersHome
+          }
+        case .pickProvider:
+          MacProviderKindPickerSheet(
+            presentation: .embedded(backTitle: "AI Providers", onBack: { route = .list })
+          ) { kind in
+            route = .editor(.create(kind), returnTo: .pickProvider)
+          }
+        case .supportedProviders:
+          MacSupportedProvidersCatalogView(
+            model: model,
+            backTitle: "AI Providers",
+            onBack: { route = .list }
+          ) { kind in
+            route = .editor(.create(kind), returnTo: .supportedProviders)
+          }
+        case .editor(let editorRoute, let returnTo):
+          MacConnectionEditorView(
+            model: model,
+            route: editorRoute,
+            backTitle: editorBackTitle(for: returnTo),
+            onCancel: {
+              route = routeFor(returnTo)
+            },
+            onFinished: { accountID in
+              if let accountID {
+                route = .detail(accountID)
+              } else {
+                route = routeFor(returnTo)
+              }
+            }
+          )
+          .id(editorRoute.id)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -141,23 +199,13 @@ struct MacProviderManagementView: View {
     )
     .background(MacDesignTokens.Colors.canvas)
     .onChange(of: model.accounts.map(\.id)) { _, ids in
-      if let selectedAccountID, !ids.contains(selectedAccountID) {
-        self.selectedAccountID = nil
-      }
-    }
-    .sheet(isPresented: $showingProviderPicker) {
-      MacProviderKindPickerSheet { kind in
-        editorRoute = .create(kind)
-      }
-    }
-    .sheet(isPresented: $showingSupportedProviders) {
-      MacSupportedProvidersCatalogView(model: model) { kind in
-        editorRoute = .create(kind)
-      }
-    }
-    .sheet(item: $editorRoute) { route in
-      MacConnectionEditorView(model: model, route: route) { accountID in
-        if let accountID { selectedAccountID = accountID }
+      switch route {
+      case .detail(let accountID) where !ids.contains(accountID):
+        route = .list
+      case .editor(.edit(let accountID), _) where !ids.contains(accountID):
+        route = .list
+      default:
+        break
       }
     }
     .confirmationDialog(
@@ -177,7 +225,9 @@ struct MacProviderManagementView: View {
           if model.errorMessage == nil {
             toastCenter?.success("Deleted \(label)")
           }
-          if selectedAccountID == account.id { selectedAccountID = nil }
+          if case .detail(let id) = route, id == account.id {
+            route = .list
+          }
         }
       }
       Button("Cancel", role: .cancel) { deleteAccount = nil }
@@ -192,6 +242,36 @@ struct MacProviderManagementView: View {
       Button("OK") { model.errorMessage = nil }
     } message: {
       Text(model.errorMessage ?? "Unknown error")
+    }
+  }
+
+  private func routeFor(
+    _ destination: MacProviderWorkspaceRoute.EditorReturnDestination
+  ) -> MacProviderWorkspaceRoute {
+    switch destination {
+    case .list:
+      .list
+    case .detail(let accountID):
+      model.account(accountID) != nil ? .detail(accountID) : .list
+    case .pickProvider:
+      .pickProvider
+    case .supportedProviders:
+      .supportedProviders
+    }
+  }
+
+  private func editorBackTitle(
+    for destination: MacProviderWorkspaceRoute.EditorReturnDestination
+  ) -> String {
+    switch destination {
+    case .list:
+      "AI Providers"
+    case .detail(let accountID):
+      model.account(accountID)?.label ?? "AI Providers"
+    case .pickProvider:
+      "Providers"
+    case .supportedProviders:
+      "Supported"
     }
   }
 
@@ -299,7 +379,7 @@ struct MacProviderManagementView: View {
 
       HStack(spacing: 8) {
         Button("Supported Providers") {
-          showingSupportedProviders = true
+          route = .supportedProviders
         }
         .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
 
@@ -361,7 +441,7 @@ struct MacProviderManagementView: View {
       isTesting: isTesting,
       isBusy: model.isBusy,
       testResult: rowTestResult,
-      onOpen: { selectedAccountID = account.id },
+      onOpen: { route = .detail(account.id) },
       onTest: { testConnection(account) },
       menuItems: {
         providerCardMenuItems(for: account, state: state, isDefault: isDefault)
@@ -392,8 +472,10 @@ struct MacProviderManagementView: View {
     state: MacProviderPresentationState,
     isDefault: Bool
   ) -> some View {
-    Button("Manage", systemImage: "arrow.right.circle") { selectedAccountID = account.id }
-    Button("Edit Connection…", systemImage: "pencil") { editorRoute = .edit(account.id) }
+    Button("Manage", systemImage: "arrow.right.circle") { route = .detail(account.id) }
+    Button("Edit Connection…", systemImage: "pencil") {
+      route = .editor(.edit(account.id), returnTo: .list)
+    }
     if !isDefault && state == .ready {
       Button("Make Default", systemImage: "checkmark.circle") {
         Task {
@@ -443,7 +525,7 @@ struct MacProviderManagementView: View {
 
   private func beginAddProvider() {
     guard MacProAccess.requireProviderAccountCapacity(currentCount: model.accounts.count) else { return }
-    showingProviderPicker = true
+    route = .pickProvider
   }
 
   private func testConnection(_ account: ProviderAccount) {
@@ -508,6 +590,7 @@ private struct MacProviderWorkspaceDetailView: View {
             .foregroundStyle(MacDesignTokens.Colors.accent)
         }
         .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+        .keyboardShortcut(.cancelAction)
         Divider().frame(height: 24)
         MacProviderMark(account: account, size: 40, isReady: state == .ready)
         VStack(alignment: .leading, spacing: 3) {
@@ -822,6 +905,15 @@ private struct MacProviderModelsWorkspaceView: View {
         }
         Button("Add Model", systemImage: "plus") { showingAddModel = true }
           .buttonStyle(MacActionButtonStyle(.primary))
+          .popover(isPresented: $showingAddModel, arrowEdge: .bottom) {
+            MacProviderAddModelSheet { modelID in
+              Task {
+                if await model.addManualModel(modelID, accountID: account.id) {
+                  toastCenter?.success("Added \(modelID)")
+                }
+              }
+            }
+          }
       }
       .padding(.horizontal, 16)
       .frame(height: 54)
@@ -844,15 +936,6 @@ private struct MacProviderModelsWorkspaceView: View {
             ForEach(records) { record in modelRow(record) }
           }
           .padding(16)
-        }
-      }
-    }
-    .sheet(isPresented: $showingAddModel) {
-      MacProviderAddModelSheet { modelID in
-        Task {
-          if await model.addManualModel(modelID, accountID: account.id) {
-            toastCenter?.success("Added \(modelID)")
-          }
         }
       }
     }
@@ -1115,7 +1198,14 @@ private struct MacProviderConnectionWorkspaceView: View {
 }
 
 struct MacProviderKindPickerSheet: View {
+  enum Presentation {
+    case sheet
+    case popover
+    case embedded(backTitle: String, onBack: () -> Void)
+  }
+
   var currentSelection: ProviderKind? = nil
+  var presentation: Presentation = .sheet
   let selected: (ProviderKind) -> Void
 
   @Environment(\.dismiss) private var dismiss
@@ -1129,28 +1219,73 @@ struct MacProviderKindPickerSheet: View {
     ProviderKind.localAndCustomCatalog.filter { $0.matchesMacProviderSearch(searchText) }
   }
 
+  private var isPopover: Bool {
+    if case .popover = presentation { return true }
+    return false
+  }
+
+  private var isEmbedded: Bool {
+    if case .embedded = presentation { return true }
+    return false
+  }
+
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(currentSelection == nil ? "Add AI Provider" : "Choose AI Provider")
-            .font(.title3.weight(.semibold))
-          Text("Choose a cloud, local, or OpenAI-compatible service.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      switch presentation {
+      case .embedded(let backTitle, let onBack):
+        HStack(spacing: 12) {
+          Button(action: onBack) {
+            Label(backTitle, systemImage: "chevron.left")
+              .foregroundStyle(MacDesignTokens.Colors.accent)
+          }
+          .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+          .keyboardShortcut(.cancelAction)
+          Divider().frame(height: 24)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(currentSelection == nil ? "Add AI Provider" : "Choose AI Provider")
+              .font(.headline)
+            Text("Choose a cloud, local, or OpenAI-compatible service.")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          Spacer()
+          MacProviderSearchField(placeholder: "Search providers", text: $searchText)
+            .frame(maxWidth: 260)
         }
-        Spacer()
-        MacSheetCloseButton(accessibilityLabel: "Close Provider Picker") {
-          dismiss()
-        }
-      }
-      .padding(.horizontal, 18)
-      .padding(.top, 18)
-      .padding(.bottom, 12)
-
-      MacProviderSearchField(placeholder: "Search providers", text: $searchText)
         .padding(.horizontal, 18)
+        .frame(height: 62)
+        .background(MacDesignTokens.Colors.surface.opacity(0.45))
+
+      case .popover:
+        VStack(alignment: .leading, spacing: 10) {
+          Text(currentSelection == nil ? "Add AI Provider" : "Choose AI Provider")
+            .font(.headline)
+          MacProviderSearchField(placeholder: "Search providers", text: $searchText)
+        }
+        .padding(14)
+
+      case .sheet:
+        HStack {
+          VStack(alignment: .leading, spacing: 3) {
+            Text(currentSelection == nil ? "Add AI Provider" : "Choose AI Provider")
+              .font(.title3.weight(.semibold))
+            Text("Choose a cloud, local, or OpenAI-compatible service.")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          Spacer()
+          MacSheetCloseButton(accessibilityLabel: "Close Provider Picker") {
+            dismiss()
+          }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
         .padding(.bottom, 12)
+
+        MacProviderSearchField(placeholder: "Search providers", text: $searchText)
+          .padding(.horizontal, 18)
+          .padding(.bottom, 12)
+      }
 
       Divider()
 
@@ -1159,7 +1294,7 @@ struct MacProviderKindPickerSheet: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ScrollView {
-          VStack(alignment: .leading, spacing: 18) {
+          VStack(alignment: .leading, spacing: 16) {
             if !filteredCloud.isEmpty {
               providerGroup(title: "Cloud Providers", kinds: filteredCloud)
             }
@@ -1167,25 +1302,29 @@ struct MacProviderKindPickerSheet: View {
               providerGroup(title: "Local & Custom", kinds: filteredLocalAndCustom)
             }
           }
-          .padding(18)
+          .padding(isPopover ? 14 : 18)
         }
       }
     }
     .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.standardHeight
+      width: isEmbedded ? nil : (isPopover ? 440 : MacDesignTokens.Sheet.standardWidth),
+      height: isEmbedded ? nil : (isPopover ? 380 : MacDesignTokens.Sheet.standardHeight)
     )
+    .frame(maxWidth: isEmbedded ? .infinity : nil, maxHeight: isEmbedded ? .infinity : nil)
     .background(MacDesignTokens.Colors.canvas)
   }
 
   private func providerGroup(title: String, kinds: [ProviderKind]) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
+    let columns = isPopover
+      ? [GridItem(.flexible(), spacing: 8)]
+      : [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+    return VStack(alignment: .leading, spacing: 10) {
       Text(title)
         .font(.caption.weight(.semibold))
         .foregroundStyle(MacDesignTokens.Colors.textMuted)
         .textCase(.uppercase)
 
-      LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+      LazyVGrid(columns: columns, spacing: isPopover ? 6 : 10) {
         ForEach(kinds, id: \.rawValue) { kind in
           providerChoice(kind)
         }
@@ -1197,7 +1336,7 @@ struct MacProviderKindPickerSheet: View {
     let isSelected = kind == currentSelection
     return Button { choose(kind) } label: {
       HStack(spacing: 11) {
-        MacProviderMark(kind: kind, size: 36, isReady: true)
+        MacProviderMark(kind: kind, size: isPopover ? 30 : 36, isReady: true)
         VStack(alignment: .leading, spacing: 2) {
           Text(kind.macPickerTitle)
             .font(.system(size: 13.5, weight: .semibold))
@@ -1215,14 +1354,16 @@ struct MacProviderKindPickerSheet: View {
             .foregroundStyle(MacDesignTokens.Colors.accent)
         }
       }
-      .padding(12)
-      .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+      .padding(isPopover ? 10 : 12)
+      .frame(maxWidth: .infinity, minHeight: isPopover ? 52 : 64, alignment: .leading)
     }
     .buttonStyle(MacCardButtonStyle(cornerRadius: 10, isSelected: isSelected))
   }
 
   private func choose(_ kind: ProviderKind) {
-    dismiss()
+    if !isEmbedded {
+      dismiss()
+    }
     selected(kind)
   }
 }
@@ -1232,10 +1373,14 @@ struct MacProviderKindPickerSheet: View {
 /// providers with live search and Connected badges.
 struct MacSupportedProvidersCatalogView: View {
   @Bindable var model: MacProviderModel
+  var backTitle: String? = nil
+  var onBack: (() -> Void)? = nil
   let onSelect: (ProviderKind) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @State private var searchText = ""
+
+  private var isEmbedded: Bool { onBack != nil }
 
   private var connectedKinds: Set<ProviderKind> {
     Set(model.accounts.map(\.kind))
@@ -1251,26 +1396,51 @@ struct MacSupportedProvidersCatalogView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Supported Providers")
-            .font(.title3.weight(.semibold))
-          Text("Cloud, local, and OpenAI-compatible providers supported by BYOKchat.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      if let onBack {
+        HStack(spacing: 12) {
+          Button(action: onBack) {
+            Label(backTitle ?? "AI Providers", systemImage: "chevron.left")
+              .foregroundStyle(MacDesignTokens.Colors.accent)
+          }
+          .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+          .keyboardShortcut(.cancelAction)
+          Divider().frame(height: 24)
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Supported Providers")
+              .font(.headline)
+            Text("Cloud, local, and OpenAI-compatible providers supported by BYOKchat.")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          Spacer()
+          MacProviderSearchField(placeholder: "Search providers", text: $searchText)
+            .frame(maxWidth: 260)
         }
-        Spacer()
-        MacSheetCloseButton(accessibilityLabel: "Close Supported Providers") {
-          dismiss()
-        }
-      }
-      .padding(.horizontal, 18)
-      .padding(.top, 18)
-      .padding(.bottom, 12)
-
-      MacProviderSearchField(placeholder: "Search providers", text: $searchText)
         .padding(.horizontal, 18)
+        .frame(height: 62)
+        .background(MacDesignTokens.Colors.surface.opacity(0.45))
+      } else {
+        HStack {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Supported Providers")
+              .font(.title3.weight(.semibold))
+            Text("Cloud, local, and OpenAI-compatible providers supported by BYOKchat.")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          Spacer()
+          MacSheetCloseButton(accessibilityLabel: "Close Supported Providers") {
+            dismiss()
+          }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
         .padding(.bottom, 12)
+
+        MacProviderSearchField(placeholder: "Search providers", text: $searchText)
+          .padding(.horizontal, 18)
+          .padding(.bottom, 12)
+      }
 
       Divider()
 
@@ -1292,9 +1462,10 @@ struct MacSupportedProvidersCatalogView: View {
       }
     }
     .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.standardHeight
+      width: isEmbedded ? nil : MacDesignTokens.Sheet.standardWidth,
+      height: isEmbedded ? nil : MacDesignTokens.Sheet.standardHeight
     )
+    .frame(maxWidth: isEmbedded ? .infinity : nil, maxHeight: isEmbedded ? .infinity : nil)
     .background(MacDesignTokens.Colors.canvas)
   }
 
@@ -1319,7 +1490,9 @@ struct MacSupportedProvidersCatalogView: View {
       guard MacProAccess.requireProviderAccountCapacity(currentCount: model.accounts.count) else {
         return
       }
-      dismiss()
+      if !isEmbedded {
+        dismiss()
+      }
       onSelect(kind)
     } label: {
       HStack(spacing: 11) {
@@ -1363,7 +1536,7 @@ private struct MacProviderAddModelSheet: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: 12) {
       Text("Add Model").font(.headline)
       TextField("Model ID", text: $modelID)
         .textFieldStyle(.roundedBorder)
@@ -1376,16 +1549,16 @@ private struct MacProviderAddModelSheet: View {
       HStack(spacing: 8) {
         Spacer()
         Button("Cancel") { dismiss() }
-          .buttonStyle(MacActionButtonStyle(.secondary))
+          .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
           .keyboardShortcut(.cancelAction)
         Button("Add") { submit() }
-          .buttonStyle(MacActionButtonStyle(.primary))
+          .buttonStyle(MacActionButtonStyle(.primary, size: .small))
           .keyboardShortcut(.defaultAction)
           .disabled(trimmedModelID.isEmpty)
       }
     }
-    .padding(20)
-    .frame(width: 420)
+    .padding(16)
+    .frame(width: 340)
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
       isModelFieldFocused = true

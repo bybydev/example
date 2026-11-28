@@ -1939,7 +1939,7 @@ struct MacTargetPickerView: View {
 
 // MARK: - Connection Editor Route & View
 
-enum MacConnectionEditorRoute: Identifiable {
+enum MacConnectionEditorRoute: Identifiable, Equatable {
   case create(ProviderKind)
   case edit(ProviderAccountID)
 
@@ -2030,9 +2030,13 @@ struct MacConnectionEditorView: View {
 
   @Bindable var model: MacProviderModel
   let route: MacConnectionEditorRoute
+  let backTitle: String?
+  let onCancel: (() -> Void)?
   let onFinished: (ProviderAccountID?) -> Void
 
   @Environment(\.dismiss) private var dismiss
+
+  private var isEmbedded: Bool { onCancel != nil }
 
   private let initialKind: ProviderKind
   private let initialDefaultModelID: ModelID?
@@ -2093,10 +2097,14 @@ struct MacConnectionEditorView: View {
   init(
     model: MacProviderModel,
     route: MacConnectionEditorRoute,
+    backTitle: String? = nil,
+    onCancel: (() -> Void)? = nil,
     onFinished: @escaping (ProviderAccountID?) -> Void
   ) {
     self.model = model
     self.route = route
+    self.backTitle = backTitle
+    self.onCancel = onCancel
     self.onFinished = onFinished
 
     let account: ProviderAccount?
@@ -2481,6 +2489,15 @@ struct MacConnectionEditorView: View {
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 12) {
+        if isEmbedded {
+          Button(action: requestDismiss) {
+            Label(backTitle ?? "Back", systemImage: "chevron.left")
+              .foregroundStyle(MacDesignTokens.Colors.accent)
+          }
+          .buttonStyle(MacActionButtonStyle(.subtle, size: .small))
+          .disabled(isSaving)
+          Divider().frame(height: 24)
+        }
         Group {
           if let existing {
             MacProviderMark(account: existing, size: 36, isReady: true)
@@ -2505,7 +2522,10 @@ struct MacConnectionEditorView: View {
           .keyboardShortcut(.defaultAction)
           .disabled(!canSave || isSaving)
       }
-      .padding(16)
+      .padding(.horizontal, isEmbedded ? 18 : 16)
+      .frame(height: isEmbedded ? 66 : nil)
+      .padding(.vertical, isEmbedded ? 0 : 16)
+      .background(isEmbedded ? MacDesignTokens.Colors.surface.opacity(0.45) : Color.clear)
 
       Divider()
 
@@ -2572,6 +2592,14 @@ struct MacConnectionEditorView: View {
                     surfaceColor: MacDesignTokens.Colors.canvas.opacity(0.65)
                   )
                 )
+                .popover(isPresented: $showingProviderPicker, arrowEdge: .bottom) {
+                  MacProviderKindPickerSheet(
+                    currentSelection: selectedKind,
+                    presentation: .popover
+                  ) { newKind in
+                    switchKind(to: newKind)
+                  }
+                }
                 .accessibilityLabel("Provider")
                 .accessibilityValue(selectedKind.macPickerTitle)
               } else {
@@ -2853,6 +2881,11 @@ struct MacConnectionEditorView: View {
               editorTarget: $headerEditorTarget
             )
           }
+          .macAdditionalHeaderEditorPopover(
+            target: $headerEditorTarget,
+            headers: $additionalHeaders,
+            policy: headerValidationPolicy
+          )
 
           if kind == .openRouter {
             editorCard("OpenRouter", systemImage: "arrow.triangle.branch") {
@@ -2886,12 +2919,15 @@ struct MacConnectionEditorView: View {
           }
         }
         .padding(16)
+        .frame(maxWidth: isEmbedded ? 640 : .infinity)
+        .frame(maxWidth: .infinity)
       }
     }
     .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.standardHeight
+      width: isEmbedded ? nil : MacDesignTokens.Sheet.standardWidth,
+      height: isEmbedded ? nil : MacDesignTokens.Sheet.standardHeight
     )
+    .frame(maxWidth: isEmbedded ? .infinity : nil, maxHeight: isEmbedded ? .infinity : nil)
     .background(MacDesignTokens.Colors.canvas)
     .interactiveDismissDisabled(isSaving || hasUnsavedChanges)
     .onChange(of: discoveryInput) { _, _ in invalidateDiscovery() }
@@ -2899,29 +2935,9 @@ struct MacConnectionEditorView: View {
       cancelDiscovery()
       hideRevealedCredential()
     }
-    .sheet(isPresented: $showingProviderPicker) {
-      MacProviderKindPickerSheet(currentSelection: selectedKind) { newKind in
-        switchKind(to: newKind)
-      }
-    }
-    .sheet(isPresented: $showingModelPicker) {
-      MacConnectionModelPickerSheet(
-        kind: kind,
-        records: modelRecords,
-        selection: Binding(
-          get: { selectedModelID },
-          set: { newID in
-            selectedModelID = newID
-            manualModelID = ""
-          }
-        ),
-        removedManualModelIDs: $removedManualModelIDs,
-        onRemoveManual: stageManualRemoval
-      )
-    }
     .alert("Unsaved Changes", isPresented: $showingDiscardAlert) {
       Button("Discard Changes", role: .destructive) {
-        dismiss()
+        closeEditor()
       }
       if canSave {
         Button(isCreate ? "Connect" : "Save") {
@@ -2936,11 +2952,6 @@ struct MacConnectionEditorView: View {
           : "You have unsaved changes to this connection that will be lost if you close."
       )
     }
-    .macAdditionalHeaderEditorSheet(
-      target: $headerEditorTarget,
-      headers: $additionalHeaders,
-      policy: headerValidationPolicy
-    )
   }
 
   private var modelsAndDiscoveryCard: some View {
@@ -3013,6 +3024,21 @@ struct MacConnectionEditorView: View {
               showingModelPicker = true
             }
             .buttonStyle(MacActionButtonStyle(.secondary, size: .small))
+            .popover(isPresented: $showingModelPicker, arrowEdge: .bottom) {
+              MacConnectionModelPickerSheet(
+                kind: kind,
+                records: modelRecords,
+                selection: Binding(
+                  get: { selectedModelID },
+                  set: { newID in
+                    selectedModelID = newID
+                    manualModelID = ""
+                  }
+                ),
+                removedManualModelIDs: $removedManualModelIDs,
+                onRemoveManual: stageManualRemoval
+              )
+            }
           }
         }
 
@@ -3326,11 +3352,26 @@ struct MacConnectionEditorView: View {
     }
   }
 
+  private func closeEditor() {
+    if let onCancel {
+      onCancel()
+    } else {
+      dismiss()
+    }
+  }
+
+  private func finishEditor(accountID: ProviderAccountID?) {
+    onFinished(accountID)
+    if !isEmbedded {
+      dismiss()
+    }
+  }
+
   private func requestDismiss() {
     if hasUnsavedChanges {
       showingDiscardAlert = true
     } else {
-      dismiss()
+      closeEditor()
     }
   }
 
@@ -3380,8 +3421,7 @@ struct MacConnectionEditorView: View {
     hideRevealedCredential()
 
     if case .edit(let accountID) = route, !hasUnsavedChanges {
-      onFinished(accountID)
-      dismiss()
+      finishEditor(accountID: accountID)
       return
     }
 
@@ -3406,8 +3446,7 @@ struct MacConnectionEditorView: View {
           manualModelIDs: manualIDs
         )
         if let id {
-          onFinished(id)
-          dismiss()
+          finishEditor(accountID: id)
         } else {
           saveError = model.errorMessage ?? "Unable to create connection."
           model.errorMessage = nil
@@ -3450,8 +3489,7 @@ struct MacConnectionEditorView: View {
           }
         }
         if succeeded {
-          onFinished(accountID)
-          dismiss()
+          finishEditor(accountID: accountID)
         } else {
           saveError = model.errorMessage ?? "Unable to save connection."
           model.errorMessage = nil
@@ -3614,10 +3652,7 @@ private struct MacConnectionModelPickerSheet: View {
         }
       }
     }
-    .frame(
-      width: MacDesignTokens.Sheet.standardWidth,
-      height: MacDesignTokens.Sheet.standardHeight
-    )
+    .frame(width: 400, height: 380)
     .background(MacDesignTokens.Colors.canvas)
   }
 

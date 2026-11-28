@@ -243,6 +243,48 @@ struct MacAdditionalHeadersSection: View {
 }
 
 extension View {
+  /// Presents the add/edit HTTP header editor in a popover anchored to the headers section.
+  func macAdditionalHeaderEditorPopover(
+    target: Binding<MacAdditionalHeaderEditorTarget?>,
+    headers: Binding<[MacAdditionalHeaderItem]>,
+    policy: HTTPHeaderValidationPolicy,
+    onChange: (() -> Void)? = nil
+  ) -> some View {
+    popover(item: target, arrowEdge: .bottom) { activeTarget in
+      switch activeTarget {
+      case .add:
+        MacAdditionalHeaderEditorSheet(
+          existingItem: nil,
+          existingNames: headers.wrappedValue.map(\.name),
+          policy: policy,
+          onSave: { name, value in
+            headers.wrappedValue.append(MacAdditionalHeaderItem(name: name, value: value))
+            onChange?()
+          }
+        )
+      case .edit(let item):
+        MacAdditionalHeaderEditorSheet(
+          existingItem: item,
+          existingNames: headers.wrappedValue
+            .filter { $0.id != item.id }
+            .map(\.name),
+          policy: policy,
+          onSave: { name, value in
+            if let index = headers.wrappedValue.firstIndex(where: { $0.id == item.id }) {
+              headers.wrappedValue[index].name = name
+              headers.wrappedValue[index].value = value
+              onChange?()
+            }
+          },
+          onDelete: {
+            headers.wrappedValue.removeAll { $0.id == item.id }
+            onChange?()
+          }
+        )
+      }
+    }
+  }
+
   /// Presents the add/edit HTTP header sheet from a stable enclosing view.
   func macAdditionalHeaderEditorSheet(
     target: Binding<MacAdditionalHeaderEditorTarget?>,
